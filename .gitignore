@@ -1,0 +1,8 @@
+.env
+
+*.db
+leaderboard.db
+
+
+__pycache__/
+*.pyc
