@@ -1590,17 +1590,17 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
     await interaction.followup.send(content=content, file=file)
 
 
-@bot.tree.command(name="shop", description="View a user's survev.de shop offers as a graphic.")
-async def shop(interaction: discord.Interaction):
+@bot.tree.command(name="market", description="View a user's survev.de shop offers as a graphic.")
+async def market(interaction: discord.Interaction):
     await interaction.response.send_message(
-        "Use `/shop daily` or `/shop weekly` to view that part of the rota.",
+        "Use `/market daily` or `/market weekly` to view that part of the rota.",
         ephemeral=True
     )
 
 
-class ShopGroup(discord.app_commands.Group):
+class MarketGroup(discord.app_commands.Group):
     def __init__(self):
-        super().__init__(name="shop", description="View a user's survev.de shop offers.")
+        super().__init__(name="market", description="View a user's survev.de shop offers.")
 
     @discord.app_commands.command(name="daily", description="View only daily shop offers.")
     @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
@@ -1645,7 +1645,7 @@ class ShopGroup(discord.app_commands.Group):
         await interaction.followup.send(content=content, file=file)
 
 
-bot.tree.add_command(ShopGroup())
+bot.tree.add_command(MarketGroup())
 
 
 # ------------------------------------------------------------------
