@@ -224,6 +224,23 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
                 entry["display_name"] = f"Player {discord_id}"
 
 
+async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
+    member = next((m for m in client.get_all_members() if m.id == discord_id), None)
+    if member is not None:
+        return member.display_name
+
+    user = client.get_user(discord_id)
+    if user is None:
+        try:
+            user = await client.fetch_user(discord_id)
+        except Exception:
+            user = None
+
+    if user is not None:
+        return user.name
+    return f"Player {discord_id}"
+
+
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
 QUEUE_IMG_WIDTH = 1200
 QUEUE_IMG_PADDING = 36
@@ -610,6 +627,134 @@ async def generate_leaderboard_embed(period: str, days: int):
     return embed
 
 
+def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[dict]) -> BytesIO:
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = QUEUE_IMG_ROW_HEIGHT
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + max(len(leaderboard_rows), 1) * row_height + QUEUE_IMG_PADDING
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(46, "bold")
+    subtitle_font = load_font(24, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(20)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"Server {period} Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 84), f"Performance over the past {days} days (Sorted by Kills)", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.10),
+        table_x + round(table_width * 0.42),
+        table_x + round(table_width * 0.60),
+        table_x + round(table_width * 0.78)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    header_y = table_top
+    labels = ["#", "Player", "Kills", "Wins", "Damage"]
+    for col_idx, label in enumerate(labels):
+        label_x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = header_y + row_height
+    for row_index, entry in enumerate(leaderboard_rows):
+        if row_index % 2 == 0:
+            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+        stats = entry["stats"]
+        display_name = entry.get("display_name") or f"Player {entry['discord_id']}"
+        row_values = [
+            str(entry["rank"]),
+            display_name,
+            str(stats["kills"]),
+            str(stats["wins"]),
+            f"{stats['damage']:,}"
+        ]
+
+        for col_idx, value in enumerate(row_values):
+            font = body_font
+            fill = QUEUE_IMG_TEXT if col_idx != 2 else QUEUE_IMG_ACCENT
+            cell_x = columns[col_idx]
+            if col_idx == 0:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            elif col_idx == 1:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            else:
+                value_width = draw.textbbox((0, 0), value, font=font)[2]
+                centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
+                draw.text((centered_x, row_y + 14), value, font=font, fill=fill)
+
+        row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_leaderboard_image_payload(period: str, days: int):
+    now = datetime.now(timezone.utc)
+    to_ms = int(now.timestamp() * 1000)
+    from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+
+    users = get_all_users()
+    leaderboard_data = []
+
+    async def build():
+        async with aiohttp.ClientSession() as session:
+            for discord_id, token in users:
+                stats = await fetch_player_timeframe_stats(session, token, from_ms, to_ms)
+                if stats and stats["games"] > 0:
+                    leaderboard_data.append({
+                        "discord_id": discord_id,
+                        "stats": stats
+                    })
+
+    async def wrapper():
+        await build()
+        if not leaderboard_data:
+            return None, None, "No matches logged by verified members in this timeframe."
+
+        leaderboard_data.sort(key=lambda x: x["stats"]["kills"], reverse=True)
+        top_rows = []
+        for idx, entry in enumerate(leaderboard_data[:10], start=1):
+            top_rows.append({
+                "rank": idx,
+                "discord_id": entry["discord_id"],
+                "stats": entry["stats"],
+                "display_name": None
+            })
+
+        image_buffer = generate_leaderboard_image(period, days, top_rows)
+        file = discord.File(image_buffer, filename=f"leaderboard_{period.lower()}.png")
+        return f"Server {period} Leaderboard", file, None
+
+    return wrapper()
+
+
 # ------------------------------------------------------------------
 # 3. NEATQUEUE INTEGRATION ENGINE
 # ------------------------------------------------------------------
@@ -956,22 +1101,31 @@ class LeaderboardView(discord.ui.View):
 
     async def _refresh(self, interaction: discord.Interaction, period: str, days: int):
         await interaction.response.defer()
-        embed = await generate_leaderboard_embed(period=period, days=days)
-        await interaction.message.edit(embed=embed, view=LeaderboardView(period))
+        content, file, error = await build_leaderboard_image_payload(period, days)
+        if error:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+        await interaction.response.edit_message(content=content, attachments=[file], view=LeaderboardView(period))
 
 
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed(period="Weekly", days=7)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly"))
+    content, file, error = await build_leaderboard_image_payload("Weekly", 7)
+    if error:
+        await interaction.followup.send(error)
+        return
+    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Weekly"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed(period="Monthly", days=30)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
+    content, file, error = await build_leaderboard_image_payload("Monthly", 30)
+    if error:
+        await interaction.followup.send(error)
+        return
+    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Monthly"))
 
 
 class QueueResultView(discord.ui.View):
