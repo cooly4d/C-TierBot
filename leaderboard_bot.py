@@ -334,7 +334,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
             label_x = x0 + columns[col_idx]
             label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-            if col_widths[col_idx] > label_width:
+            if col_idx != 0 and col_widths[col_idx] > label_width:
                 label_x += (col_widths[col_idx] - label_width) / 2
             draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
