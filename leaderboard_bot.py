@@ -226,7 +226,7 @@ QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage, Wins
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.46, 0.62, 0.78, 0.92]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.33, 0.50, 0.70, 0.88]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "K", "Dmg", "Avg Dmg", "W"]
 
 
