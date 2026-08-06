@@ -116,10 +116,25 @@ async def on_ready():
 
 
 async def log_interaction(interaction: discord.Interaction):
-    # Fires for every interaction (commands AND components) regardless of whether anything else handles
-    # it — pure diagnostic to see if button clicks even reach this process at all. Registered via
-    # add_listener (not @bot.event) so it can't possibly replace whatever handles app command dispatch.
-    print(f"DEBUG - on_interaction: type={interaction.type!r} data={interaction.data!r} user={interaction.user}")
+    # Confirmed via logs that this fires reliably for every component click, while discord.py's own
+    # View/Button dispatch mysteriously never invokes our registered callbacks — so every button in the
+    # bot is handled directly here instead of relying on that broken path.
+    # Registered via add_listener (not @bot.event) so it can't replace app command dispatch.
+    if interaction.type != discord.InteractionType.component:
+        return
+
+    custom_id = interaction.data.get("custom_id")
+
+    if custom_id == "queue_result_verify":
+        print(f"DEBUG - handling queue_result_verify click for {interaction.user}")
+        await interaction.response.defer(ephemeral=True)
+        await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
+    elif custom_id == "leaderboard_weekly":
+        print(f"DEBUG - handling leaderboard_weekly click for {interaction.user}")
+        await refresh_leaderboard_message(interaction, "Weekly", 7)
+    elif custom_id == "leaderboard_monthly":
+        print(f"DEBUG - handling leaderboard_monthly click for {interaction.user}")
+        await refresh_leaderboard_message(interaction, "Monthly", 30)
 
 
 bot.add_listener(log_interaction, "on_interaction")
@@ -1465,6 +1480,12 @@ async def calculate_queue_match_stats(match_id: str):
 # ------------------------------------------------------------------
 # 4. SLASH COMMANDS
 # ------------------------------------------------------------------
+async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int):
+    await interaction.response.defer()
+    embed = await generate_leaderboard_embed(period=period, days=days)
+    await interaction.message.edit(embed=embed, view=LeaderboardView(period))
+
+
 class LeaderboardView(discord.ui.View):
     def __init__(self, initial_period: str = "Weekly"):
         super().__init__(timeout=None)
@@ -1472,19 +1493,11 @@ class LeaderboardView(discord.ui.View):
 
     @discord.ui.button(label="Weekly", style=discord.ButtonStyle.primary, custom_id="leaderboard_weekly")
     async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._refresh(interaction, "Weekly", 7)
+        await refresh_leaderboard_message(interaction, "Weekly", 7)
 
     @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary, custom_id="leaderboard_monthly")
     async def monthly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._refresh(interaction, "Monthly", 30)
-
-    async def _refresh(self, interaction: discord.Interaction, period: str, days: int):
-        await interaction.response.defer()
-        content, file, error = await build_leaderboard_image_payload(period, days)
-        if error:
-            await interaction.followup.send(error, ephemeral=True)
-            return
-        await interaction.response.edit_message(content=content, attachments=[file], view=LeaderboardView(period))
+        await refresh_leaderboard_message(interaction, "Monthly", 30)
 
 
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
@@ -1513,7 +1526,7 @@ class QueueResultView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Not showing up? Verify", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify", emoji="🔗")
+    @discord.ui.button(label="Not showing up? Verify", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         print(f"DEBUG - verify_button callback invoked by {interaction.user}")
         await interaction.response.defer(ephemeral=True)
