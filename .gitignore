@@ -1,4 +1,7 @@
 .env
+.venv/
+env/
+venv/
 
 *.db
 leaderboard.db

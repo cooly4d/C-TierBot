@@ -6,7 +6,11 @@ import os
 import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
+
+LEADERBOARD_BANNER_URL = os.getenv("LEADERBOARD_BANNER_URL", "https://media.giphy.com/media/3o6ZtpxSZbQ2zYpH0A/giphy.gif")
 
 # --- CONFIGURATION ---
 
@@ -55,6 +59,92 @@ def get_user_token(discord_id: int):
     with sqlite3.connect("leaderboard.db") as c:
         row = c.execute("SELECT access_token FROM users WHERE discord_id = ?", (discord_id,)).fetchone()
         return row[0] if row else None
+
+
+def load_font(size: int):
+    try:
+        return ImageFont.truetype("arial.ttf", size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def get_user_display_name(client: discord.Client, discord_id: int) -> str:
+    user = client.get_user(discord_id)
+    if user is not None:
+        return f"{user.name}#{user.discriminator}"
+    return f"Player {discord_id}"
+
+
+def generate_queue_stats_image(match_id: str, results: list[dict], client: discord.Client) -> BytesIO:
+    width = 1100
+    row_height = 72
+    padding = 40
+    visible_rows = min(len(results), 12)
+    height = 220 + visible_rows * row_height + padding
+
+    background_color = (18, 24, 37)
+    header_color = (24, 33, 55)
+    accent_color = (213, 140, 54)
+    text_color = (235, 237, 240)
+    muted_color = (138, 153, 177)
+    row_alternate = (28, 37, 55)
+
+    image = Image.new("RGB", (width, height), background_color)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(42)
+    subtitle_font = load_font(26)
+    header_font = load_font(20)
+    body_font = load_font(20)
+    footer_font = load_font(16)
+
+    draw.rectangle([0, 0, width, 180], fill=header_color)
+    draw.text((padding, 32), f"NeatQueue Match #{match_id}", font=title_font, fill=text_color)
+    draw.text((padding, 90), "Player stats from verified survev.de accounts", font=subtitle_font, fill=muted_color)
+    draw.text((padding, 130), f"Sorted by damage | {len(results)} players", font=body_font, fill=accent_color)
+
+    header_y = 190
+    draw.line((padding, header_y, width - padding, header_y), fill=muted_color, width=2)
+
+    columns = [padding, 120, 320, 620, 760, 860, 980]
+    headers = ["#", "Player", "Damage", "Kills", "Wins", "Games"]
+    for idx, label in enumerate(headers):
+        x = columns[idx]
+        draw.text((x, header_y + 14), label, font=header_font, fill=text_color)
+
+    for row_index, entry in enumerate(results[:12]):
+        row_top = header_y + 54 + row_index * row_height
+        row_bottom = row_top + row_height - 10
+        if row_index % 2 == 0:
+            draw.rectangle([padding, row_top, width - padding, row_bottom], fill=row_alternate)
+
+        stats = entry["stats"]
+        player_label = get_user_display_name(client, entry["discord_id"])
+        row_values = [
+            str(row_index + 1),
+            player_label,
+            f"{stats['damage']:,}",
+            str(stats['kills']),
+            str(stats['wins']),
+            str(stats['games'])
+        ]
+
+        for idx, value in enumerate(row_values):
+            x = columns[idx]
+            fill = accent_color if idx == 2 else text_color
+            draw.text((x, row_top + 16), value, font=body_font, fill=fill)
+
+    if len(results) > 12:
+        more_text = f"+{len(results) - 12} more players not shown"
+        draw.text((padding, header_y + 54 + 12 * row_height), more_text, font=footer_font, fill=muted_color)
+
+    footer_text = "Data courtesy of NeatQueue & survev.de APIs"
+    draw.text((padding, height - padding + 8), footer_text, font=footer_font, fill=muted_color)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
 
 
 # ------------------------------------------------------------------
@@ -197,9 +287,11 @@ async def generate_leaderboard_embed(period: str, days: int):
         description=f"Performance over the past **{days} days** (Sorted by Kills)",
         color=discord.Color.gold() if period == "Weekly" else discord.Color.purple()
     )
+    embed.set_image(url=LEADERBOARD_BANNER_URL)
 
     if not leaderboard_data:
         embed.description = "No matches logged by verified members in this timeframe."
+        embed.set_footer(text="Info courtesy of survev.de API :)")
         return embed
 
     rank_emojis = ["🥇", "🥈", "🥉"]
@@ -210,12 +302,12 @@ async def generate_leaderboard_embed(period: str, days: int):
         stats = entry["stats"]
         leaderboard_text += (
             f"{rank} <@{entry['discord_id']}>\n"
-            f"┣ ⚔️ Kills: **{stats['kills']}** | 🏆 Wins: **{stats['wins']}**\n"
-            f"┗ 🎮 Games: **{stats['games']}** | 💥 Damage: **{stats['damage']:,}**\n\n"
+            f"⚔️ Kills: **{stats['kills']}** | 🏆 Wins: **{stats['wins']}**\n"
+            f"🎮 Games: **{stats['games']}** | 💥 Damage: **{stats['damage']:,}**\n\n"
         )
 
-    embed.add_field(name="Top Players", value=leaderboard_text, inline=False)
-    embed.set_footer(text="Info courtesy of survev.de API :)")
+    embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
+    embed.set_footer(text="Data courtesy of survev.de API :)")
     return embed
 
 
@@ -429,18 +521,37 @@ async def calculate_queue_match_stats(match_id: str):
 # ------------------------------------------------------------------
 # 4. SLASH COMMANDS
 # ------------------------------------------------------------------
+class LeaderboardView(discord.ui.View):
+    def __init__(self, initial_period: str = "Weekly"):
+        super().__init__(timeout=None)
+        self.initial_period = initial_period
+
+    @discord.ui.button(label="Weekly", style=discord.ButtonStyle.primary, custom_id="leaderboard_weekly")
+    async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._refresh(interaction, "Weekly", 7)
+
+    @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary, custom_id="leaderboard_monthly")
+    async def monthly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._refresh(interaction, "Monthly", 30)
+
+    async def _refresh(self, interaction: discord.Interaction, period: str, days: int):
+        await interaction.response.defer()
+        embed = await generate_leaderboard_embed(period=period, days=days)
+        await interaction.message.edit(embed=embed, view=LeaderboardView(period))
+
+
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await generate_leaderboard_embed(period="Weekly", days=7)
-    await interaction.followup.send(embed=embed)
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await generate_leaderboard_embed(period="Monthly", days=30)
-    await interaction.followup.send(embed=embed)
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
 
 
 @bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
@@ -460,26 +571,9 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
     # Sort results by damage dealt
     results.sort(key=lambda x: x["stats"]["damage"], reverse=True)
 
-    embed = discord.Embed(
-        title=f"🎮 NeatQueue Match Breakdown (Match #{match_id})",
-        description="Stats logged during this queue:",
-        color=discord.Color.teal()
-    )
-
-    for idx, entry in enumerate(results):
-        rank = ["🥇", "🥈", "🥉"][idx] if idx < 3 else f"`#{idx+1}`"
-        stats = entry["stats"]
-        embed.add_field(
-            name=f"{rank} Player",
-            value=f"<@{entry['discord_id']}>\n"
-                  f"💥 Damage: **{stats['damage']:,}**\n"
-                  f"⚔️ Kills: **{stats['kills']}** | 🏆 Wins: **{stats['wins']}**\n"
-                  f"🎮 Games Played: **{stats['games']}**",
-            inline=False
-        )
-
-    embed.set_footer(text="Data courtesy of NeatQueue & survev.de APIs :)")
-    await interaction.followup.send(embed=embed)
+    image_buffer = generate_queue_stats_image(match_id, results, interaction.client)
+    file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
+    await interaction.followup.send(content=f"Queue stats for match #{match_id}", file=file)
 
 
 # --- RUN BOT ---
