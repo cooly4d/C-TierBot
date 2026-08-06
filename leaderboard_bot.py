@@ -382,8 +382,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
 
-    footer_text = "idk what to put here"
-    draw.text((QUEUE_IMG_PADDING, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+    footer_text = "Link your survev.de account with /verify to appear in future leaderboards!"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
