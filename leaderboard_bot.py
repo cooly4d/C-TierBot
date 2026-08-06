@@ -86,6 +86,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
+    bot.add_view(queue_result_view)
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await backfill_missed_queue_results()
@@ -287,7 +288,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         outline=None,
     )
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 118), "Player stats from linked survev.de accounts for this queue — unlinked players show as Guest", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
 
@@ -337,7 +338,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             draw.text((x0 + columns[col_idx], header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
         if not team_players:
-            draw.text((x0, rows_top), "No verified players", font=body_font, fill=QUEUE_IMG_MUTED)
+            draw.text((x0, rows_top), "No players", font=body_font, fill=QUEUE_IMG_MUTED)
 
         for row_index, entry in enumerate(team_players):
             row_top = rows_top + row_index * QUEUE_IMG_ROW_HEIGHT
@@ -346,9 +347,22 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 draw.rectangle([x0, row_top, x0 + panel_width, row_bottom], fill=QUEUE_IMG_ROW_ALT)
 
             stats = entry["stats"]
+            player_label = entry.get("display_name") or get_user_display_name(client, entry["discord_id"])
+            is_guest = entry.get("guest", False)
+            slug = entry.get("slug")
+
+            if is_guest:
+                # Not linked via /verify — annotate with their public survev.de slug if we could
+                # match them on the scoreboard, otherwise there's truly no known account.
+                player_label = f"{player_label} ({slug if slug else 'Guest'})"
+
+            if stats is None:
+                draw.text((x0 + columns[0], row_top + 14), player_label, font=body_font_bold, fill=QUEUE_IMG_MUTED)
+                draw.text((x0 + columns[1], row_top + 14), "—", font=body_font, fill=QUEUE_IMG_MUTED)
+                continue
+
             games = stats["games"]
             avg_damage = stats["damage"] / games if games else 0
-            player_label = entry.get("display_name") or get_user_display_name(client, entry["discord_id"])
 
             row_values = [
                 player_label,
@@ -377,13 +391,13 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 # ------------------------------------------------------------------
 # 1. VERIFICATION COMMAND
 # ------------------------------------------------------------------
-@bot.tree.command(name="verify", description="Link your survev.de account to join the server leaderboards!")
-async def verify(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    
+async def run_survev_verification(discord_user_id: int, send_update):
+    """Runs the survev.de OAuth device-code flow, calling `send_update(**kwargs)` (a discord.py-style
+    send with `content=`/`embed=`) for each step. Shared by /verify and the "not showing up?" button so
+    both paths (in-channel vs DM) stay in sync."""
     device_url = "https://survev.de/api/oauth/device/code"
     token_url = "https://survev.de/api/oauth/token"
-    
+
     payload = {
         "clientId": SURVEV_CLIENT_ID,
         "clientSecret": SURVEV_CLIENT_SECRET,
@@ -395,7 +409,7 @@ async def verify(interaction: discord.Interaction):
             if resp.status != 200:
                 error_details = await resp.text()
                 print(f"DEBUG - Survev Error Code {resp.status}: {error_details}")
-                await interaction.followup.send(f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`")
+                await send_update(content=f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`")
                 return
             data = await resp.json()
 
@@ -411,7 +425,7 @@ async def verify(interaction: discord.Interaction):
                             f"*Waiting for authorization...*",
                 color=discord.Color.blue()
             )
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await send_update(embed=embed)
 
             token_payload = {
                 "grantType": "device_code",
@@ -427,27 +441,33 @@ async def verify(interaction: discord.Interaction):
 
                     if t_resp.status == 200:
                         access_token = t_data["accessToken"]
-                        save_token(interaction.user.id, access_token)
-                        await interaction.followup.send("✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.", ephemeral=True)
+                        save_token(discord_user_id, access_token)
+                        await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
                         break
-                    
+
                     error = t_data.get("error")
                     if error == "authorization_pending":
                         continue
                     elif error == "slow_down":
                         await asyncio.sleep(2)
                     else:
-                        await interaction.followup.send(f"❌ Authorization failed: `{error}`", ephemeral=True)
+                        await send_update(content=f"❌ Authorization failed: `{error}`")
                         break
+
+
+@bot.tree.command(name="verify", description="Link your survev.de account to join the server leaderboards!")
+async def verify(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
 
 
 # ------------------------------------------------------------------
 # 2. LEADERBOARD GENERATION ENGINE
 # ------------------------------------------------------------------
-async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int):
-    """Pages through all available matches in the timeframe using offset."""
+async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int) -> list[dict]:
+    """Pages through a verified player's own match history and returns the raw match objects (with guid etc.)."""
     headers = {"Authorization": f"Bearer {access_token}"}
-    
+
     all_matches = []
     offset = 0
     limit = 200
@@ -460,7 +480,7 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
             "count": limit,
             "offset": offset
         }
-        
+
         async with session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
             if resp.status != 200:
                 break
@@ -471,13 +491,20 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
             break
 
         all_matches.extend(matches)
-        
+
         # Stop if we received less than the maximum request count (we reached the last page)
         if len(matches) < limit:
             break
 
         # Move to the next page
         offset += limit
+
+    return all_matches
+
+
+async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int):
+    """Aggregates a verified player's own matches within the timeframe. Used by the leaderboard."""
+    all_matches = await fetch_player_matches_in_window(session, access_token, from_ms, to_ms)
 
     if not all_matches:
         return {"games": 0, "wins": 0, "kills": 0, "damage": 0}
@@ -488,6 +515,19 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
         "kills": sum(m.get("kills", 0) for m in all_matches),
         "damage": sum(m.get("damage_dealt", 0) for m in all_matches)
     }
+
+
+async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
+    """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
+    with no survev.de account at all (they still show up with a username, just slug=None)."""
+    try:
+        async with session.post("https://survev.de/api/match_data", json={"gameId": guid}) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json()
+    except aiohttp.ClientError:
+        return None
+    return data if isinstance(data, list) else None
 
 async def generate_leaderboard_embed(period: str, days: int):
     now = datetime.now(timezone.utc)
@@ -799,6 +839,55 @@ async def calculate_queue_match_stats(match_id: str):
         if not teams:
             return None, "NeatQueue match entry contains no player roster."
 
+        # Step 1: every verified player is an "anchor" — pull their own scoped match history and use
+        # the guids in it to pin down exactly which survev.de match(es) this queue played. This is far
+        # more reliable than any time-window guess (handles Best-of-N and avoids picking up stray games).
+        verified_matches_by_discord_id: dict[int, list[dict]] = {}
+        anchor_guid_sets = []
+        for team_players in teams:
+            for player in team_players:
+                try:
+                    discord_id = int(player.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if discord_id in verified_matches_by_discord_id:
+                    continue
+                token = get_user_token(discord_id)
+                if not token:
+                    continue
+
+                own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
+                verified_matches_by_discord_id[discord_id] = own_matches
+                guids = {m.get("guid") for m in own_matches if m.get("guid")}
+                if guids:
+                    anchor_guid_sets.append(guids)
+
+        queue_guids = set()
+        if anchor_guid_sets:
+            queue_guids = set.intersection(*anchor_guid_sets) if len(anchor_guid_sets) > 1 else anchor_guid_sets[0]
+            if not queue_guids:
+                # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
+                queue_guids = set.union(*anchor_guid_sets)
+
+        # Step 2: pull the full public scoreboard for every identified round, and build a lookup from
+        # survev.de in-game username -> aggregated stats. This is what lets unverified players show real
+        # numbers too, since /api/match_data needs no auth and includes every player in the lobby.
+        stats_by_username: dict[str, dict] = {}
+        for guid in queue_guids:
+            board = await fetch_public_match_data(session, guid)
+            if not board:
+                continue
+            for p in board:
+                username = (p.get("username") or "").strip().lower()
+                if not username:
+                    continue
+                agg = stats_by_username.setdefault(username, {"games": 0, "wins": 0, "kills": 0, "damage": 0, "slug": None})
+                agg["games"] += 1
+                agg["wins"] += 1 if p.get("rank") == 1 else 0
+                agg["kills"] += p.get("kills", 0)
+                agg["damage"] += p.get("damage_dealt", 0)
+                agg["slug"] = agg["slug"] or p.get("slug")
+
         result_teams = []
         for team_players in teams:
             team_results = []
@@ -810,17 +899,32 @@ async def calculate_queue_match_stats(match_id: str):
                     continue
 
                 token = get_user_token(discord_id)
-                if not token:
-                    continue  # Skip unverified players
+                if token:
+                    # Verified — use their own scoped matches directly, no name-matching needed.
+                    own_matches = verified_matches_by_discord_id.get(discord_id, [])
+                    if queue_guids:
+                        own_matches = [m for m in own_matches if m.get("guid") in queue_guids]
+                    stats = {
+                        "games": len(own_matches),
+                        "wins": sum(1 for m in own_matches if m.get("rank") == 1),
+                        "kills": sum(m.get("kills", 0) for m in own_matches),
+                        "damage": sum(m.get("damage_dealt", 0) for m in own_matches)
+                    }
+                    team_results.append({"discord_id": discord_id, "stats": stats, "slug": None, "guest": False})
+                    continue
 
-                stats = await fetch_player_timeframe_stats(session, token, start_ms, end_ms)
-                if stats:
-                    team_results.append({
-                        "discord_id": discord_id,
-                        "stats": stats
-                    })
+                # Unverified — best-effort match against the public scoreboard by NeatQueue's name/ign.
+                candidate_name = (player.get("name") or player.get("ign") or "").strip().lower()
+                found = stats_by_username.get(candidate_name) if candidate_name else None
 
-            team_results.sort(key=lambda x: x["stats"]["damage"], reverse=True)
+                if found:
+                    stats = {"games": found["games"], "wins": found["wins"], "kills": found["kills"], "damage": found["damage"]}
+                    team_results.append({"discord_id": discord_id, "stats": stats, "slug": found["slug"], "guest": True})
+                else:
+                    team_results.append({"discord_id": discord_id, "stats": None, "slug": None, "guest": True})
+
+            # Entries with no stats sort after every real result.
+            team_results.sort(key=lambda x: x["stats"]["damage"] if x["stats"] else -1, reverse=True)
             result_teams.append(team_results)
 
         return {"teams": result_teams, "winning_team_index": get_winning_team_index(match)}, None
@@ -862,6 +966,32 @@ async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
 
 
+class QueueResultView(discord.ui.View):
+    """Persistent view attached to queue-result messages, so anyone missing from the roster can self-serve
+    a DM verification link instead of having to know `/verify` exists."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Not showing up? Verify", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify", emoji="🔗")
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            dm_channel = await interaction.user.create_dm()
+            await dm_channel.send("Let's link your survev.de account so your stats show up here.")
+        except discord.Forbidden:
+            await interaction.followup.send("❌ I can't DM you — enable DMs from server members and try again, or run `/verify` instead.", ephemeral=True)
+            return
+        except discord.HTTPException:
+            await interaction.followup.send("❌ Something went wrong opening your DMs — try `/verify` instead.", ephemeral=True)
+            return
+
+        await interaction.followup.send("📬 Check your DMs for a verification link!", ephemeral=True)
+        await run_survev_verification(interaction.user.id, lambda **kw: dm_channel.send(**kw))
+
+
+queue_result_view = QueueResultView()
+
+
 async def build_queue_stats_payload(match_id: str):
     """Runs the NeatQueue/survev.de cross-reference and returns either
     (content, discord.File, None) on success or (None, None, error_text) on failure."""
@@ -871,7 +1001,7 @@ async def build_queue_stats_payload(match_id: str):
 
     teams = match_result["teams"]
     if not any(teams):
-        return None, None, "No verified players were found in this NeatQueue match, or no games were logged during the time frame."
+        return None, None, "This NeatQueue match has no player roster to show stats for."
 
     await resolve_queue_user_display_names(teams, bot)
     image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"], bot)
@@ -889,7 +1019,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file)
+    await interaction.followup.send(content=content, file=file, view=queue_result_view)
 
 
 # ------------------------------------------------------------------
@@ -949,7 +1079,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
         await message.reply(error_text)
     else:
         print(f"DEBUG - Match {match_id}: posted queue stats successfully")
-        await message.reply(content=content, file=file)
+        await message.reply(content=content, file=file, view=queue_result_view)
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
@@ -1022,7 +1152,7 @@ async def backfill_missed_queue_results():
                 content, file, error_text = await build_queue_stats_payload(match_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
-                await channel.send(content=f"*(Catching up)* {content}", file=file)
+                await channel.send(content=f"*(Catching up)* {content}", file=file, view=queue_result_view)
 
             update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 
