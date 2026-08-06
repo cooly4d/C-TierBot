@@ -289,9 +289,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     score_font = load_font(44, "bold")
+    team_scores = [sum(entry["stats"].get("wins", 0) for entry in team) for team in teams]
     if num_teams == 2:
-        left_text = str(len(teams[0]))
-        right_text = str(len(teams[1]))
+        left_text = str(team_scores[0])
+        right_text = str(team_scores[1])
         separator_text = " - "
         left_color = QUEUE_IMG_TEXT
         right_color = QUEUE_IMG_TEXT
@@ -318,7 +319,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         draw.text((x_pos + left_width, y_pos), separator_text, font=score_font, fill=QUEUE_IMG_TEXT)
         draw.text((x_pos + left_width + sep_width, y_pos), right_text, font=score_font, fill=right_color)
     else:
-        score_text = " / ".join(str(len(team)) for team in teams)
+        score_text = " / ".join(str(score) for score in team_scores)
         score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
         section_left = winner_bbox[2] + 24
         section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
