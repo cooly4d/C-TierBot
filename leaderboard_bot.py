@@ -766,8 +766,8 @@ async def setup(interaction: discord.Interaction, channel: discord.TextChannel):
     )
 
 
-def find_neatqueue_embed_match(message: discord.Message, title_pattern: re.Pattern):
-    """Returns the match_id if a NeatQueue embed in this message's configured channel matches title_pattern."""
+def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[re.Pattern, ...]):
+    """Returns the match_id if a NeatQueue embed in this message's configured channel matches any of title_patterns."""
     if message.author.id != NEATQUEUE_BOT_ID:
         return None
 
@@ -783,11 +783,13 @@ def find_neatqueue_embed_match(message: discord.Message, title_pattern: re.Patte
     for embed in message.embeds:
         if not embed.title:
             continue
-        match = title_pattern.search(embed.title)
-        if match:
-            return match.group(1)
+        for title_pattern in title_patterns:
+            match = title_pattern.search(embed.title)
+            if match:
+                return match.group(1)
 
-    print(f"DEBUG - NeatQueue msg {message.id}: titles {[e.title for e in message.embeds]} did not match /{title_pattern.pattern}/")
+    patterns_desc = [p.pattern for p in title_patterns]
+    print(f"DEBUG - NeatQueue msg {message.id}: titles {[e.title for e in message.embeds]} matched none of {patterns_desc}")
     return None
 
 
@@ -815,8 +817,8 @@ async def post_queue_result(message: discord.Message, match_id: str):
 @bot.event
 async def on_message(message: discord.Message):
     if message.guild is not None and message.author.id != bot.user.id:
-        # NeatQueue's final results announcement is already complete when first posted.
-        match_id = find_neatqueue_embed_match(message, QUEUE_WINNER_TITLE_PATTERN)
+        # The winner announcement is sometimes already complete when first posted...
+        match_id = find_neatqueue_embed_match(message, (QUEUE_WINNER_TITLE_PATTERN,))
         if match_id is not None:
             await post_queue_result(message, match_id)
     await bot.process_commands(message)
@@ -824,9 +826,10 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
-    # NeatQueue's admin queue panel has no result when first posted — only edits carry a final result.
+    # ...but NeatQueue also edits messages in place to fill in/finalize a result (the admin "Results for
+    # Queue#" panel always works this way, and the "Winner For Queue#" announcement sometimes does too).
     # Uses the raw event (not on_message_edit) because on_message_edit only fires for messages still in
-    # discord.py's message cache, and this panel is often edited long after it scrolls out of cache.
+    # discord.py's message cache, and these messages are often edited long after they scroll out of cache.
     if payload.guild_id is None:
         return
 
@@ -842,7 +845,7 @@ async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
     if message.author.id == bot.user.id:
         return
 
-    match_id = find_neatqueue_embed_match(message, QUEUE_PANEL_TITLE_PATTERN)
+    match_id = find_neatqueue_embed_match(message, (QUEUE_WINNER_TITLE_PATTERN, QUEUE_PANEL_TITLE_PATTERN))
     if match_id is not None:
         await post_queue_result(message, match_id)
 
