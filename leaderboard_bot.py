@@ -286,7 +286,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     )
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
-    score_font = load_font(34, "bold")
+    score_font = load_font(44, "bold")
     if num_teams == 2:
         left_text = str(len(teams[0]))
         right_text = str(len(teams[1]))
@@ -309,8 +309,8 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 
         section_left = winner_bbox[2] + 24
         section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
-        x_pos = section_left + max(0, (section_right - section_left - total_width) / 2)
-        y_pos = 78
+        x_pos = section_left + max(0, (section_right - section_left - total_width) / 2) + 12
+        y_pos = 74
 
         draw.text((x_pos, y_pos), left_text, font=score_font, fill=left_color)
         draw.text((x_pos + left_width, y_pos), separator_text, font=score_font, fill=QUEUE_IMG_TEXT)
@@ -320,8 +320,8 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
         section_left = winner_bbox[2] + 24
         section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
-        x_pos = section_left + max(0, (section_right - section_left - (score_bbox[2] - score_bbox[0])) / 2)
-        y_pos = 78
+        x_pos = section_left + max(0, (section_right - section_left - (score_bbox[2] - score_bbox[0])) / 2) + 12
+        y_pos = 74
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
     draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
