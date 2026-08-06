@@ -324,7 +324,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         y_pos = 74
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
-    draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 118), "Data courtesy of NeatQueue & survev.de APIs :)", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
 
@@ -382,7 +382,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
 
-    footer_text = "Data courtesy of NeatQueue & survev.de APIs :)"
+    footer_text = "idk what to put here"
     draw.text((QUEUE_IMG_PADDING, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     buffer = BytesIO()
