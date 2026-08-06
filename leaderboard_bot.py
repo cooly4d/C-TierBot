@@ -24,7 +24,7 @@ NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
 NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
-QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "20"))
+QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
 QUEUE_FONT_PATHS = [
     os.getenv("QUEUE_FONT_PATH"),
     "fonts/QuattrocentoSans-Regular.ttf",
@@ -650,6 +650,17 @@ def get_match_start_ms(match):
 
 
 def get_match_end_ms(match, default_start_ms: int):
+    # NeatQueue only posts the winner announcement once the whole series (all games) has finished, so
+    # that message's snowflake ID (which encodes its creation time) is a far more reliable end boundary
+    # than any fixed duration guess — it naturally covers Best-of-N series of any length.
+    winner_message_id = get_nested_value(match, "winner_message")
+    if winner_message_id:
+        try:
+            end_dt = discord.utils.snowflake_time(int(winner_message_id))
+            return int(end_dt.timestamp() * 1000) + 5000
+        except (TypeError, ValueError):
+            pass
+
     end_ms = get_nested_value(match, "end_time_ms")
     parsed_end = parse_neatqueue_time(end_ms)
     if parsed_end is not None:
@@ -667,7 +678,7 @@ def get_match_end_ms(match, default_start_ms: int):
     return default_start_ms + 60000
 
 
-NEATQUEUE_MATCH_ID_KEYS = ("match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
+NEATQUEUE_MATCH_ID_KEYS = ("game_num", "match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
 
 
 def find_neatqueue_match(entries, match_id):
