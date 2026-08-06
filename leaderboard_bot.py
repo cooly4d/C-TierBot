@@ -228,7 +228,7 @@ QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage, Wins
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.46, 0.62, 0.78, 0.92]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.33, 0.50, 0.70, 0.88]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "K", "Dmg", "Avg Dmg", "W"]
 
 
@@ -283,10 +283,49 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             winner_bbox[2] + badge_margin_x,
             winner_bbox[3] + badge_margin_y,
         ],
-        fill=QUEUE_IMG_WIN_BADGE,
+        fill=QUEUE_IMG_HEADER_BG,
         outline=None,
     )
-    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
+
+    score_font = load_font(44, "bold")
+    if num_teams == 2:
+        left_text = str(len(teams[0]))
+        right_text = str(len(teams[1]))
+        separator_text = " - "
+        left_color = QUEUE_IMG_TEXT
+        right_color = QUEUE_IMG_TEXT
+
+        if winning_team_index is not None:
+            if winning_team_index == 0:
+                left_color = QUEUE_IMG_WIN
+                right_color = QUEUE_IMG_LOSE
+            elif winning_team_index == 1:
+                left_color = QUEUE_IMG_LOSE
+                right_color = QUEUE_IMG_WIN
+
+        left_width = draw.textbbox((0, 0), left_text, font=score_font)[2]
+        sep_width = draw.textbbox((0, 0), separator_text, font=score_font)[2]
+        right_width = draw.textbbox((0, 0), right_text, font=score_font)[2]
+        total_width = left_width + sep_width + right_width
+
+        section_left = winner_bbox[2] + 24
+        section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+        x_pos = section_left + max(0, (section_right - section_left - total_width) / 2) + 12
+        y_pos = 74
+
+        draw.text((x_pos, y_pos), left_text, font=score_font, fill=left_color)
+        draw.text((x_pos + left_width, y_pos), separator_text, font=score_font, fill=QUEUE_IMG_TEXT)
+        draw.text((x_pos + left_width + sep_width, y_pos), right_text, font=score_font, fill=right_color)
+    else:
+        score_text = " / ".join(str(len(team)) for team in teams)
+        score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
+        section_left = winner_bbox[2] + 24
+        section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+        x_pos = section_left + max(0, (section_right - section_left - (score_bbox[2] - score_bbox[0])) / 2) + 12
+        y_pos = 74
+        draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
+
     draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
@@ -300,37 +339,6 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         team_label = f"Team {team_index + 1}"
         team_label_bbox = draw.textbbox((0, 0), team_label, font=team_header_font)
         draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
-
-        team_score = len(team_players)
-        opponent_score = sum(len(t) for i, t in enumerate(teams) if i != team_index)
-        score_text = f"{team_score} - {opponent_score}"
-        score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
-        score_padding_x = 12
-        score_padding_y = 8
-        badge_left = x0 + (team_label_bbox[2] - team_label_bbox[0]) + 18
-        badge_top = panel_top
-        badge_right = badge_left + (score_bbox[2] - score_bbox[0]) + score_padding_x * 2
-        badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
-        draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
-
-        if winning_team_index is not None:
-            if is_winner:
-                left_color = QUEUE_IMG_WIN
-                right_color = QUEUE_IMG_LOSE
-            else:
-                left_color = QUEUE_IMG_LOSE
-                right_color = QUEUE_IMG_WIN
-        else:
-            left_color = right_color = QUEUE_IMG_TEXT
-
-        left_text = str(team_score)
-        right_text = str(opponent_score)
-        separator_text = " - "
-        left_width = draw.textbbox((0, 0), left_text, font=team_header_font)[2]
-        sep_width = draw.textbbox((0, 0), separator_text, font=team_header_font)[2]
-        draw.text((badge_left + score_padding_x, badge_top + score_padding_y), left_text, font=team_header_font, fill=left_color)
-        draw.text((badge_left + score_padding_x + left_width, badge_top + score_padding_y), separator_text, font=team_header_font, fill=QUEUE_IMG_TEAM_SCORE_BADGE_TEXT)
-        draw.text((badge_left + score_padding_x + left_width + sep_width, badge_top + score_padding_y), right_text, font=team_header_font, fill=right_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
@@ -699,7 +707,7 @@ async def get_match_end_ms(match, default_start_ms: int):
     return default_start_ms + QUEUE_MATCH_FALLBACK_DURATION_MS
 
 
-NEATQUEUE_MATCH_ID_KEYS = ("game_num", "match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
+NEATQUEUE_MATCH_ID_KEYS = ("match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
 
 
 def find_neatqueue_match(entries, match_id):
