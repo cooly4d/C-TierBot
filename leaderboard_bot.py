@@ -1598,7 +1598,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
     await interaction.followup.send(content=content, file=file, view=queue_result_view)
 
 
-@bot.tree.command(name="inventory", description="View a user's survev.de inventory as a graphic.")
+@bot.tree.command(name="inventory", description="View a user's survev.de inventory")
 @discord.app_commands.describe(member="Discord member whose inventory to display. Omit to use yourself.")
 async def inventory(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
