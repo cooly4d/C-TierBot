@@ -8,6 +8,7 @@ import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import textwrap
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
@@ -273,6 +274,23 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
                 entry["display_name"] = f"Player {discord_id}"
 
 
+async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
+    member = next((m for m in client.get_all_members() if m.id == discord_id), None)
+    if member is not None:
+        return member.display_name
+
+    user = client.get_user(discord_id)
+    if user is None:
+        try:
+            user = await client.fetch_user(discord_id)
+        except Exception:
+            user = None
+
+    if user is not None:
+        return user.name
+    return f"Player {discord_id}"
+
+
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
 QUEUE_IMG_WIDTH = 1200
 QUEUE_IMG_PADDING = 36
@@ -497,7 +515,7 @@ async def run_survev_verification(discord_user_id: int, send_update):
     payload = {
         "clientId": SURVEV_CLIENT_ID,
         "clientSecret": SURVEV_CLIENT_SECRET,
-        "scope": ["read:discord", "read:stats"]
+        "scope": ["read:discord", "read:stats", "read:inventory", "read:market"]
     }
 
     async with aiohttp.ClientSession() as session:
@@ -614,6 +632,314 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
     }
 
 
+async def fetch_user_inventory(session: aiohttp.ClientSession, access_token: str):
+    """Fetches a survev.de user's inventory with their OAuth access token."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with session.post("https://survev.de/api/external/inventory", headers=headers) as resp:
+            if resp.status == 200:
+                return await resp.json(), None
+
+            if resp.status == 401:
+                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
+            if resp.status == 403:
+                return None, "Your survev.de token does not have inventory access. Please re-run /verify to grant read:inventory."
+
+            text = await resp.text()
+            return None, f"survev.de inventory request failed ({resp.status}): {text}"
+    except aiohttp.ClientError as exc:
+        return None, f"survev.de inventory request failed: {exc}"
+
+
+async def fetch_user_market(session: aiohttp.ClientSession, access_token: str):
+    """Fetches a survev.de user's current market/shop data with their OAuth access token."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with session.post("https://survev.de/api/external/market", headers=headers) as resp:
+            if resp.status == 200:
+                return await resp.json(), None
+
+            if resp.status == 401:
+                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
+            if resp.status == 403:
+                return None, "Your survev.de token does not have market access. Please re-run /verify to grant read:market."
+
+            text = await resp.text()
+            return None, f"survev.de market request failed ({resp.status}): {text}"
+    except aiohttp.ClientError as exc:
+        return None, f"survev.de market request failed: {exc}"
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
+def rarity_label(rarity: int) -> str:
+    return {
+        0: "Stock",
+        1: "Common",
+        2: "Rare",
+        3: "Epic",
+        4: "Legendary"
+    }.get(rarity, f"Rarity {rarity}")
+
+
+def prettify_source(source: str | None) -> str:
+    if not source:
+        return "Unknown"
+    return source.replace("_", " ").title()
+
+
+def prettify_shop_item_type(item_type: str | None) -> str:
+    if not item_type:
+        return "Unknown"
+    return item_type.replace("_", " ").title()
+
+
+def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
+    item_count = len(items)
+    shown_items = sorted(items, key=lambda item: (item.get("rarity", 0), item.get("value", 0)), reverse=True)[:10]
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = 56
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + len(shown_items) * row_height + QUEUE_IMG_PADDING * 2 + 40
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(44, "bold")
+    subtitle_font = load_font(22, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(18)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s items — showing {len(shown_items)} of {item_count}", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.34),
+        table_x + round(table_width * 0.52),
+        table_x + round(table_width * 0.68),
+        table_x + round(table_width * 0.82)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    labels = ["Item", "Rarity", "Source", "Value", "Stats"]
+    for col_idx, label in enumerate(labels):
+        label_x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((label_x, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = table_top + row_height
+    for row_index, item in enumerate(shown_items):
+        if row_index % 2 == 0:
+            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+        name = truncate_text(item.get("name", "Unknown Item"), 30)
+        rarity = rarity_label(item.get("rarity", 0))
+        source = prettify_source(item.get("source"))
+        price_paid = item.get("pricePaid")
+        value = item.get("value")
+        value_text = f"{price_paid} paid" if price_paid is not None else (f"{value}💰" if value else "Stock")
+        stats_text = f"G:{item.get('games',0)} K:{item.get('kills',0)} D:{item.get('damage',0)}"
+
+        values = [name, rarity, source, value_text, stats_text]
+        for col_idx, value in enumerate(values):
+            font = body_font
+            fill = QUEUE_IMG_TEXT
+            cell_x = columns[col_idx]
+            if col_idx == 0:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            else:
+                value_width = draw.textbbox((0, 0), value, font=font)[2]
+                draw.text((cell_x + (col_widths[col_idx] - value_width) / 2, row_y + 14), value, font=font, fill=fill)
+
+        row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def generate_shop_image(username: str, market_data: dict, mode: str = "all") -> BytesIO:
+    balance = market_data.get("balance", 0)
+    day = market_data.get("day", "Unknown")
+    week = market_data.get("week", "Unknown")
+    reset_time_ms = market_data.get("resetTime")
+    weekly_reset_time_ms = market_data.get("weeklyResetTime")
+    offers = market_data.get("offers", [])
+
+    def format_reset(ms: int | None) -> str:
+        if not ms:
+            return "Unknown"
+        dt = datetime.fromtimestamp(ms / 1000, timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+
+    if mode == "daily":
+        shown_offers = [offer for offer in offers if offer.get("slot") in (0, 1)]
+        mode_label = "Daily Offers"
+    elif mode == "weekly":
+        shown_offers = [offer for offer in offers if offer.get("slot") in (2, 3)]
+        mode_label = "Weekly Offers"
+    else:
+        shown_offers = offers[:]
+        mode_label = "Daily + Weekly Offers"
+
+    shown_offers = sorted(shown_offers, key=lambda o: o.get("slot", 0))
+    total_rows = max(len(shown_offers), 1)
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = 56
+    section_height = 34
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + section_height + total_rows * row_height + QUEUE_IMG_PADDING * 2 + 40
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(44, "bold")
+    subtitle_font = load_font(22, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(18)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"survev.de Shop", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s {mode_label}", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    balance_text = f"Balance: {balance} Fries"
+    draw.text((QUEUE_IMG_PADDING, 124), balance_text, font=body_font, fill=QUEUE_IMG_TEXT)
+
+    meta_text = f"Day: {day}   Week: {week}"
+    draw.text((QUEUE_IMG_PADDING, 152), meta_text, font=body_font, fill=QUEUE_IMG_MUTED)
+
+    table_y = table_top + section_height
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.14),
+        table_x + round(table_width * 0.42),
+        table_x + round(table_width * 0.68),
+        table_x + round(table_width * 0.86)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    labels = ["Slot", "Item", "Price", "Status", "Type"]
+    for col_idx, label in enumerate(labels):
+        x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((x, table_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((x + (col_widths[col_idx] - label_width) / 2, table_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = table_y + row_height
+    if not shown_offers:
+        draw.text((table_x, row_y + 16), "No offers available for this selection.", font=body_font, fill=QUEUE_IMG_MUTED)
+    else:
+        for idx, offer in enumerate(shown_offers):
+            if idx % 2 == 0:
+                draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+            slot = offer.get("slot", "?")
+            item_types = offer.get("items", [])
+            item_label = ", ".join(truncate_text(prettify_shop_item_type(item.get("type")), 18) for item in item_types[:2])
+            if len(item_types) > 2:
+                item_label += ", …"
+            price = offer.get("price")
+            price_label = f"{price} 💰" if price is not None else "?"
+            purchased = offer.get("purchased")
+            status_label = "Bought" if purchased else "Available"
+            offer_type = "Daily" if slot in (0, 1) else "Weekly" if slot in (2, 3) else "Other"
+
+            row_values = [str(slot), item_label, price_label, status_label, offer_type]
+            for col_idx, value in enumerate(row_values):
+                x = columns[col_idx]
+                if col_idx == 0:
+                    draw.text((x, row_y + 16), value, font=body_font, fill=QUEUE_IMG_TEXT)
+                else:
+                    value_width = draw.textbbox((0, 0), value, font=body_font)[2]
+                    draw.text((x + (col_widths[col_idx] - value_width) / 2, row_y + 16), value, font=body_font, fill=QUEUE_IMG_TEXT)
+
+            row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_inventory_image_payload(target_user: discord.User, access_token: str):
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            inventory, error = await fetch_user_inventory(session, access_token)
+            if error:
+                return None, None, error
+
+            if not inventory:
+                return None, None, "survev.de returned an empty inventory response."
+
+            username = inventory.get("username") or str(target_user)
+            items = inventory.get("items", [])
+            image_buffer = generate_inventory_image(username, items)
+            file = discord.File(image_buffer, filename=f"inventory_{target_user.id}.png")
+            return f"{username}'s survev.de inventory", file, None
+
+    return wrapper()
+
+
+def build_shop_image_payload(target_user: discord.User, access_token: str, mode: str = "all"):
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            market_data, error = await fetch_user_market(session, access_token)
+            if error:
+                return None, None, error
+
+            if not market_data:
+                return None, None, "survev.de returned an empty market response."
+
+            username = market_data.get("username") or str(target_user)
+            image_buffer = generate_shop_image(username, market_data, mode)
+            file = discord.File(image_buffer, filename=f"shop_{target_user.id}_{mode}.png")
+            return f"{username}'s survev.de shop", file, None
+
+    return wrapper()
+
+
 async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
     with no survev.de account at all (they still show up with a username, just slug=None)."""
@@ -625,6 +951,7 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> 
     except aiohttp.ClientError:
         return None
     return data if isinstance(data, list) else None
+
 
 async def generate_leaderboard_embed(period: str, days: int):
     now = datetime.now(timezone.utc)
@@ -673,6 +1000,134 @@ async def generate_leaderboard_embed(period: str, days: int):
     embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
     embed.set_footer(text="Data courtesy of survev.de API :)")
     return embed
+
+
+def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[dict]) -> BytesIO:
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = QUEUE_IMG_ROW_HEIGHT
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + max(len(leaderboard_rows), 1) * row_height + QUEUE_IMG_PADDING
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(46, "bold")
+    subtitle_font = load_font(24, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(20)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"Server {period} Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 84), f"Performance over the past {days} days (Sorted by Kills)", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.10),
+        table_x + round(table_width * 0.42),
+        table_x + round(table_width * 0.60),
+        table_x + round(table_width * 0.78)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    header_y = table_top
+    labels = ["#", "Player", "Kills", "Wins", "Damage"]
+    for col_idx, label in enumerate(labels):
+        label_x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = header_y + row_height
+    for row_index, entry in enumerate(leaderboard_rows):
+        if row_index % 2 == 0:
+            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+        stats = entry["stats"]
+        display_name = entry.get("display_name") or f"Player {entry['discord_id']}"
+        row_values = [
+            str(entry["rank"]),
+            display_name,
+            str(stats["kills"]),
+            str(stats["wins"]),
+            f"{stats['damage']:,}"
+        ]
+
+        for col_idx, value in enumerate(row_values):
+            font = body_font
+            fill = QUEUE_IMG_TEXT if col_idx != 2 else QUEUE_IMG_ACCENT
+            cell_x = columns[col_idx]
+            if col_idx == 0:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            elif col_idx == 1:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            else:
+                value_width = draw.textbbox((0, 0), value, font=font)[2]
+                centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
+                draw.text((centered_x, row_y + 14), value, font=font, fill=fill)
+
+        row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_leaderboard_image_payload(period: str, days: int):
+    now = datetime.now(timezone.utc)
+    to_ms = int(now.timestamp() * 1000)
+    from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+
+    users = get_all_users()
+    leaderboard_data = []
+
+    async def build():
+        async with aiohttp.ClientSession() as session:
+            for discord_id, token in users:
+                stats = await fetch_player_timeframe_stats(session, token, from_ms, to_ms)
+                if stats and stats["games"] > 0:
+                    leaderboard_data.append({
+                        "discord_id": discord_id,
+                        "stats": stats
+                    })
+
+    async def wrapper():
+        await build()
+        if not leaderboard_data:
+            return None, None, "No matches logged by verified members in this timeframe."
+
+        leaderboard_data.sort(key=lambda x: x["stats"]["kills"], reverse=True)
+        top_rows = []
+        for idx, entry in enumerate(leaderboard_data[:10], start=1):
+            top_rows.append({
+                "rank": idx,
+                "discord_id": entry["discord_id"],
+                "stats": entry["stats"],
+                "display_name": None
+            })
+
+        image_buffer = generate_leaderboard_image(period, days, top_rows)
+        file = discord.File(image_buffer, filename=f"leaderboard_{period.lower()}.png")
+        return f"Server {period} Leaderboard", file, None
+
+    return wrapper()
 
 
 # ------------------------------------------------------------------
@@ -1048,15 +1503,21 @@ class LeaderboardView(discord.ui.View):
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed(period="Weekly", days=7)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly"))
+    content, file, error = await build_leaderboard_image_payload("Weekly", 7)
+    if error:
+        await interaction.followup.send(error)
+        return
+    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Weekly"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed(period="Monthly", days=30)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
+    content, file, error = await build_leaderboard_image_payload("Monthly", 30)
+    if error:
+        await interaction.followup.send(error)
+        return
+    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Monthly"))
 
 
 class QueueResultView(discord.ui.View):
@@ -1118,6 +1579,86 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         return
 
     await interaction.followup.send(content=content, file=file, view=queue_result_view)
+
+
+@bot.tree.command(name="inventory", description="View a user's survev.de inventory as a graphic.")
+@discord.app_commands.describe(member="Discord member whose inventory to display. Omit to use yourself.")
+async def inventory(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
+
+    access_token = get_user_token(target.id)
+    if not access_token:
+        if target.id == interaction.user.id:
+            await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+        else:
+            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
+        return
+
+    content, file, error_text = await build_inventory_image_payload(target, access_token)
+    if error_text:
+        await interaction.followup.send(error_text)
+        return
+
+    await interaction.followup.send(content=content, file=file)
+
+
+@bot.tree.command(name="shop", description="View a user's survev.de shop offers as a graphic.")
+async def shop(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        "Use `/shop daily` or `/shop weekly` to view that part of the rota.",
+        ephemeral=True
+    )
+
+
+class ShopGroup(discord.app_commands.Group):
+    def __init__(self):
+        super().__init__(name="shop", description="View a user's survev.de shop offers.")
+
+    @discord.app_commands.command(name="daily", description="View only daily shop offers.")
+    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
+    async def daily(self, interaction: discord.Interaction, member: discord.User | None = None):
+        target = member or interaction.user
+        await interaction.response.defer()
+
+        access_token = get_user_token(target.id)
+        if not access_token:
+            if target.id == interaction.user.id:
+                await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+            else:
+                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
+            return
+
+        content, file, error_text = await build_shop_image_payload(target, access_token, mode="daily")
+        if error_text:
+            await interaction.followup.send(error_text)
+            return
+
+        await interaction.followup.send(content=content, file=file)
+
+    @discord.app_commands.command(name="weekly", description="View only weekly shop offers.")
+    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
+    async def weekly(self, interaction: discord.Interaction, member: discord.User | None = None):
+        target = member or interaction.user
+        await interaction.response.defer()
+
+        access_token = get_user_token(target.id)
+        if not access_token:
+            if target.id == interaction.user.id:
+                await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+            else:
+                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
+            return
+
+        content, file, error_text = await build_shop_image_payload(target, access_token, mode="weekly")
+        if error_text:
+            await interaction.followup.send(error_text)
+            return
+
+        await interaction.followup.send(content=content, file=file)
+
+
+bot.tree.add_command(ShopGroup())
 
 
 # ------------------------------------------------------------------
