@@ -915,6 +915,57 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all") -> 
     return buffer
 
 
+def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    height = header_height + QUEUE_IMG_PADDING * 3 + 220
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(44, "bold")
+    subtitle_font = load_font(24, "bold")
+    counter_font = load_font(96, "bold")
+    body_font = load_font(20)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Golden Fries", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s balance", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    balance_text = f"{balance:,}"
+    balance_width = draw.textbbox((0, 0), balance_text, font=counter_font)[2]
+    balance_x = (QUEUE_IMG_WIDTH - balance_width) / 2
+    balance_y = header_height + QUEUE_IMG_PADDING
+    draw.text((balance_x, balance_y), balance_text, font=counter_font, fill=QUEUE_IMG_ACCENT)
+
+    label_text = "Golden Fries"
+    label_width = draw.textbbox((0, 0), label_text, font=body_font)[2]
+    label_x = (QUEUE_IMG_WIDTH - label_width) / 2
+    draw.text((label_x, balance_y + 110), label_text, font=body_font, fill=QUEUE_IMG_TEXT)
+
+    description = "Collect, spend, and keep your golden fries balance visible in a graphic."
+    desc_width = draw.textbbox((0, 0), description, font=body_font)[2]
+    desc_x = (QUEUE_IMG_WIDTH - desc_width) / 2
+    draw.text((desc_x, balance_y + 150), description, font=body_font, fill=QUEUE_IMG_MUTED)
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
 def build_inventory_image_payload(target_user: discord.User, access_token: str):
     async def wrapper():
         async with aiohttp.ClientSession() as session:
@@ -948,6 +999,25 @@ def build_shop_image_payload(target_user: discord.User, access_token: str, mode:
             image_buffer = generate_shop_image(username, market_data, mode)
             file = discord.File(image_buffer, filename=f"shop_{target_user.id}_{mode}.png")
             return f"{username}'s survev.de shop", file, None
+
+    return wrapper()
+
+
+def build_goldenfries_image_payload(target_user: discord.User, access_token: str):
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            market_data, error = await fetch_user_market(session, access_token)
+            if error:
+                return None, None, error
+
+            if not market_data:
+                return None, None, "survev.de returned an empty market response."
+
+            username = market_data.get("username") or str(target_user)
+            balance = market_data.get("balance", 0)
+            image_buffer = generate_goldenfries_image(username, balance)
+            file = discord.File(image_buffer, filename=f"goldenfries_{target_user.id}.png")
+            return f"{username}'s Golden Fries balance", file, None
 
     return wrapper()
 
@@ -1629,6 +1699,28 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
         return
 
     content, file, error_text = await build_inventory_image_payload(target, access_token)
+    if error_text:
+        await interaction.followup.send(error_text)
+        return
+
+    await interaction.followup.send(content=content, file=file)
+
+
+@bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance as a graphic.")
+@discord.app_commands.describe(member="Discord member whose balance to display. Omit to use yourself.")
+async def goldenfries(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
+
+    access_token = get_user_token(target.id)
+    if not access_token:
+        if target.id == interaction.user.id:
+            await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+        else:
+            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
+        return
+
+    content, file, error_text = await build_goldenfries_image_payload(target, access_token)
     if error_text:
         await interaction.followup.send(error_text)
         return
