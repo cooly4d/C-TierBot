@@ -281,10 +281,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             winner_bbox[2] + badge_margin_x,
             winner_bbox[3] + badge_margin_y,
         ],
-        fill=QUEUE_IMG_WIN_BADGE,
+        fill=QUEUE_IMG_HEADER_BG,
         outline=None,
     )
-    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     if num_teams == 2:
         score_text = f"{len(teams[0])} - {len(teams[1])}"
@@ -298,7 +298,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     badge_top = 80
     badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
     draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
-    draw.text((badge_left + score_padding_x, badge_top + score_padding_y), score_text, font=team_header_font, fill=QUEUE_IMG_TEAM_SCORE_BADGE_TEXT)
+    draw.text((badge_left + score_padding_x, badge_top + score_padding_y), score_text, font=team_header_font, fill=QUEUE_IMG_WIN)
 
     draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
 
