@@ -285,6 +285,21 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         outline=None,
     )
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_TEXT)
+
+    if num_teams == 2:
+        score_text = f"{len(teams[0])} - {len(teams[1])}"
+    else:
+        score_text = " / ".join(str(len(team)) for team in teams)
+    score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
+    score_padding_x = 14
+    score_padding_y = 10
+    badge_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+    badge_left = badge_right - (score_bbox[2] - score_bbox[0]) - score_padding_x * 2
+    badge_top = 80
+    badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
+    draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
+    draw.text((badge_left + score_padding_x, badge_top + score_padding_y), score_text, font=team_header_font, fill=QUEUE_IMG_TEAM_SCORE_BADGE_TEXT)
+
     draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
@@ -298,37 +313,6 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         team_label = f"Team {team_index + 1}"
         team_label_bbox = draw.textbbox((0, 0), team_label, font=team_header_font)
         draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
-
-        team_score = len(team_players)
-        opponent_score = sum(len(t) for i, t in enumerate(teams) if i != team_index)
-        score_text = f"{team_score} - {opponent_score}"
-        score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
-        score_padding_x = 12
-        score_padding_y = 8
-        badge_left = x0 + (team_label_bbox[2] - team_label_bbox[0]) + 18
-        badge_top = panel_top
-        badge_right = badge_left + (score_bbox[2] - score_bbox[0]) + score_padding_x * 2
-        badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
-        draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
-
-        if winning_team_index is not None:
-            if is_winner:
-                left_color = QUEUE_IMG_WIN
-                right_color = QUEUE_IMG_LOSE
-            else:
-                left_color = QUEUE_IMG_LOSE
-                right_color = QUEUE_IMG_WIN
-        else:
-            left_color = right_color = QUEUE_IMG_TEXT
-
-        left_text = str(team_score)
-        right_text = str(opponent_score)
-        separator_text = " - "
-        left_width = draw.textbbox((0, 0), left_text, font=team_header_font)[2]
-        sep_width = draw.textbbox((0, 0), separator_text, font=team_header_font)[2]
-        draw.text((badge_left + score_padding_x, badge_top + score_padding_y), left_text, font=team_header_font, fill=left_color)
-        draw.text((badge_left + score_padding_x + left_width, badge_top + score_padding_y), separator_text, font=team_header_font, fill=QUEUE_IMG_TEAM_SCORE_BADGE_TEXT)
-        draw.text((badge_left + score_padding_x + left_width + sep_width, badge_top + score_padding_y), right_text, font=team_header_font, fill=right_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
