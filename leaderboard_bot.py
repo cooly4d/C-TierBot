@@ -25,6 +25,24 @@ NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
+QUEUE_FONT_PATHS = [
+    os.getenv("QUEUE_FONT_PATH"),
+    "fonts/QuattrocentoSans-Regular.ttf",
+    "QuattrocentoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/quattrocento/QuattrocentoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+]
+QUEUE_FONT_BOLD_PATHS = [
+    os.getenv("QUEUE_FONT_BOLD_PATH"),
+    "fonts/QuattrocentoSans-Bold.ttf",
+    "QuattrocentoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/quattrocento/QuattrocentoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+]
 #all supposed to be environment variables by cba
 
 
@@ -120,18 +138,71 @@ def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def load_font(size: int):
-    try:
-        return ImageFont.truetype("arial.ttf", size)
-    except Exception:
-        return ImageFont.load_default()
+def resolve_queue_font_path(paths: list[str | None]) -> str | None:
+    for path in paths:
+        if not path:
+            continue
+        if os.path.isfile(path):
+            return path
+        try:
+            ImageFont.truetype(path, 12)
+            return path
+        except Exception:
+            continue
+    return None
+
+QUEUE_FONT_PATH = resolve_queue_font_path(QUEUE_FONT_PATHS)
+QUEUE_FONT_BOLD_PATH = resolve_queue_font_path(QUEUE_FONT_BOLD_PATHS) or QUEUE_FONT_PATH
+
+
+def load_font(size: int, weight: str = "regular"):
+    font_path = QUEUE_FONT_BOLD_PATH if weight in ("bold", "semibold") else QUEUE_FONT_PATH
+    if font_path is not None:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except Exception:
+            pass
+
+    if weight in ("bold", "semibold"):
+        fallback_names = ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "FreeSansBold.ttf")
+    else:
+        fallback_names = ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "FreeSans.ttf")
+
+    for fallback in fallback_names:
+        try:
+            return ImageFont.truetype(fallback, size)
+        except Exception:
+            continue
+
+    return ImageFont.load_default()
 
 
 def get_user_display_name(client: discord.Client, discord_id: int) -> str:
     user = client.get_user(discord_id)
     if user is not None:
-        return f"{user.name}#{user.discriminator}"
+        return user.name
     return f"Player {discord_id}"
+
+
+async def resolve_queue_user_display_names(teams: list[list[dict]], client: discord.Client):
+    for team in teams:
+        for entry in team:
+            discord_id = entry.get("discord_id")
+            if discord_id is None:
+                entry["display_name"] = "Unknown"
+                continue
+
+            user = client.get_user(discord_id)
+            if user is None:
+                try:
+                    user = await client.fetch_user(discord_id)
+                except Exception:
+                    user = None
+
+            if user is not None:
+                entry["display_name"] = user.name
+            else:
+                entry["display_name"] = f"Player {discord_id}"
 
 
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
@@ -143,16 +214,20 @@ QUEUE_IMG_ROW_HEIGHT = 60
 
 QUEUE_IMG_BG = (18, 24, 37)
 QUEUE_IMG_HEADER_BG = (24, 33, 55)
+QUEUE_IMG_HEADER_GRADIENT_END = (34, 48, 73)
 QUEUE_IMG_ROW_ALT = (28, 37, 55)
 QUEUE_IMG_TEXT = (235, 237, 240)
-QUEUE_IMG_MUTED = (138, 153, 177)
-QUEUE_IMG_ACCENT = (213, 140, 54)
+QUEUE_IMG_MUTED = (168, 183, 207)
+QUEUE_IMG_ACCENT = (255, 165, 50)
 QUEUE_IMG_WIN = (108, 199, 128)
 QUEUE_IMG_LOSE = (214, 96, 96)
+QUEUE_IMG_WIN_BADGE = (34, 106, 72)
+QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
+QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
-# Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage, Wins, Games
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.42, 0.55, 0.72, 0.88, 0.94]
-QUEUE_IMG_COLUMN_LABELS = ["Player", "K", "Dmg", "Avg Dmg", "W", "G"]
+# Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage, Wins
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.46, 0.62, 0.78, 0.92]
+QUEUE_IMG_COLUMN_LABELS = ["Player", "K", "Dmg", "Avg Dmg", "W"]
 
 
 def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None, client: discord.Client) -> BytesIO:
@@ -169,25 +244,48 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(38)
-    subtitle_font = load_font(24)
-    team_header_font = load_font(24)
-    header_font = load_font(18)
-    body_font = load_font(19)
+    title_font = load_font(46, "bold")
+    subtitle_font = load_font(26, "bold")
+    team_header_font = load_font(24, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(20)
+    body_font_bold = load_font(20, "bold")
     footer_font = load_font(15)
 
-    # Top banner
-    draw.rectangle([0, 0, QUEUE_IMG_WIDTH, QUEUE_IMG_HEADER_HEIGHT], fill=QUEUE_IMG_HEADER_BG)
-    draw.text((QUEUE_IMG_PADDING, 26), f"NeatQueue Match #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    # Top banner with subtle gradient
+    for y in range(QUEUE_IMG_HEADER_HEIGHT):
+        ratio = y / max(1, QUEUE_IMG_HEADER_HEIGHT - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"NeatQueue #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
-        winner_text = f"🏆 Team {winning_team_index + 1} Wins"
+        winner_text = f"Team {winning_team_index + 1} Wins"
         winner_color = QUEUE_IMG_WIN
     else:
         winner_text = "Result unknown"
         winner_color = QUEUE_IMG_MUTED
-    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=winner_color)
-    draw.text((QUEUE_IMG_PADDING, 122), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font)
+    badge_margin_x = 14
+    badge_margin_y = 10
+    draw.rectangle(
+        [
+            winner_bbox[0] - badge_margin_x,
+            winner_bbox[1] - badge_margin_y,
+            winner_bbox[2] + badge_margin_x,
+            winner_bbox[3] + badge_margin_y,
+        ],
+        fill=QUEUE_IMG_WIN_BADGE,
+        outline=None,
+    )
+    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
 
@@ -197,12 +295,44 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         is_winner = winning_team_index == team_index
         team_color = QUEUE_IMG_WIN if is_winner else (QUEUE_IMG_LOSE if winning_team_index is not None else QUEUE_IMG_MUTED)
 
-        team_label = f"Team {team_index + 1}" + (" 🏆" if is_winner else "")
+        team_label = f"Team {team_index + 1}"
+        team_label_bbox = draw.textbbox((0, 0), team_label, font=team_header_font)
         draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
+
+        team_score = len(team_players)
+        opponent_score = sum(len(t) for i, t in enumerate(teams) if i != team_index)
+        score_text = f"{team_score} - {opponent_score}"
+        score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
+        score_padding_x = 12
+        score_padding_y = 8
+        badge_left = x0 + (team_label_bbox[2] - team_label_bbox[0]) + 18
+        badge_top = panel_top
+        badge_right = badge_left + (score_bbox[2] - score_bbox[0]) + score_padding_x * 2
+        badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
+        draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
+
+        if winning_team_index is not None:
+            if is_winner:
+                left_color = QUEUE_IMG_WIN
+                right_color = QUEUE_IMG_LOSE
+            else:
+                left_color = QUEUE_IMG_LOSE
+                right_color = QUEUE_IMG_WIN
+        else:
+            left_color = right_color = QUEUE_IMG_TEXT
+
+        left_text = str(team_score)
+        right_text = str(opponent_score)
+        separator_text = " - "
+        left_width = draw.textbbox((0, 0), left_text, font=team_header_font)[2]
+        sep_width = draw.textbbox((0, 0), separator_text, font=team_header_font)[2]
+        draw.text((badge_left + score_padding_x, badge_top + score_padding_y), left_text, font=team_header_font, fill=left_color)
+        draw.text((badge_left + score_padding_x + left_width, badge_top + score_padding_y), separator_text, font=team_header_font, fill=QUEUE_IMG_TEAM_SCORE_BADGE_TEXT)
+        draw.text((badge_left + score_padding_x + left_width + sep_width, badge_top + score_padding_y), right_text, font=team_header_font, fill=right_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
-            draw.text((x0 + columns[col_idx], header_y), label, font=header_font, fill=QUEUE_IMG_MUTED)
+            draw.text((x0 + columns[col_idx], header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
         if not team_players:
             draw.text((x0, rows_top), "No verified players", font=body_font, fill=QUEUE_IMG_MUTED)
@@ -216,24 +346,24 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             stats = entry["stats"]
             games = stats["games"]
             avg_damage = stats["damage"] / games if games else 0
-            player_label = get_user_display_name(client, entry["discord_id"])
+            player_label = entry.get("display_name") or get_user_display_name(client, entry["discord_id"])
 
             row_values = [
                 player_label,
                 str(stats["kills"]),
                 f"{stats['damage']:,}",
                 f"{avg_damage:,.0f}",
-                str(stats["wins"]),
-                str(games)
+                str(stats["wins"])
             ]
             for col_idx, value in enumerate(row_values):
                 fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
-                draw.text((x0 + columns[col_idx], row_top + 14), value, font=body_font, fill=fill)
+                font = body_font_bold if col_idx in (0, 2, 3) else body_font
+                draw.text((x0 + columns[col_idx], row_top + 14), value, font=font, fill=fill)
 
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
 
-    footer_text = "Data courtesy of NeatQueue & survev.de APIs"
+    footer_text = "Data courtesy of NeatQueue & survev.de APIs :)"
     draw.text((QUEUE_IMG_PADDING, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     buffer = BytesIO()
@@ -722,6 +852,7 @@ async def build_queue_stats_payload(match_id: str):
     if not any(teams):
         return None, None, "No verified players were found in this NeatQueue match, or no games were logged during the time frame."
 
+    await resolve_queue_user_display_names(teams, bot)
     image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"], bot)
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
     return f"Queue stats for match #{match_id}", file, None
