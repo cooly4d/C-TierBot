@@ -96,7 +96,19 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
 async def on_ready():
-    bot.add_view(queue_result_view)
+    try:
+        bot.add_view(queue_result_view)
+        print(f"DEBUG - add_view succeeded: is_persistent={queue_result_view.is_persistent()} children={queue_result_view.children}")
+    except Exception as exc:
+        print(f"DEBUG - add_view FAILED: {exc!r}")
+
+    try:
+        store = bot._connection._view_store
+        print(f"DEBUG - view_store synced custom_ids: {list(store._synced_message_views.keys()) if hasattr(store, '_synced_message_views') else 'n/a'}")
+        print(f"DEBUG - view_store persistent listeners: {list(getattr(store, '_views', {}).keys())}")
+    except Exception as exc:
+        print(f"DEBUG - view_store introspection failed: {exc!r}")
+
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await backfill_missing_slugs()
