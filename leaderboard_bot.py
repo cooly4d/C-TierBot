@@ -90,6 +90,7 @@ QUEUE_PANEL_TITLE_PATTERN = re.compile(r"Results for Queue#(\d+)", re.IGNORECASE
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True  # needed so client.get_all_members() has data — required for real display names
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 @bot.event
@@ -886,6 +887,16 @@ async def calculate_queue_match_stats(match_id: str):
         if not teams:
             return None, "NeatQueue match entry contains no player roster."
 
+        # Remember NeatQueue's own team ordering (by discord_id) so our survev.de-team_id-based grouping
+        # can be displayed in the same left/right order NeatQueue itself uses.
+        neatqueue_team_index_by_discord_id: dict[int, int] = {}
+        for i, team_players in enumerate(teams):
+            for player in team_players:
+                try:
+                    neatqueue_team_index_by_discord_id[int(player.get("id"))] = i
+                except (TypeError, ValueError):
+                    continue
+
         # Step 1: at least one verified player is needed as an "anchor" — pull their own scoped match
         # history and use its guids to pin down exactly which survev.de match(es) this queue played.
         # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
@@ -958,6 +969,15 @@ async def calculate_queue_match_stats(match_id: str):
         for team in result_teams:
             team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
 
+        # Reorder to match NeatQueue's own Team 1/Team 2 display order, using known discord_ids as votes.
+        def neatqueue_order_key(team):
+            votes = [neatqueue_team_index_by_discord_id[e["discord_id"]] for e in team if e["discord_id"] in neatqueue_team_index_by_discord_id]
+            if not votes:
+                return len(teams)  # no known players on this team — push to the end
+            return max(set(votes), key=votes.count)
+
+        result_teams.sort(key=neatqueue_order_key)
+
         # Winning team = whoever won more rounds overall (every teammate shares the same round-win count).
         team_round_wins = [max((e["stats"]["wins"] for e in team), default=0) for team in result_teams]
         winning_team_index = team_round_wins.index(max(team_round_wins)) if team_round_wins and max(team_round_wins) > 0 else None
@@ -1011,6 +1031,19 @@ class QueueResultView(discord.ui.View):
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        # discord.py's default View.on_error just logs to stderr, which is easy to miss — surface it
+        # to the clicking user too so a failure is never silent.
+        print(f"ERROR - QueueResultView item {item} failed: {error!r}")
+        message = f"❌ Something went wrong: `{error}`"
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 queue_result_view = QueueResultView()
