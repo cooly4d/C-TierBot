@@ -228,7 +228,7 @@ QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.30, 0.52, 0.72]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.36, 0.62, 0.82]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
 
 
@@ -331,7 +331,15 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
-            draw.text((x0 + columns[col_idx], header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+            label_x = x0 + columns[col_idx]
+            if col_idx < len(QUEUE_IMG_COLUMN_LABELS) - 1:
+                next_x = x0 + columns[col_idx + 1]
+            else:
+                next_x = x0 + panel_width
+            label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+            if next_x - label_x > label_width:
+                label_x += (next_x - label_x - label_width) / 2
+            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
         if not team_players:
             draw.text((x0, rows_top), "No verified players", font=body_font, fill=QUEUE_IMG_MUTED)
