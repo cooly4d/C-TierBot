@@ -461,7 +461,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 f"{avg_damage:,.0f}"
             ]
             for col_idx, value in enumerate(row_values):
-                fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
+                fill = QUEUE_IMG_ACCENT if col_idx == 3 else QUEUE_IMG_TEXT
                 font = body_font_bold if col_idx in (0, 2, 3) else body_font
                 cell_x = x0 + columns[col_idx]
                 if col_idx == 0:
