@@ -24,6 +24,7 @@ NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
 NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
+QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "20"))
 #all supposed to be environment variables by cba
 
 
@@ -767,11 +768,16 @@ async def setup(interaction: discord.Interaction, channel: discord.TextChannel):
 
 def find_neatqueue_embed_match(message: discord.Message, title_pattern: re.Pattern):
     """Returns the match_id if a NeatQueue embed in this message's configured channel matches title_pattern."""
-    if message.author.id != NEATQUEUE_BOT_ID or message.guild is None or not message.embeds:
+    if message.author.id != NEATQUEUE_BOT_ID:
+        return None
+
+    if message.guild is None or not message.embeds:
+        print(f"DEBUG - NeatQueue msg {message.id}: skipped (guild={message.guild}, embeds={len(message.embeds)})")
         return None
 
     configured_channel_id = get_guild_queue_channel(message.guild.id)
     if configured_channel_id is None or message.channel.id != configured_channel_id:
+        print(f"DEBUG - NeatQueue msg {message.id}: channel {message.channel.id} != configured {configured_channel_id} for guild {message.guild.id}")
         return None
 
     for embed in message.embeds:
@@ -780,18 +786,26 @@ def find_neatqueue_embed_match(message: discord.Message, title_pattern: re.Patte
         match = title_pattern.search(embed.title)
         if match:
             return match.group(1)
+
+    print(f"DEBUG - NeatQueue msg {message.id}: titles {[e.title for e in message.embeds]} did not match /{title_pattern.pattern}/")
     return None
 
 
 async def post_queue_result(message: discord.Message, match_id: str):
     """Marks match_id as processed for this guild and, if new, replies to message with its stats."""
     if not try_mark_match_processed(message.guild.id, match_id):
+        print(f"DEBUG - Match {match_id} in guild {message.guild.id} already marked processed, skipping repost")
         return  # already posted (e.g. the panel got edited again after a revert)
+
+    # Give the game server a moment to finish writing this match's results before querying survev.de.
+    await asyncio.sleep(QUEUE_RESULT_FETCH_DELAY_SECONDS)
 
     content, file, error_text = await build_queue_stats_payload(match_id)
     if error_text:
+        print(f"DEBUG - Match {match_id}: build_queue_stats_payload failed: {error_text}")
         await message.reply(error_text)
     else:
+        print(f"DEBUG - Match {match_id}: posted queue stats successfully")
         await message.reply(content=content, file=file)
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
@@ -809,13 +823,28 @@ async def on_message(message: discord.Message):
 
 
 @bot.event
-async def on_message_edit(before: discord.Message, after: discord.Message):
-    if after.guild is None or after.author.id == bot.user.id:
-        return
+async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
     # NeatQueue's admin queue panel has no result when first posted — only edits carry a final result.
-    match_id = find_neatqueue_embed_match(after, QUEUE_PANEL_TITLE_PATTERN)
+    # Uses the raw event (not on_message_edit) because on_message_edit only fires for messages still in
+    # discord.py's message cache, and this panel is often edited long after it scrolls out of cache.
+    if payload.guild_id is None:
+        return
+
+    channel = bot.get_channel(payload.channel_id)
+    if channel is None:
+        return
+
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except discord.HTTPException:
+        return
+
+    if message.author.id == bot.user.id:
+        return
+
+    match_id = find_neatqueue_embed_match(message, QUEUE_PANEL_TITLE_PATTERN)
     if match_id is not None:
-        await post_queue_result(after, match_id)
+        await post_queue_result(message, match_id)
 
 
 async def backfill_missed_queue_results():
