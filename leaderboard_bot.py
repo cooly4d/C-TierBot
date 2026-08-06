@@ -25,6 +25,8 @@ NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
+# Last-resort window length when NeatQueue gives us no usable end-of-match signal at all.
+QUEUE_MATCH_FALLBACK_DURATION_MS = int(os.getenv("QUEUE_MATCH_FALLBACK_DURATION_MINUTES", "10")) * 60 * 1000
 QUEUE_FONT_PATHS = [
     os.getenv("QUEUE_FONT_PATH"),
     "fonts/QuattrocentoSans-Regular.ttf",
@@ -649,33 +651,52 @@ def get_match_start_ms(match):
     return None
 
 
-def get_match_end_ms(match, default_start_ms: int):
-    # NeatQueue only posts the winner announcement once the whole series (all games) has finished, so
-    # that message's snowflake ID (which encodes its creation time) is a far more reliable end boundary
-    # than any fixed duration guess — it naturally covers Best-of-N series of any length.
+async def get_match_end_ms(match, default_start_ms: int):
+    # NeatQueue edits the winner message in place once the whole series (all games) has finished, so that
+    # message's actual edited_at (fetched live) is the most reliable end boundary we can get — far better
+    # than guessing a fixed duration. Every candidate below is clamped to be after start_ms, since a stale
+    # or replayed history entry could otherwise hand us a "winner_message" that predates the match.
     winner_message_id = get_nested_value(match, "winner_message")
+    winner_channel_id = get_nested_value(match, "winner_channel")
+    if winner_message_id and winner_channel_id:
+        try:
+            channel = bot.get_channel(int(winner_channel_id)) or await bot.fetch_channel(int(winner_channel_id))
+            winner_message = await channel.fetch_message(int(winner_message_id))
+            end_dt = winner_message.edited_at or winner_message.created_at
+            end_ms = int(end_dt.timestamp() * 1000) + 5000
+            if end_ms > default_start_ms:
+                return end_ms
+        except (discord.HTTPException, discord.Forbidden, discord.NotFound, TypeError, ValueError, AttributeError):
+            pass
+
     if winner_message_id:
         try:
             end_dt = discord.utils.snowflake_time(int(winner_message_id))
-            return int(end_dt.timestamp() * 1000) + 5000
+            end_ms = int(end_dt.timestamp() * 1000) + 5000
+            if end_ms > default_start_ms:
+                return end_ms
         except (TypeError, ValueError):
             pass
 
     end_ms = get_nested_value(match, "end_time_ms")
     parsed_end = parse_neatqueue_time(end_ms)
-    if parsed_end is not None:
+    if parsed_end is not None and parsed_end > default_start_ms:
         return parsed_end
 
     player_timestamps = []
-    for player in match.get("players", []):
-        timestamp_value = get_nested_value(player, "timestamp") or get_nested_value(player, "time")
-        parsed = parse_neatqueue_time(timestamp_value)
-        if parsed is not None:
-            player_timestamps.append(parsed)
+    for team in collect_neatqueue_teams(match):
+        for player in team:
+            timestamp_value = get_nested_value(player, "timestamp") or get_nested_value(player, "time")
+            parsed = parse_neatqueue_time(timestamp_value)
+            if parsed is not None:
+                player_timestamps.append(parsed)
 
     if player_timestamps:
-        return max(player_timestamps) + 5000
-    return default_start_ms + 60000
+        latest = max(player_timestamps) + 5000
+        if latest > default_start_ms:
+            return latest
+
+    return default_start_ms + QUEUE_MATCH_FALLBACK_DURATION_MS
 
 
 NEATQUEUE_MATCH_ID_KEYS = ("game_num", "match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
@@ -772,7 +793,7 @@ async def calculate_queue_match_stats(match_id: str):
         if start_ms is None:
             return None, "NeatQueue match entry is missing a recognizable start time."
 
-        end_ms = get_match_end_ms(match, start_ms)
+        end_ms = await get_match_end_ms(match, start_ms)
 
         teams = collect_neatqueue_teams(match)
         if not teams:
