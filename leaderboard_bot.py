@@ -287,7 +287,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     score_font = load_font(44, "bold")
-    team_scores = [sum(entry["stats"].get("wins", 0) for entry in team) for team in teams]
+    team_scores = [sum(entry["stats"].get("wins", 0) for entry in team if entry["stats"]) for team in teams]
     if num_teams == 2:
         left_text = str(team_scores[0])
         right_text = str(team_scores[1])
