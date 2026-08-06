@@ -1607,7 +1607,7 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
     access_token = get_user_token(target.id)
     if not access_token:
         if target.id == interaction.user.id:
-            await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+            await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` first.")
         else:
             await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
         return
