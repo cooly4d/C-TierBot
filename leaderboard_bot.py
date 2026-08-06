@@ -1340,8 +1340,11 @@ class QueueResultView(discord.ui.View):
 
     @discord.ui.button(label="Not showing up? Verify", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify", emoji="🔗")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        print(f"DEBUG - verify_button callback invoked by {interaction.user}")
         await interaction.response.defer(ephemeral=True)
+        print("DEBUG - verify_button deferred, starting verification flow")
         await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
+        print("DEBUG - verify_button verification flow finished")
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
         # discord.py's default View.on_error just logs to stderr, which is easy to miss — surface it
