@@ -227,9 +227,9 @@ QUEUE_IMG_WIN_BADGE = (34, 106, 72)
 QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
-# Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage, Wins
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.33, 0.50, 0.70, 0.88]
-QUEUE_IMG_COLUMN_LABELS = ["Player", "K", "Dmg", "Avg Dmg", "W"]
+# Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.30, 0.52, 0.72]
+QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
 
 
 def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None, client: discord.Client) -> BytesIO:
@@ -351,8 +351,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 player_label,
                 str(stats["kills"]),
                 f"{stats['damage']:,}",
-                f"{avg_damage:,.0f}",
-                str(stats["wins"])
+                f"{avg_damage:,.0f}"
             ]
             for col_idx, value in enumerate(row_values):
                 fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
