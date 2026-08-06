@@ -228,7 +228,7 @@ QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.36, 0.62, 0.82]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.58, 0.76]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
 
 
@@ -330,15 +330,12 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
+        col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [panel_width - columns[-1]]
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
             label_x = x0 + columns[col_idx]
-            if col_idx < len(QUEUE_IMG_COLUMN_LABELS) - 1:
-                next_x = x0 + columns[col_idx + 1]
-            else:
-                next_x = x0 + panel_width
             label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-            if next_x - label_x > label_width:
-                label_x += (next_x - label_x - label_width) / 2
+            if col_widths[col_idx] > label_width:
+                label_x += (col_widths[col_idx] - label_width) / 2
             draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
         if not team_players:
@@ -364,7 +361,13 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             for col_idx, value in enumerate(row_values):
                 fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
                 font = body_font_bold if col_idx in (0, 2, 3) else body_font
-                draw.text((x0 + columns[col_idx], row_top + 14), value, font=font, fill=fill)
+                cell_x = x0 + columns[col_idx]
+                if col_idx == 0:
+                    draw.text((cell_x, row_top + 14), value, font=font, fill=fill)
+                else:
+                    value_width = draw.textbbox((0, 0), value, font=font)[2]
+                    centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
+                    draw.text((centered_x, row_top + 14), value, font=font, fill=fill)
 
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
