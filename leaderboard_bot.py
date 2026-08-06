@@ -180,6 +180,10 @@ def load_font(size: int, weight: str = "regular"):
 
 
 def get_user_display_name(client: discord.Client, discord_id: int) -> str:
+    member = next((m for m in client.get_all_members() if m.id == discord_id), None)
+    if member is not None:
+        return member.display_name
+
     user = client.get_user(discord_id)
     if user is not None:
         return user.name
@@ -192,6 +196,11 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
             discord_id = entry.get("discord_id")
             if discord_id is None:
                 entry["display_name"] = "Unknown"
+                continue
+
+            member = next((m for m in client.get_all_members() if m.id == discord_id), None)
+            if member is not None:
+                entry["display_name"] = member.display_name
                 continue
 
             user = client.get_user(discord_id)
