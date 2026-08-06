@@ -1064,7 +1064,7 @@ async def generate_leaderboard_embed(period: str, days: int):
 
     if not leaderboard_data:
         embed.description = "No matches logged by verified members in this timeframe."
-        embed.set_footer(text="Info courtesy of survev.de API :)")
+        embed.set_footer(text="Data courtesy of survev.de API :)")
         return embed
 
     rank_emojis = ["🥇", "🥈", "🥉"]
@@ -1695,7 +1695,7 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
         if target.id == interaction.user.id:
             await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` first.")
         else:
-            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started :)")
+            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
     content, file, error_text = await build_inventory_image_payload(target, access_token)
@@ -1715,9 +1715,9 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
     access_token = get_user_token(target.id)
     if not access_token:
         if target.id == interaction.user.id:
-            await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started :)")
+            await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
         else:
-            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started :)")
+            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
     content, file, error_text = await build_goldenfries_image_payload(target, access_token)
@@ -1741,9 +1741,9 @@ class MarketGroup(discord.app_commands.Group):
         access_token = get_user_token(target.id)
         if not access_token:
             if target.id == interaction.user.id:
-                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started :)")
+                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
             else:
-                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started :)")
+                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
             return
 
         content, file, error_text = await build_shop_image_payload(target, access_token, mode="daily")
@@ -1762,9 +1762,9 @@ class MarketGroup(discord.app_commands.Group):
         access_token = get_user_token(target.id)
         if not access_token:
             if target.id == interaction.user.id:
-                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started :)")
+                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
             else:
-                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started :)")
+                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
             return
 
         content, file, error_text = await build_shop_image_payload(target, access_token, mode="weekly")
