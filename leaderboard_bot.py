@@ -1434,33 +1434,83 @@ def collect_neatqueue_teams(match):
     return []
 
 
+async def find_queue_panel_message(guild_id: int, match_id: str):
+    """Searches the guild's configured results channel for the (possibly still in-progress) NeatQueue
+    panel/winner message for this match number — used when NeatQueue's history API has no entry yet
+    because the queue hasn't finished."""
+    channel_id = get_guild_queue_channel(guild_id)
+    if channel_id is None:
+        return None
+
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        return None
+
+    pattern = re.compile(rf"Queue#{re.escape(str(match_id))}\b")
+    try:
+        async for message in channel.history(limit=200):
+            if message.author.id != NEATQUEUE_BOT_ID:
+                continue
+            for embed in message.embeds:
+                if embed.title and pattern.search(embed.title):
+                    return message
+    except discord.HTTPException:
+        return None
+    return None
+
+
+def parse_teams_from_panel_embed(embed: discord.Embed) -> list[list[dict]]:
+    """Extracts team rosters (as Discord IDs) from a NeatQueue panel/winner embed's "Team N" fields,
+    which list each player as a real @mention even before the queue has a result."""
+    teams = []
+    for field in embed.fields:
+        if not field.name or not field.name.lower().startswith("team"):
+            continue
+        ids = re.findall(r"<@!?(\d+)>", field.value or "")
+        teams.append([{"id": pid} for pid in ids])
+    return teams
+
+
 async def calculate_queue_match_stats(match_id: str, guild_id: int):
     """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
     and which team_id they were on), then overlays a Discord display name wherever the player's slug
     matches a /verify'd user. Anyone without a linked account just keeps their survev.de username."""
     async with aiohttp.ClientSession() as session:
         nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
-        if error:
-            return None, error
-        if not nq_data:
-            return None, "NeatQueue returned empty history data."
+        entries = extract_neatqueue_entries(nq_data) if nq_data else []
 
-        entries = extract_neatqueue_entries(nq_data)
-        if not entries:
-            return None, "NeatQueue history contains no match entries."
+        if entries:
+            # NeatQueue returns the requested match as the first entry in the result.
+            match = entries[0]
 
-        # NeatQueue returns the requested match as the first entry in the result.
-        match = entries[0]
+            start_ms = get_match_start_ms(match)
+            if start_ms is None:
+                return None, "NeatQueue match entry is missing a recognizable start time."
 
-        start_ms = get_match_start_ms(match)
-        if start_ms is None:
-            return None, "NeatQueue match entry is missing a recognizable start time."
+            end_ms = await get_match_end_ms(match, start_ms)
 
-        end_ms = await get_match_end_ms(match, start_ms)
+            teams = collect_neatqueue_teams(match)
+            if not teams:
+                return None, "NeatQueue match entry contains no player roster."
+        else:
+            # No finished-match history yet — the queue is probably still in progress. Fall back to
+            # NeatQueue's own panel/winner Discord message: its post time is the start, and "now" is
+            # the end, so /queue_stats still works mid-queue instead of erroring out.
+            panel_message = await find_queue_panel_message(guild_id, match_id)
+            if panel_message is None:
+                return None, error or "NeatQueue history contains no match entries."
 
-        teams = collect_neatqueue_teams(match)
-        if not teams:
-            return None, "NeatQueue match entry contains no player roster."
+            teams = None
+            for embed in panel_message.embeds:
+                parsed = parse_teams_from_panel_embed(embed)
+                if parsed:
+                    teams = parsed
+                    break
+            if not teams:
+                return None, "Couldn't read the player roster from NeatQueue's message for this queue."
+
+            start_ms = int(panel_message.created_at.timestamp() * 1000)
+            end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         # Remember NeatQueue's own team ordering (by discord_id) so our survev.de-team_id-based grouping
         # can be displayed in the same left/right order NeatQueue itself uses.
