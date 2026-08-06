@@ -8,6 +8,7 @@ import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+import textwrap
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
@@ -477,7 +478,7 @@ async def run_survev_verification(discord_user_id: int, send_update):
     payload = {
         "clientId": SURVEV_CLIENT_ID,
         "clientSecret": SURVEV_CLIENT_SECRET,
-        "scope": ["read:discord", "read:stats"]
+        "scope": ["read:discord", "read:stats", "read:inventory"]
     }
 
     async with aiohttp.ClientSession() as session:
@@ -594,6 +595,151 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
     }
 
 
+async def fetch_user_inventory(session: aiohttp.ClientSession, access_token: str):
+    """Fetches a survev.de user's inventory with their OAuth access token."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with session.post("https://survev.de/api/external/inventory", headers=headers) as resp:
+            if resp.status == 200:
+                return await resp.json(), None
+
+            if resp.status == 401:
+                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
+            if resp.status == 403:
+                return None, "Your survev.de token does not have inventory access. Please re-run /verify to grant read:inventory."
+
+            text = await resp.text()
+            return None, f"survev.de inventory request failed ({resp.status}): {text}"
+    except aiohttp.ClientError as exc:
+        return None, f"survev.de inventory request failed: {exc}"
+
+
+def truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
+def rarity_label(rarity: int) -> str:
+    return {
+        0: "Stock",
+        1: "Common",
+        2: "Rare",
+        3: "Epic",
+        4: "Legendary"
+    }.get(rarity, f"Rarity {rarity}")
+
+
+def prettify_source(source: str | None) -> str:
+    if not source:
+        return "Unknown"
+    return source.replace("_", " ").title()
+
+
+def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
+    item_count = len(items)
+    shown_items = sorted(items, key=lambda item: (item.get("rarity", 0), item.get("value", 0)), reverse=True)[:10]
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = 56
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + len(shown_items) * row_height + QUEUE_IMG_PADDING * 2 + 40
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(44, "bold")
+    subtitle_font = load_font(22, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(18)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), f"survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s items — showing {len(shown_items)} of {item_count}", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.34),
+        table_x + round(table_width * 0.52),
+        table_x + round(table_width * 0.68),
+        table_x + round(table_width * 0.82)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    labels = ["Item", "Rarity", "Source", "Value", "Stats"]
+    for col_idx, label in enumerate(labels):
+        label_x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((label_x, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = table_top + row_height
+    for row_index, item in enumerate(shown_items):
+        if row_index % 2 == 0:
+            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+        name = truncate_text(item.get("name", "Unknown Item"), 30)
+        rarity = rarity_label(item.get("rarity", 0))
+        source = prettify_source(item.get("source"))
+        price_paid = item.get("pricePaid")
+        value = item.get("value")
+        value_text = f"{price_paid} paid" if price_paid is not None else (f"{value}💰" if value else "Stock")
+        stats_text = f"G:{item.get('games',0)} K:{item.get('kills',0)} D:{item.get('damage',0)}"
+
+        values = [name, rarity, source, value_text, stats_text]
+        for col_idx, value in enumerate(values):
+            font = body_font
+            fill = QUEUE_IMG_TEXT
+            cell_x = columns[col_idx]
+            if col_idx == 0:
+                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
+            else:
+                value_width = draw.textbbox((0, 0), value, font=font)[2]
+                draw.text((cell_x + (col_widths[col_idx] - value_width) / 2, row_y + 14), value, font=font, fill=fill)
+
+        row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_inventory_image_payload(target_user: discord.User, access_token: str):
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            inventory, error = await fetch_user_inventory(session, access_token)
+            if error:
+                return None, None, error
+
+            if not inventory:
+                return None, None, "survev.de returned an empty inventory response."
+
+            username = inventory.get("username") or str(target_user)
+            items = inventory.get("items", [])
+            image_buffer = generate_inventory_image(username, items)
+            file = discord.File(image_buffer, filename=f"inventory_{target_user.id}.png")
+            return f"{username}'s survev.de inventory", file, None
+
+    return wrapper()
+
+
 async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
     with no survev.de account at all (they still show up with a username, just slug=None)."""
@@ -605,6 +751,7 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> 
     except aiohttp.ClientError:
         return None
     return data if isinstance(data, list) else None
+
 
 async def generate_leaderboard_embed(period: str, days: int):
     now = datetime.now(timezone.utc)
@@ -1231,6 +1378,28 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         return
 
     await interaction.followup.send(content=content, file=file, view=queue_result_view)
+
+
+@bot.tree.command(name="inventory", description="View a user's survev.de inventory as a graphic.")
+@discord.app_commands.describe(member="Discord member whose inventory to display. Omit to use yourself.")
+async def inventory(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
+
+    access_token = get_user_token(target.id)
+    if not access_token:
+        if target.id == interaction.user.id:
+            await interaction.followup.send("You have not linked a survev.de account yet. Use /verify first.")
+        else:
+            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet.")
+        return
+
+    content, file, error_text = await build_inventory_image_payload(target, access_token)
+    if error_text:
+        await interaction.followup.send(error_text)
+        return
+
+    await interaction.followup.send(content=content, file=file)
 
 
 # ------------------------------------------------------------------
