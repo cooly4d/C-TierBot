@@ -25,6 +25,15 @@ NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "20"))
+QUEUE_FONT_PATHS = [
+    os.getenv("QUEUE_FONT_PATH"),
+    "fonts/QuattrocentoSans-Regular.ttf",
+    "QuattrocentoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/quattrocento/QuattrocentoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+]
 #all supposed to be environment variables by cba
 
 
@@ -120,11 +129,37 @@ def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
         return cur.rowcount > 0
 
 
+def resolve_queue_font_path() -> str | None:
+    for path in QUEUE_FONT_PATHS:
+        if not path:
+            continue
+        if os.path.isfile(path):
+            return path
+        try:
+            # Some environments allow direct font family names.
+            ImageFont.truetype(path, 12)
+            return path
+        except Exception:
+            continue
+    return None
+
+QUEUE_FONT_PATH = resolve_queue_font_path()
+
+
 def load_font(size: int):
-    try:
-        return ImageFont.truetype("arial.ttf", size)
-    except Exception:
-        return ImageFont.load_default()
+    if QUEUE_FONT_PATH is not None:
+        try:
+            return ImageFont.truetype(QUEUE_FONT_PATH, size)
+        except Exception:
+            pass
+
+    for fallback in ("DejaVuSans.ttf", "LiberationSans-Regular.ttf", "FreeSans.ttf"):
+        try:
+            return ImageFont.truetype(fallback, size)
+        except Exception:
+            continue
+
+    return ImageFont.load_default()
 
 
 def get_user_display_name(client: discord.Client, discord_id: int) -> str:
