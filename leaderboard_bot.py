@@ -22,7 +22,6 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 SURVEV_CLIENT_ID = os.getenv("SURVEV_CLIENT_ID")
 SURVEV_CLIENT_SECRET = os.getenv("SURVEV_CLIENT_SECRET")
 NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
-NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
@@ -1146,12 +1145,13 @@ def build_leaderboard_image_payload(period: str, days: int):
 # ------------------------------------------------------------------
 # 3. NEATQUEUE INTEGRATION ENGINE
 # ------------------------------------------------------------------
-async def fetch_neatqueue_history(session: aiohttp.ClientSession, match_number: str | None = None, extra_params: dict | None = None):
-    """Fetches history for the configured NeatQueue server, optionally limited to one game number or filtered by extra_params."""
-    if not NEATQUEUE_SERVER_ID or NEATQUEUE_SERVER_ID == "YOUR_SERVER_ID_HERE":
-        return None, "NeatQueue server ID is not configured. Set NEATQUEUE_SERVER_ID in the script or environment."
+async def fetch_neatqueue_history(session: aiohttp.ClientSession, guild_id: int, match_number: str | None = None, extra_params: dict | None = None):
+    """Fetches history for the given Discord guild's NeatQueue server (NeatQueue's server_id IS the
+    guild id), optionally limited to one game number or filtered by extra_params."""
+    if not guild_id:
+        return None, "No Discord server ID given to look up NeatQueue history for."
 
-    url = f"{NEATQUEUE_API_BASE}/history/{NEATQUEUE_SERVER_ID}"
+    url = f"{NEATQUEUE_API_BASE}/history/{guild_id}"
     params = None
     if match_number is not None:
         params = {
@@ -1178,7 +1178,7 @@ async def fetch_neatqueue_history(session: aiohttp.ClientSession, match_number: 
             if resp.status == 404:
                 return None, (
                     f"NeatQueue endpoint returned 404 for URL {url}. "
-                    f"Verify NEATQUEUE_API_BASE, NEATQUEUE_SERVER_ID, and match number; response detail: {error_detail}"
+                    f"Verify this server has NeatQueue set up and the match number is correct; response detail: {error_detail}"
                 )
             return None, f"NeatQueue API returned {resp.status} for URL {url}: {error_detail}"
 
@@ -1190,9 +1190,9 @@ async def fetch_neatqueue_history(session: aiohttp.ClientSession, match_number: 
         return data, None
 
 
-async def fetch_neatqueue_matches_since(session: aiohttp.ClientSession, start_date_iso: str):
-    """Fetches every match for the configured server that finished at/after start_date, oldest first."""
-    data, error = await fetch_neatqueue_history(session, extra_params={
+async def fetch_neatqueue_matches_since(session: aiohttp.ClientSession, guild_id: int, start_date_iso: str):
+    """Fetches every match for the given guild's NeatQueue server that finished at/after start_date, oldest first."""
+    data, error = await fetch_neatqueue_history(session, guild_id, extra_params={
         "start_date": start_date_iso,
         "order": "asc",
         "page_size": "1000"
@@ -1364,12 +1364,12 @@ def collect_neatqueue_teams(match):
     return []
 
 
-async def calculate_queue_match_stats(match_id: str):
+async def calculate_queue_match_stats(match_id: str, guild_id: int):
     """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
     and which team_id they were on), then overlays a Discord display name wherever the player's slug
     matches a /verify'd user. Anyone without a linked account just keeps their survev.de username."""
     async with aiohttp.ClientSession() as session:
-        nq_data, error = await fetch_neatqueue_history(session, match_id)
+        nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
         if error:
             return None, error
         if not nq_data:
@@ -1564,10 +1564,10 @@ class QueueResultView(discord.ui.View):
 queue_result_view = QueueResultView()
 
 
-async def build_queue_stats_payload(match_id: str):
+async def build_queue_stats_payload(match_id: str, guild_id: int):
     """Runs the NeatQueue/survev.de cross-reference and returns either
     (content, discord.File, None) on success or (None, None, error_text) on failure."""
-    match_result, error = await calculate_queue_match_stats(match_id)
+    match_result, error = await calculate_queue_match_stats(match_id, guild_id)
     if error:
         return None, None, f"❌ {error}"
 
@@ -1586,7 +1586,11 @@ async def build_queue_stats_payload(match_id: str):
 async def queue_stats(interaction: discord.Interaction, match_id: str):
     await interaction.response.defer()
 
-    content, file, error_text = await build_queue_stats_payload(match_id)
+    if interaction.guild_id is None:
+        await interaction.followup.send("❌ This command only works in a server.")
+        return
+
+    content, file, error_text = await build_queue_stats_payload(match_id, interaction.guild_id)
     if error_text:
         await interaction.followup.send(error_text)
         return
@@ -1720,7 +1724,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
     # Give the game server a moment to finish writing this match's results before querying survev.de.
     await asyncio.sleep(QUEUE_RESULT_FETCH_DELAY_SECONDS)
 
-    content, file, error_text = await build_queue_stats_payload(match_id)
+    content, file, error_text = await build_queue_stats_payload(match_id, message.guild.id)
     if error_text:
         await message.reply(error_text)
     else:
@@ -1774,7 +1778,7 @@ async def backfill_missed_queue_results():
 
     async with aiohttp.ClientSession() as session:
         for guild_id, channel_id, last_updated in guild_configs:
-            matches, error = await fetch_neatqueue_matches_since(session, last_updated)
+            matches, error = await fetch_neatqueue_matches_since(session, guild_id, last_updated)
             if error:
                 continue
             if not matches:
@@ -1793,7 +1797,7 @@ async def backfill_missed_queue_results():
                 if not try_mark_match_processed(guild_id, match_id):
                     continue  # already posted live before the bot went down
 
-                content, file, error_text = await build_queue_stats_payload(match_id)
+                content, file, error_text = await build_queue_stats_payload(match_id, guild_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
                 await channel.send(content=f"*(Catching up)* {content}", file=file, view=queue_result_view)
