@@ -1444,12 +1444,15 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     continue
                 agg = players.setdefault(key, {
                     "username": username, "slug": slug, "team_id": p.get("team_id"),
-                    "games": 0, "wins": 0, "kills": 0, "damage": 0
+                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None
                 })
                 agg["games"] += 1
                 agg["wins"] += 1 if p.get("rank") == 1 else 0
                 agg["kills"] += p.get("kills", 0)
                 agg["damage"] += p.get("damage_dealt", 0)
+                rank = p.get("rank")
+                if rank is not None and (agg["best_rank"] is None or rank < agg["best_rank"]):
+                    agg["best_rank"] = rank
 
         if not players:
             return None, "survev.de returned no player data for this queue's match(es)."
@@ -1473,6 +1476,19 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         for team in result_teams:
             team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
+
+        # A game can involve more teams than just the queue's own (e.g. public matchmaking lobbies with
+        # random other squads) — only show the top 2 places so unrelated teams never clutter the image.
+        if len(result_teams) > 2:
+            team_best_rank = {}
+            for tid in team_ids:
+                ranks = [p["best_rank"] for p in players.values() if p["team_id"] == tid and p["best_rank"] is not None]
+                team_best_rank[tid] = min(ranks) if ranks else 999
+            top_two_indices = {
+                team_id_index[tid]
+                for tid in sorted(team_ids, key=lambda tid: team_best_rank[tid])[:2]
+            }
+            result_teams = [team for i, team in enumerate(result_teams) if i in top_two_indices]
 
         # Reorder to match NeatQueue's own Team 1/Team 2 display order, using known discord_ids as votes.
         def neatqueue_order_key(team):
