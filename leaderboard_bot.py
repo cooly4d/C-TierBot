@@ -292,7 +292,7 @@ async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
 
 
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
-QUEUE_IMG_WIDTH = 1200
+QUEUE_IMG_WIDTH = 1500
 QUEUE_IMG_PADDING = 36
 QUEUE_IMG_HEADER_HEIGHT = 170
 QUEUE_IMG_TEAM_HEADER_HEIGHT = 60
@@ -312,8 +312,18 @@ QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.58, 0.76]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.48, 0.66, 0.84]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
+QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
+
+
+def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
+    """Shortens text with an ellipsis so it never overflows into the next column."""
+    if draw.textbbox((0, 0), text, font=font)[2] <= max_width:
+        return text
+    while text and draw.textbbox((0, 0), text + "…", font=font)[2] > max_width:
+        text = text[:-1]
+    return f"{text}…" if text else "…"
 
 
 def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None) -> BytesIO:
@@ -361,7 +371,8 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     score_font = load_font(44, "bold")
-    team_scores = [sum(entry["stats"].get("wins", 0) for entry in team if entry["stats"]) for team in teams]
+    # Every teammate shares the same round-win count, so take the max (not sum) to avoid double-counting.
+    team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
     if num_teams == 2:
         left_text = str(team_scores[0])
         right_text = str(team_scores[1])
@@ -455,6 +466,8 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 font = body_font_bold if col_idx in (0, 2, 3) else body_font
                 cell_x = x0 + columns[col_idx]
                 if col_idx == 0:
+                    max_name_width = columns[1] - columns[0] - QUEUE_IMG_NAME_PADDING_RIGHT
+                    value = truncate_to_width(draw, value, font, max_name_width)
                     draw.text((cell_x, row_top + 14), value, font=font, fill=fill)
                 else:
                     value_width = draw.textbbox((0, 0), value, font=font)[2]
