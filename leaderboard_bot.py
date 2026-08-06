@@ -274,18 +274,6 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         winner_color = QUEUE_IMG_MUTED
 
     winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font)
-    badge_margin_x = 14
-    badge_margin_y = 10
-    draw.rectangle(
-        [
-            winner_bbox[0] - badge_margin_x,
-            winner_bbox[1] - badge_margin_y,
-            winner_bbox[2] + badge_margin_x,
-            winner_bbox[3] + badge_margin_y,
-        ],
-        fill=QUEUE_IMG_HEADER_BG,
-        outline=None,
-    )
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     score_font = load_font(44, "bold")
