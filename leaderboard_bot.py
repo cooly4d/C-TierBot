@@ -133,6 +133,27 @@ def get_user_display_name(client: discord.Client, discord_id: int) -> str:
     return f"Player {discord_id}"
 
 
+async def resolve_queue_user_display_names(teams: list[list[dict]], client: discord.Client):
+    for team in teams:
+        for entry in team:
+            discord_id = entry.get("discord_id")
+            if discord_id is None:
+                entry["display_name"] = "Unknown"
+                continue
+
+            user = client.get_user(discord_id)
+            if user is None:
+                try:
+                    user = await client.fetch_user(discord_id)
+                except Exception:
+                    user = None
+
+            if user is not None:
+                entry["display_name"] = f"{user.name}#{user.discriminator}"
+            else:
+                entry["display_name"] = f"Player {discord_id}"
+
+
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
 QUEUE_IMG_WIDTH = 1200
 QUEUE_IMG_PADDING = 36
@@ -177,10 +198,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 
     # Top banner
     draw.rectangle([0, 0, QUEUE_IMG_WIDTH, QUEUE_IMG_HEADER_HEIGHT], fill=QUEUE_IMG_HEADER_BG)
-    draw.text((QUEUE_IMG_PADDING, 26), f"NeatQueue Match #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 26), f"NeatQueue #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
-        winner_text = f"🏆 Team {winning_team_index + 1} Wins"
+        winner_text = f"Team {winning_team_index + 1} Wins"
         winner_color = QUEUE_IMG_WIN
     else:
         winner_text = "Result unknown"
@@ -196,7 +217,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         is_winner = winning_team_index == team_index
         team_color = QUEUE_IMG_WIN if is_winner else (QUEUE_IMG_LOSE if winning_team_index is not None else QUEUE_IMG_MUTED)
 
-        team_label = f"Team {team_index + 1}" + (" 🏆" if is_winner else "")
+        team_label = f"Team {team_index + 1}" + (" (Winner)" if is_winner else "")
         draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
@@ -215,7 +236,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             stats = entry["stats"]
             games = stats["games"]
             avg_damage = stats["damage"] / games if games else 0
-            player_label = get_user_display_name(client, entry["discord_id"])
+            player_label = entry.get("display_name") or get_user_display_name(client, entry["discord_id"])
 
             row_values = [
                 player_label,
@@ -232,7 +253,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
 
-    footer_text = "Data courtesy of NeatQueue & survev.de APIs"
+    footer_text = "Data courtesy of NeatQueue & survev.de APIs :)"
     draw.text((QUEUE_IMG_PADDING, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     buffer = BytesIO()
@@ -710,6 +731,7 @@ async def build_queue_stats_payload(match_id: str):
     if not any(teams):
         return None, None, "No verified players were found in this NeatQueue match, or no games were logged during the time frame."
 
+    await resolve_queue_user_display_names(teams, bot)
     image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"], bot)
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
     return f"Queue stats for match #{match_id}", file, None
