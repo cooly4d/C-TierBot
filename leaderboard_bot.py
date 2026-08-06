@@ -97,6 +97,7 @@ async def on_ready():
     bot.add_view(queue_result_view)
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    await backfill_missing_slugs()
     await backfill_missed_queue_results()
 
 # Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
@@ -117,6 +118,16 @@ def get_discord_id_by_slug(slug: str):
     with sqlite3.connect("leaderboard.db") as c:
         row = c.execute("SELECT discord_id FROM users WHERE slug = ?", (slug,)).fetchone()
         return row[0] if row else None
+
+# Helper: Get every verified user whose slug we haven't captured yet (e.g. verified before that existed)
+def get_users_missing_slug():
+    with sqlite3.connect("leaderboard.db") as c:
+        return c.execute("SELECT discord_id, access_token FROM users WHERE slug IS NULL").fetchall()
+
+# Helper: Fill in a previously-unknown slug/username for an already-verified user
+def update_user_slug(discord_id: int, slug: str, username: str):
+    with sqlite3.connect("leaderboard.db") as c:
+        c.execute("UPDATE users SET slug = ?, username = ? WHERE discord_id = ?", (slug, username, discord_id))
 
 # Helper: Get Single User Token
 def get_user_token(discord_id: int):
@@ -411,6 +422,33 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 # ------------------------------------------------------------------
 # 1. VERIFICATION COMMAND
 # ------------------------------------------------------------------
+async def fetch_discord_link(session: aiohttp.ClientSession, access_token: str):
+    """Returns (slug, username) for a survev.de access token, or (None, None) on failure."""
+    try:
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with session.post("https://survev.de/api/external/discord_link", headers=headers) as resp:
+            if resp.status != 200:
+                return None, None
+            data = await resp.json()
+            return data.get("slug"), data.get("username")
+    except aiohttp.ClientError:
+        return None, None
+
+
+async def backfill_missing_slugs():
+    """One-time-ish catch-up: fills in slug/username for users who verified before we started storing it,
+    using their access token we already have — no need for them to /verify again."""
+    missing = get_users_missing_slug()
+    if not missing:
+        return
+
+    async with aiohttp.ClientSession() as session:
+        for discord_id, access_token in missing:
+            slug, username = await fetch_discord_link(session, access_token)
+            if slug:
+                update_user_slug(discord_id, slug, username)
+
+
 async def run_survev_verification(discord_user_id: int, send_update):
     """Runs the survev.de OAuth device-code flow, calling `send_update(**kwargs)` (a discord.py-style
     send with `content=`/`embed=`) for each step. Shared by /verify and the "not showing up?" button so
@@ -461,18 +499,7 @@ async def run_survev_verification(discord_user_id: int, send_update):
 
                     if t_resp.status == 200:
                         access_token = t_data["accessToken"]
-
-                        slug = username = None
-                        try:
-                            link_headers = {"Authorization": f"Bearer {access_token}"}
-                            async with session.post("https://survev.de/api/external/discord_link", headers=link_headers) as link_resp:
-                                if link_resp.status == 200:
-                                    link_data = await link_resp.json()
-                                    slug = link_data.get("slug")
-                                    username = link_data.get("username")
-                        except aiohttp.ClientError:
-                            pass
-
+                        slug, username = await fetch_discord_link(session, access_token)
                         save_token(discord_user_id, access_token, slug, username)
                         await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
                         break
@@ -976,25 +1003,14 @@ async def leaderboard_monthly(interaction: discord.Interaction):
 
 class QueueResultView(discord.ui.View):
     """Persistent view attached to queue-result messages, so anyone missing from the roster can self-serve
-    a DM verification link instead of having to know `/verify` exists."""
+    a verification link (visible only to them, in the same channel) instead of having to know /verify exists."""
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="Not showing up? Verify", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify", emoji="🔗")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        try:
-            dm_channel = await interaction.user.create_dm()
-            await dm_channel.send("Let's link your survev.de account so your stats show up here.")
-        except discord.Forbidden:
-            await interaction.followup.send("❌ I can't DM you — enable DMs from server members and try again, or run `/verify` instead.", ephemeral=True)
-            return
-        except discord.HTTPException:
-            await interaction.followup.send("❌ Something went wrong opening your DMs — try `/verify` instead.", ephemeral=True)
-            return
-
-        await interaction.followup.send("📬 Check your DMs for a verification link!", ephemeral=True)
-        await run_survev_verification(interaction.user.id, lambda **kw: dm_channel.send(**kw))
+        await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
 
 
 queue_result_view = QueueResultView()
@@ -1051,12 +1067,10 @@ def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[r
         return None
 
     if message.guild is None or not message.embeds:
-        print(f"DEBUG - NeatQueue msg {message.id}: skipped (guild={message.guild}, embeds={len(message.embeds)})")
         return None
 
     configured_channel_id = get_guild_queue_channel(message.guild.id)
     if configured_channel_id is None or message.channel.id != configured_channel_id:
-        print(f"DEBUG - NeatQueue msg {message.id}: channel {message.channel.id} != configured {configured_channel_id} for guild {message.guild.id}")
         return None
 
     for embed in message.embeds:
@@ -1067,15 +1081,12 @@ def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[r
             if match:
                 return match.group(1)
 
-    patterns_desc = [p.pattern for p in title_patterns]
-    print(f"DEBUG - NeatQueue msg {message.id}: titles {[e.title for e in message.embeds]} matched none of {patterns_desc}")
     return None
 
 
 async def post_queue_result(message: discord.Message, match_id: str):
     """Marks match_id as processed for this guild and, if new, replies to message with its stats."""
     if not try_mark_match_processed(message.guild.id, match_id):
-        print(f"DEBUG - Match {match_id} in guild {message.guild.id} already marked processed, skipping repost")
         return  # already posted (e.g. the panel got edited again after a revert)
 
     # Give the game server a moment to finish writing this match's results before querying survev.de.
@@ -1083,10 +1094,8 @@ async def post_queue_result(message: discord.Message, match_id: str):
 
     content, file, error_text = await build_queue_stats_payload(match_id)
     if error_text:
-        print(f"DEBUG - Match {match_id}: build_queue_stats_payload failed: {error_text}")
         await message.reply(error_text)
     else:
-        print(f"DEBUG - Match {match_id}: posted queue stats successfully")
         await message.reply(content=content, file=file, view=queue_result_view)
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
@@ -1139,7 +1148,6 @@ async def backfill_missed_queue_results():
         for guild_id, channel_id, last_updated in guild_configs:
             matches, error = await fetch_neatqueue_matches_since(session, last_updated)
             if error:
-                print(f"DEBUG - Backfill failed for guild {guild_id}: {error}")
                 continue
             if not matches:
                 continue
