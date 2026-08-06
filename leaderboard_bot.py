@@ -326,8 +326,9 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         team_color = QUEUE_IMG_WIN if is_winner else (QUEUE_IMG_LOSE if winning_team_index is not None else QUEUE_IMG_MUTED)
 
         team_label = f"Team {team_index + 1}"
-        team_label_bbox = draw.textbbox((0, 0), team_label, font=team_header_font)
-        draw.text((x0, panel_top), team_label, font=team_header_font, fill=team_color)
+        team_label_width = draw.textbbox((0, 0), team_label, font=team_header_font)[2]
+        team_label_x = x0 + (panel_width - team_label_width) / 2
+        draw.text((team_label_x, panel_top), team_label, font=team_header_font, fill=team_color)
 
         header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
         col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [panel_width - columns[-1]]
