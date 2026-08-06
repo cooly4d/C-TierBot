@@ -1603,14 +1603,6 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
     await interaction.followup.send(content=content, file=file)
 
 
-@bot.tree.command(name="market", description="View a user's survev.de shop offers as a graphic.")
-async def market(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        "Use `/market daily` or `/market weekly` to view that part of the rota.",
-        ephemeral=True
-    )
-
-
 class MarketGroup(discord.app_commands.Group):
     def __init__(self):
         super().__init__(name="market", description="View a user's survev.de shop offers.")
