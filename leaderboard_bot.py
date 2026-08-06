@@ -101,6 +101,16 @@ async def on_ready():
     await backfill_missing_slugs()
     await backfill_missed_queue_results()
 
+
+async def log_interaction(interaction: discord.Interaction):
+    # Fires for every interaction (commands AND components) regardless of whether anything else handles
+    # it — pure diagnostic to see if button clicks even reach this process at all. Registered via
+    # add_listener (not @bot.event) so it can't possibly replace whatever handles app command dispatch.
+    print(f"DEBUG - on_interaction: type={interaction.type!r} data={interaction.data!r} user={interaction.user}")
+
+
+bot.add_listener(log_interaction, "on_interaction")
+
 # Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
 def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None):
     with sqlite3.connect("leaderboard.db") as c:
