@@ -287,18 +287,35 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
     if num_teams == 2:
-        score_text = f"{len(teams[0])} - {len(teams[1])}"
+        left_text = str(len(teams[0]))
+        right_text = str(len(teams[1]))
+        separator_text = " - "
+        left_color = QUEUE_IMG_TEXT
+        right_color = QUEUE_IMG_TEXT
+
+        if winning_team_index is not None:
+            if winning_team_index == 0:
+                left_color = QUEUE_IMG_WIN
+                right_color = QUEUE_IMG_LOSE
+            elif winning_team_index == 1:
+                left_color = QUEUE_IMG_LOSE
+                right_color = QUEUE_IMG_WIN
+
+        left_width = draw.textbbox((0, 0), left_text, font=team_header_font)[2]
+        sep_width = draw.textbbox((0, 0), separator_text, font=team_header_font)[2]
+        total_width = left_width + sep_width + draw.textbbox((0, 0), right_text, font=team_header_font)[2]
+        x_pos = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - total_width
+        y_pos = 80
+
+        draw.text((x_pos, y_pos), left_text, font=team_header_font, fill=left_color)
+        draw.text((x_pos + left_width, y_pos), separator_text, font=team_header_font, fill=QUEUE_IMG_TEXT)
+        draw.text((x_pos + left_width + sep_width, y_pos), right_text, font=team_header_font, fill=right_color)
     else:
         score_text = " / ".join(str(len(team)) for team in teams)
-    score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
-    score_padding_x = 14
-    score_padding_y = 10
-    badge_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
-    badge_left = badge_right - (score_bbox[2] - score_bbox[0]) - score_padding_x * 2
-    badge_top = 80
-    badge_bottom = badge_top + (score_bbox[3] - score_bbox[1]) + score_padding_y * 2
-    draw.rectangle([badge_left, badge_top, badge_right, badge_bottom], fill=QUEUE_IMG_TEAM_SCORE_BADGE_BG)
-    draw.text((badge_left + score_padding_x, badge_top + score_padding_y), score_text, font=team_header_font, fill=QUEUE_IMG_WIN)
+        score_bbox = draw.textbbox((0, 0), score_text, font=team_header_font)
+        x_pos = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - (score_bbox[2] - score_bbox[0])
+        y_pos = 80
+        draw.text((x_pos, y_pos), score_text, font=team_header_font, fill=QUEUE_IMG_TEXT)
 
     draw.text((QUEUE_IMG_PADDING, 118), "Player stats from verified survev.de accounts for this queue", font=footer_font, fill=QUEUE_IMG_MUTED)
 
