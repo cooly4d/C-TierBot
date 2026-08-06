@@ -292,11 +292,11 @@ async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
 
 
 # --- Queue result image styling (module-level so any renderer can reuse/tweak it) ---
-QUEUE_IMG_WIDTH = 1500
-QUEUE_IMG_PADDING = 36
-QUEUE_IMG_HEADER_HEIGHT = 170
-QUEUE_IMG_TEAM_HEADER_HEIGHT = 60
-QUEUE_IMG_ROW_HEIGHT = 60
+QUEUE_IMG_WIDTH = 1600
+QUEUE_IMG_PADDING = 44
+QUEUE_IMG_HEADER_HEIGHT = 210
+QUEUE_IMG_TEAM_HEADER_HEIGHT = 74
+QUEUE_IMG_ROW_HEIGHT = 74
 
 QUEUE_IMG_BG = (18, 24, 37)
 QUEUE_IMG_HEADER_BG = (24, 33, 55)
@@ -340,13 +340,13 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(46, "bold")
-    subtitle_font = load_font(26, "bold")
-    team_header_font = load_font(24, "bold")
-    header_font = load_font(18, "bold")
-    body_font = load_font(20)
-    body_font_bold = load_font(20, "bold")
-    footer_font = load_font(15)
+    title_font = load_font(58, "bold")
+    subtitle_font = load_font(32, "bold")
+    team_header_font = load_font(30, "bold")
+    header_font = load_font(22, "bold")
+    body_font = load_font(25)
+    body_font_bold = load_font(25, "bold")
+    footer_font = load_font(18)
 
     # Top banner with subtle gradient
     for y in range(QUEUE_IMG_HEADER_HEIGHT):
@@ -358,7 +358,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 26), f"NeatQueue #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 32), f"NeatQueue #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
         winner_text = f"Team {winning_team_index + 1} Wins"
@@ -367,10 +367,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         winner_text = "Result unknown"
         winner_color = QUEUE_IMG_MUTED
 
-    winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font)
-    draw.text((QUEUE_IMG_PADDING, 80), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
+    winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font)
+    draw.text((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
-    score_font = load_font(44, "bold")
+    score_font = load_font(56, "bold")
     # Every teammate shares the same round-win count, so take the max (not sum) to avoid double-counting.
     team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
     if num_teams == 2:
@@ -396,7 +396,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         section_left = winner_bbox[2] + 24
         section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
         x_pos = section_left + max(0, (section_right - section_left - total_width) / 2) + 12
-        y_pos = 74
+        y_pos = 91
 
         draw.text((x_pos, y_pos), left_text, font=score_font, fill=left_color)
         draw.text((x_pos + left_width, y_pos), separator_text, font=score_font, fill=QUEUE_IMG_TEXT)
@@ -407,10 +407,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         section_left = winner_bbox[2] + 24
         section_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
         x_pos = section_left + max(0, (section_right - section_left - (score_bbox[2] - score_bbox[0])) / 2) + 12
-        y_pos = 74
+        y_pos = 91
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
-    draw.text((QUEUE_IMG_PADDING, 118), "Data courtesy of NeatQueue & survev.de APIs :)", font=footer_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 146), "Data courtesy of NeatQueue & survev.de APIs :)", font=footer_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
 
@@ -425,7 +425,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         team_label_x = x0 + (panel_width - team_label_width) / 2
         draw.text((team_label_x, panel_top), team_label, font=team_header_font, fill=team_color)
 
-        header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 24
+        header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 30
         col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [panel_width - columns[-1]]
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
             label_x = x0 + columns[col_idx]
@@ -468,11 +468,11 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 if col_idx == 0:
                     max_name_width = columns[1] - columns[0] - QUEUE_IMG_NAME_PADDING_RIGHT
                     value = truncate_to_width(draw, value, font, max_name_width)
-                    draw.text((cell_x, row_top + 14), value, font=font, fill=fill)
+                    draw.text((cell_x, row_top + 18), value, font=font, fill=fill)
                 else:
                     value_width = draw.textbbox((0, 0), value, font=font)[2]
                     centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
-                    draw.text((centered_x, row_top + 14), value, font=font, fill=fill)
+                    draw.text((centered_x, row_top + 18), value, font=font, fill=fill)
 
         panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
         draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
