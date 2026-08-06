@@ -950,7 +950,7 @@ def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
     label_x = (QUEUE_IMG_WIDTH - label_width) / 2
     draw.text((label_x, balance_y + 110), label_text, font=body_font, fill=QUEUE_IMG_TEXT)
 
-    description = "Collect, spend, and keep your golden fries balance visible in a graphic."
+    description = "idk what to put here but this is a placeholder for now"
     desc_width = draw.textbbox((0, 0), description, font=body_font)[2]
     desc_x = (QUEUE_IMG_WIDTH - desc_width) / 2
     draw.text((desc_x, balance_y + 150), description, font=body_font, fill=QUEUE_IMG_MUTED)
