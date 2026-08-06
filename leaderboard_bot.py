@@ -54,9 +54,17 @@ cursor = conn.cursor()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         discord_id INTEGER PRIMARY KEY,
-        access_token TEXT NOT NULL
+        access_token TEXT NOT NULL,
+        slug TEXT,
+        username TEXT
     )
 ''')
+# Older DBs created before slug/username existed — add them on if missing.
+for column_def in ("slug TEXT", "username TEXT"):
+    try:
+        cursor.execute(f"ALTER TABLE users ADD COLUMN {column_def}")
+    except sqlite3.OperationalError:
+        pass
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS guild_settings (
         guild_id INTEGER PRIMARY KEY,
@@ -91,15 +99,24 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await backfill_missed_queue_results()
 
-# Helper: Save User Token
-def save_token(discord_id: int, token: str):
+# Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
+def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None):
     with sqlite3.connect("leaderboard.db") as c:
-        c.execute("INSERT OR REPLACE INTO users (discord_id, access_token) VALUES (?, ?)", (discord_id, token))
+        c.execute(
+            "INSERT OR REPLACE INTO users (discord_id, access_token, slug, username) VALUES (?, ?, ?, ?)",
+            (discord_id, token, slug, username)
+        )
 
 # Helper: Get All User Tokens
 def get_all_users():
     with sqlite3.connect("leaderboard.db") as c:
         return c.execute("SELECT discord_id, access_token FROM users").fetchall()
+
+# Helper: Look up which verified Discord user owns a given survev.de slug, if any
+def get_discord_id_by_slug(slug: str):
+    with sqlite3.connect("leaderboard.db") as c:
+        row = c.execute("SELECT discord_id FROM users WHERE slug = ?", (slug,)).fetchone()
+        return row[0] if row else None
 
 # Helper: Get Single User Token
 def get_user_token(discord_id: int):
@@ -180,23 +197,13 @@ def load_font(size: int, weight: str = "regular"):
     return ImageFont.load_default()
 
 
-def get_user_display_name(client: discord.Client, discord_id: int) -> str:
-    member = next((m for m in client.get_all_members() if m.id == discord_id), None)
-    if member is not None:
-        return member.display_name
-
-    user = client.get_user(discord_id)
-    if user is not None:
-        return user.name
-    return f"Player {discord_id}"
-
-
 async def resolve_queue_user_display_names(teams: list[list[dict]], client: discord.Client):
     for team in teams:
         for entry in team:
             discord_id = entry.get("discord_id")
             if discord_id is None:
-                entry["display_name"] = "Unknown"
+                # No /verify'd Discord user owns this slug — show their real survev.de name instead.
+                entry["display_name"] = entry.get("username") or "Unknown"
                 continue
 
             member = next((m for m in client.get_all_members() if m.id == discord_id), None)
@@ -242,7 +249,7 @@ QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.58, 0.76]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
 
 
-def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None, client: discord.Client) -> BytesIO:
+def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None) -> BytesIO:
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
 
@@ -359,19 +366,13 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
                 draw.rectangle([x0, row_top, x0 + panel_width, row_bottom], fill=QUEUE_IMG_ROW_ALT)
 
             stats = entry["stats"]
-            player_label = entry.get("display_name") or get_user_display_name(client, entry["discord_id"])
+            player_label = entry.get("display_name") or entry.get("username") or "Unknown"
             is_guest = entry.get("guest", False)
-            slug = entry.get("slug")
 
             if is_guest:
-                # Not linked via /verify — annotate with their public survev.de slug if we could
-                # match them on the scoreboard, otherwise there's truly no known account.
-                player_label = f"{player_label} ({slug if slug else 'Guest'})"
-
-            if stats is None:
-                draw.text((x0 + columns[0], row_top + 14), player_label, font=body_font_bold, fill=QUEUE_IMG_MUTED)
-                draw.text((x0 + columns[1], row_top + 14), "—", font=body_font, fill=QUEUE_IMG_MUTED)
-                continue
+                # No /verify'd Discord user owns this survev.de account — the name shown is already
+                # their real in-game username, just flag that they're not linked.
+                player_label = f"{player_label} (unlinked)"
 
             games = stats["games"]
             avg_damage = stats["damage"] / games if games else 0
@@ -460,7 +461,19 @@ async def run_survev_verification(discord_user_id: int, send_update):
 
                     if t_resp.status == 200:
                         access_token = t_data["accessToken"]
-                        save_token(discord_user_id, access_token)
+
+                        slug = username = None
+                        try:
+                            link_headers = {"Authorization": f"Bearer {access_token}"}
+                            async with session.post("https://survev.de/api/external/discord_link", headers=link_headers) as link_resp:
+                                if link_resp.status == 200:
+                                    link_data = await link_resp.json()
+                                    slug = link_data.get("slug")
+                                    username = link_data.get("username")
+                        except aiohttp.ClientError:
+                            pass
+
+                        save_token(discord_user_id, access_token, slug, username)
                         await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
                         break
 
@@ -818,22 +831,10 @@ def collect_neatqueue_teams(match):
     return []
 
 
-NEATQUEUE_WINNER_KEYS = ("winning_team_index", "winner_team_index", "winningTeamIndex", "winner")
-
-
-def get_winning_team_index(match):
-    for key in NEATQUEUE_WINNER_KEYS:
-        value = get_nested_value(match, key)
-        if value is not None:
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                continue
-    return None
-
-
 async def calculate_queue_match_stats(match_id: str):
-    """Cross-references one NeatQueue match from server history with survev.de stats, grouped by team."""
+    """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
+    and which team_id they were on), then overlays a Discord display name wherever the player's slug
+    matches a /verify'd user. Anyone without a linked account just keeps their survev.de username."""
     async with aiohttp.ClientSession() as session:
         nq_data, error = await fetch_neatqueue_history(session, match_id)
         if error:
@@ -858,10 +859,9 @@ async def calculate_queue_match_stats(match_id: str):
         if not teams:
             return None, "NeatQueue match entry contains no player roster."
 
-        # Step 1: every verified player is an "anchor" — pull their own scoped match history and use
-        # the guids in it to pin down exactly which survev.de match(es) this queue played. This is far
-        # more reliable than any time-window guess (handles Best-of-N and avoids picking up stray games).
-        verified_matches_by_discord_id: dict[int, list[dict]] = {}
+        # Step 1: at least one verified player is needed as an "anchor" — pull their own scoped match
+        # history and use its guids to pin down exactly which survev.de match(es) this queue played.
+        # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
         anchor_guid_sets = []
         for team_players in teams:
             for player in team_players:
@@ -869,84 +869,73 @@ async def calculate_queue_match_stats(match_id: str):
                     discord_id = int(player.get("id"))
                 except (TypeError, ValueError):
                     continue
-                if discord_id in verified_matches_by_discord_id:
-                    continue
                 token = get_user_token(discord_id)
                 if not token:
                     continue
 
                 own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
-                verified_matches_by_discord_id[discord_id] = own_matches
                 guids = {m.get("guid") for m in own_matches if m.get("guid")}
                 if guids:
                     anchor_guid_sets.append(guids)
 
-        queue_guids = set()
-        if anchor_guid_sets:
-            queue_guids = set.intersection(*anchor_guid_sets) if len(anchor_guid_sets) > 1 else anchor_guid_sets[0]
-            if not queue_guids:
-                # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
-                queue_guids = set.union(*anchor_guid_sets)
+        if not anchor_guid_sets:
+            return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
 
-        # Step 2: pull the full public scoreboard for every identified round, and build a lookup from
-        # survev.de in-game username -> aggregated stats. This is what lets unverified players show real
-        # numbers too, since /api/match_data needs no auth and includes every player in the lobby.
-        stats_by_username: dict[str, dict] = {}
+        queue_guids = set.intersection(*anchor_guid_sets) if len(anchor_guid_sets) > 1 else anchor_guid_sets[0]
+        if not queue_guids:
+            # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
+            queue_guids = set.union(*anchor_guid_sets)
+
+        # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
+        # player (keyed by slug when present, else username — covers accounts with no public slug).
+        players: dict[str, dict] = {}
         for guid in queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
             for p in board:
-                username = (p.get("username") or "").strip().lower()
-                if not username:
+                username = (p.get("username") or "").strip()
+                slug = p.get("slug")
+                key = slug or username.lower()
+                if not key:
                     continue
-                agg = stats_by_username.setdefault(username, {"games": 0, "wins": 0, "kills": 0, "damage": 0, "slug": None})
+                agg = players.setdefault(key, {
+                    "username": username, "slug": slug, "team_id": p.get("team_id"),
+                    "games": 0, "wins": 0, "kills": 0, "damage": 0
+                })
                 agg["games"] += 1
                 agg["wins"] += 1 if p.get("rank") == 1 else 0
                 agg["kills"] += p.get("kills", 0)
                 agg["damage"] += p.get("damage_dealt", 0)
-                agg["slug"] = agg["slug"] or p.get("slug")
 
-        result_teams = []
-        for team_players in teams:
-            team_results = []
-            for player in team_players:
-                p_id = player.get("id")
-                try:
-                    discord_id = int(p_id)
-                except (TypeError, ValueError):
-                    continue
+        if not players:
+            return None, "survev.de returned no player data for this queue's match(es)."
 
-                token = get_user_token(discord_id)
-                if token:
-                    # Verified — use their own scoped matches directly, no name-matching needed.
-                    own_matches = verified_matches_by_discord_id.get(discord_id, [])
-                    if queue_guids:
-                        own_matches = [m for m in own_matches if m.get("guid") in queue_guids]
-                    stats = {
-                        "games": len(own_matches),
-                        "wins": sum(1 for m in own_matches if m.get("rank") == 1),
-                        "kills": sum(m.get("kills", 0) for m in own_matches),
-                        "damage": sum(m.get("damage_dealt", 0) for m in own_matches)
-                    }
-                    team_results.append({"discord_id": discord_id, "stats": stats, "slug": None, "guest": False})
-                    continue
+        # Step 3: group by survev.de's own team_id (ground truth — no NeatQueue roster matching needed),
+        # resolving a Discord identity wherever the slug belongs to a /verify'd user.
+        team_ids = sorted({p["team_id"] for p in players.values() if p["team_id"] is not None})
+        team_id_index = {tid: i for i, tid in enumerate(team_ids)}
+        result_teams = [[] for _ in team_ids] or [[]]
 
-                # Unverified — best-effort match against the public scoreboard by NeatQueue's name/ign.
-                candidate_name = (player.get("name") or player.get("ign") or "").strip().lower()
-                found = stats_by_username.get(candidate_name) if candidate_name else None
+        for p in players.values():
+            idx = team_id_index.get(p["team_id"], 0)
+            discord_id = get_discord_id_by_slug(p["slug"]) if p["slug"] else None
+            result_teams[idx].append({
+                "discord_id": discord_id,
+                "username": p["username"],
+                "slug": p["slug"],
+                "guest": discord_id is None,
+                "stats": {"games": p["games"], "wins": p["wins"], "kills": p["kills"], "damage": p["damage"]}
+            })
 
-                if found:
-                    stats = {"games": found["games"], "wins": found["wins"], "kills": found["kills"], "damage": found["damage"]}
-                    team_results.append({"discord_id": discord_id, "stats": stats, "slug": found["slug"], "guest": True})
-                else:
-                    team_results.append({"discord_id": discord_id, "stats": None, "slug": None, "guest": True})
+        for team in result_teams:
+            team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
 
-            # Entries with no stats sort after every real result.
-            team_results.sort(key=lambda x: x["stats"]["damage"] if x["stats"] else -1, reverse=True)
-            result_teams.append(team_results)
+        # Winning team = whoever won more rounds overall (every teammate shares the same round-win count).
+        team_round_wins = [max((e["stats"]["wins"] for e in team), default=0) for team in result_teams]
+        winning_team_index = team_round_wins.index(max(team_round_wins)) if team_round_wins and max(team_round_wins) > 0 else None
 
-        return {"teams": result_teams, "winning_team_index": get_winning_team_index(match)}, None
+        return {"teams": result_teams, "winning_team_index": winning_team_index}, None
 
 
 # ------------------------------------------------------------------
@@ -1023,7 +1012,7 @@ async def build_queue_stats_payload(match_id: str):
         return None, None, "This NeatQueue match has no player roster to show stats for."
 
     await resolve_queue_user_display_names(teams, bot)
-    image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"], bot)
+    image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"])
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
     return f"Queue stats for match #{match_id}", file, None
 
