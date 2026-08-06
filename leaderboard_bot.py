@@ -6,14 +6,18 @@ import os
 import sqlite3
 import json
 from datetime import datetime, timedelta, timezone
+from dotenv import load_dotenv
 
 # --- CONFIGURATION ---
-DISCORD_BOT_TOKEN = ""
-SURVEV_CLIENT_ID = ""
-SURVEV_CLIENT_SECRET = ""
-NEATQUEUE_API_TOKEN = ""  
+
+load_dotenv()
+
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+SURVEV_CLIENT_ID = os.getenv("SURVEV_CLIENT_ID")
+SURVEV_CLIENT_SECRET = os.getenv("SURVEV_CLIENT_SECRET")
+NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
+NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
-NEATQUEUE_SERVER_ID = os.getenv("NEATQUEUE_SERVER_ID", "")  
 #all supposed to be environment variables by cba
 
 
@@ -458,7 +462,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
 
     embed = discord.Embed(
         title=f"🎮 NeatQueue Match Breakdown (Match #{match_id})",
-        description="Stats logged during this queue match window:",
+        description="Stats logged during this queue:",
         color=discord.Color.teal()
     )
 
@@ -474,7 +478,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
             inline=False
         )
 
-    embed.set_footer(text="Data synchronized via NeatQueue & survev.de APIs")
+    embed.set_footer(text="Data courtesy of NeatQueue & survev.de APIs :)")
     await interaction.followup.send(embed=embed)
 
 
