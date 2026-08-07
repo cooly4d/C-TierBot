@@ -894,7 +894,7 @@ INVENTORY_CARD_HEIGHT = 150
 INVENTORY_CARD_GAP = 24
 INVENTORY_ITEMS_PER_PAGE = 12
 INVENTORY_RARITY_FILTERS: dict[str, str] = {
-    "all": "All Rarities",
+    "all": "🔄️ All Rarities",
     "0": "Stock",
     "1": "Common",
     "2": "Uncommon",
