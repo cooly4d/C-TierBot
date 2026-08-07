@@ -1087,6 +1087,189 @@ def build_goldenfries_image_payload(target_user: discord.User, access_token: str
     return wrapper()
 
 
+def compute_inventory_worth(items: list[dict]) -> int:
+    total_worth = 0
+    for item in items:
+        value = item.get("value")
+        if isinstance(value, (int, float)):
+            total_worth += int(value)
+            continue
+        price_paid = item.get("pricePaid")
+        if isinstance(price_paid, (int, float)):
+            total_worth += int(price_paid)
+    return total_worth
+
+
+def generate_compare_image(
+    left_name: str,
+    left_stats: dict | None,
+    left_worth: int | None,
+    right_name: str,
+    right_stats: dict | None,
+    right_worth: int | None,
+) -> BytesIO:
+    height = 820
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(48, "bold")
+    subtitle_font = load_font(24, "bold")
+    header_font = load_font(22, "bold")
+    value_font = load_font(32, "bold")
+    body_font = load_font(22)
+    footer_font = load_font(16)
+
+    for y in range(QUEUE_IMG_HEADER_HEIGHT):
+        ratio = y / max(1, QUEUE_IMG_HEADER_HEIGHT - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 92), "All-time verified stats side-by-side", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    panel_height = height - panel_top - QUEUE_IMG_PADDING
+    panel_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 3) // 2
+    left_x = QUEUE_IMG_PADDING
+    right_x = QUEUE_IMG_PADDING * 2 + panel_width
+
+    draw.rounded_rectangle([left_x, panel_top, left_x + panel_width, panel_top + panel_height], radius=24, fill=(18, 68, 38), outline=QUEUE_IMG_WIN, width=4)
+    draw.rounded_rectangle([right_x, panel_top, right_x + panel_width, panel_top + panel_height], radius=24, fill=(68, 18, 18), outline=QUEUE_IMG_LOSE, width=4)
+
+    draw.text((left_x + 28, panel_top + 24), left_name, font=header_font, fill=QUEUE_IMG_TEXT)
+    draw.text((right_x + 28, panel_top + 24), right_name, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    left_status = "Verified" if left_stats is not None else "Not verified yet"
+    right_status = "Verified" if right_stats is not None else "Not verified yet"
+    draw.text((left_x + 28, panel_top + 64), left_status, font=body_font, fill=QUEUE_IMG_TEXT)
+    draw.text((right_x + 28, panel_top + 64), right_status, font=body_font, fill=QUEUE_IMG_TEXT)
+
+    label_x = left_x + 28
+    value_x = left_x + 300
+    right_value_x = right_x + 300
+    row_top = panel_top + 140
+    row_spacing = 90
+    labels = ["All-Time Wins", "K/D Ratio", "Total Damage", "Inventory Worth"]
+
+    for idx, label in enumerate(labels):
+        y = row_top + idx * row_spacing
+        draw.text((label_x, y), label, font=body_font, fill=QUEUE_IMG_MUTED)
+
+        if left_stats is None:
+            if idx == 0:
+                left_value = "-"
+            elif idx == 1:
+                left_value = "-"
+            elif idx == 2:
+                left_value = "-"
+            else:
+                left_value = "-"
+        else:
+            if idx == 0:
+                left_value = str(left_stats["wins"])
+            elif idx == 1:
+                left_value = f"{left_stats['kills'] / max(1, left_stats['games']):.2f}"
+            elif idx == 2:
+                left_value = f"{left_stats['damage']:,}"
+            else:
+                left_value = f"{left_worth:,} 💰"
+
+        if right_stats is None:
+            if idx == 0:
+                right_value = "-"
+            elif idx == 1:
+                right_value = "-"
+            elif idx == 2:
+                right_value = "-"
+            else:
+                right_value = "-"
+        else:
+            if idx == 0:
+                right_value = str(right_stats["wins"])
+            elif idx == 1:
+                right_value = f"{right_stats['kills'] / max(1, right_stats['games']):.2f}"
+            elif idx == 2:
+                right_value = f"{right_stats['damage']:,}"
+            else:
+                right_value = f"{right_worth:,} 💰"
+
+        left_fill = QUEUE_IMG_WIN if left_stats is not None else QUEUE_IMG_MUTED
+        right_fill = QUEUE_IMG_LOSE if right_stats is not None else QUEUE_IMG_MUTED
+        draw.text((value_x, y), left_value, font=value_font, fill=left_fill)
+        draw.text((right_value_x, y), right_value, font=value_font, fill=right_fill)
+
+    if left_stats is None:
+        message = "Not verified yet"
+        msg_bbox = draw.textbbox((0, 0), message, font=value_font)
+        draw.text(
+            (left_x + (panel_width - (msg_bbox[2] - msg_bbox[0])) / 2, row_top + 4 * row_spacing),
+            message,
+            font=value_font,
+            fill=QUEUE_IMG_MUTED
+        )
+    if right_stats is None:
+        message = "Not verified yet"
+        msg_bbox = draw.textbbox((0, 0), message, font=value_font)
+        draw.text(
+            (right_x + (panel_width - (msg_bbox[2] - msg_bbox[0])) / 2, row_top + 4 * row_spacing),
+            message,
+            font=value_font,
+            fill=QUEUE_IMG_MUTED
+        )
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_compare_payload(member_a: discord.User, member_b: discord.User):
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+            token_a = get_user_token(member_a.id)
+            token_b = get_user_token(member_b.id)
+
+            left_stats = None
+            left_worth = 0
+            if token_a:
+                left_stats = await fetch_player_timeframe_stats(session, token_a, 0, now_ms)
+                inventory_a, _ = await fetch_user_inventory(session, token_a)
+                if inventory_a and isinstance(inventory_a, dict):
+                    left_worth = compute_inventory_worth(inventory_a.get("items", []))
+
+            right_stats = None
+            right_worth = 0
+            if token_b:
+                right_stats = await fetch_player_timeframe_stats(session, token_b, 0, now_ms)
+                inventory_b, _ = await fetch_user_inventory(session, token_b)
+                if inventory_b and isinstance(inventory_b, dict):
+                    right_worth = compute_inventory_worth(inventory_b.get("items", []))
+
+            image_buffer = generate_compare_image(
+                member_a.name,
+                left_stats,
+                left_worth if left_stats is not None else None,
+                member_b.name,
+                right_stats,
+                right_worth if right_stats is not None else None,
+            )
+            file = discord.File(image_buffer, filename=f"compare_{member_a.id}_{member_b.id}.png")
+            return f"Compare {member_a.name} vs {member_b.name}", file, None
+
+    return wrapper()
+
+
 def generate_leaderboard_fries_image(leaderboard_rows: list[dict]) -> BytesIO:
     header_height = QUEUE_IMG_HEADER_HEIGHT
     row_height = QUEUE_IMG_ROW_HEIGHT
@@ -2091,6 +2274,27 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
         return
 
     content, file, error_text = await build_goldenfries_image_payload(target, access_token)
+    if error_text:
+        await interaction.followup.send(error_text)
+        return
+
+    await interaction.followup.send(content=content, file=file)
+
+
+@bot.tree.command(name="compare", description="Compare two members' survev.de stats side-by-side.")
+@discord.app_commands.describe(
+    member_a="First Discord member to compare",
+    member_b="Second Discord member to compare. Omit to compare yourself."
+)
+async def compare(
+    interaction: discord.Interaction,
+    member_a: discord.User,
+    member_b: discord.User | None = None,
+):
+    member_b = member_b or interaction.user
+    await interaction.response.defer()
+
+    content, file, error_text = await build_compare_payload(member_a, member_b)
     if error_text:
         await interaction.followup.send(error_text)
         return
