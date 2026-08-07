@@ -1089,18 +1089,19 @@ def build_inventory_image_payload(target_user: discord.User, access_token: str, 
         async with aiohttp.ClientSession() as session:
             inventory, error = await fetch_user_inventory(session, access_token)
             if error:
-                return None, None, error, None
+                return None, None, error, None, None
 
             if not inventory:
-                return None, None, "survev.de returned an empty inventory response.", None
+                return None, None, "survev.de returned an empty inventory response.", None, None
 
             username = inventory.get("username") or str(target_user)
             items = inventory.get("items", [])
             grouped_items = group_inventory_items(items)
             total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
             image_buffer = generate_inventory_image(username, items, page)
-            file = discord.File(image_buffer, filename=f"inventory_{target_user.id}.png")
-            return f"{username}'s survev.de inventory", file, None, total_pages
+            filename = f"inventory_{target_user.id}_p{page}.png"
+            file = discord.File(image_buffer, filename=filename)
+            return f"{username}'s survev.de inventory", file, None, total_pages, filename
 
     return wrapper()
 
@@ -2339,13 +2340,19 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
         
         # Generate new image
         image_buffer = generate_inventory_image(username, items, page)
-        file = discord.File(image_buffer, filename=f"inventory_{target_user.id}_p{page}.png")
+        filename = f"inventory_{target_user.id}_p{page}.png"
+        file = discord.File(image_buffer, filename=filename)
+        
+        # Create embed with image attached
+        embed = discord.Embed(title=f"{username}'s Inventory", color=discord.Color.blurple())
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"Page {page + 1} of {total_pages}")
         
         # Create view with updated button states
         view = InventoryPaginationView(total_pages)
         view.update_button_states(page)
         
-        await interaction.message.edit(attachments=[file], view=view)
+        await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
 queue_result_view = QueueResultView()
@@ -2405,14 +2412,19 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
             await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
-    content, file, error_text, total_pages = await build_inventory_image_payload(target, access_token, 0)
+    content, file, error_text, total_pages, filename = await build_inventory_image_payload(target, access_token, 0)
     if error_text:
         await interaction.followup.send(error_text)
         return
 
+    # Create embed with image attached
+    embed = discord.Embed(title=content, color=discord.Color.blurple())
+    embed.set_image(url=f"attachment://{filename}")
+    embed.set_footer(text=f"Page 1 of {total_pages or 1}")
+    
     view = InventoryPaginationView(total_pages or 1)
     view.update_button_states(0)
-    msg = await interaction.followup.send(content=content, file=file, view=view)
+    msg = await interaction.followup.send(embed=embed, file=file, view=view)
     
     # Store pagination state
     inventory_pagination_state[msg.id] = (target, access_token, 0, total_pages or 1)
