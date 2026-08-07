@@ -325,7 +325,7 @@ def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Free
     return f"{text}…" if text else "…"
 
 
-def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None) -> BytesIO:
+def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None, match_history: list[bool | None] | None = None) -> BytesIO:
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
 
@@ -367,7 +367,53 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         winner_color = QUEUE_IMG_MUTED
 
     winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font)
-    draw.text((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
+    draw.text((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font, fill=winner_color)
+
+    if match_history:
+        history_count = min(len(match_history), 7)
+        slice_start = len(match_history) - history_count
+        history_slice = match_history[-history_count:]
+
+        timeline_box_width = 440
+        timeline_box_height = 140
+        timeline_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - timeline_box_width
+        timeline_box_y = 32
+        timeline_box_fill = (28, 40, 64)
+        draw.rounded_rectangle(
+            [timeline_box_x, timeline_box_y, timeline_box_x + timeline_box_width, timeline_box_y + timeline_box_height],
+            radius=20,
+            fill=timeline_box_fill,
+            outline=QUEUE_IMG_MUTED,
+            width=2
+        )
+
+        draw.text((timeline_box_x + 20, timeline_box_y + 16), "MATCH HISTORY", font=header_font, fill=QUEUE_IMG_TEXT)
+
+        axis_y = timeline_box_y + 72
+        axis_x0 = timeline_box_x + 28
+        axis_x1 = timeline_box_x + timeline_box_width - 28
+        draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2)
+
+        if history_count == 1:
+            spacing = 0
+        else:
+            spacing = (axis_x1 - axis_x0) / (history_count - 1)
+
+        for idx, result in enumerate(history_slice):
+            x = axis_x0 + spacing * idx
+            dot_color = QUEUE_IMG_MUTED if result is None else (QUEUE_IMG_WIN if result else QUEUE_IMG_LOSE)
+            dot_radius = 12 if idx < history_count - 1 else 14
+            dot_bbox = [x - dot_radius, axis_y - dot_radius, x + dot_radius, axis_y + dot_radius]
+            draw.ellipse(dot_bbox, fill=dot_color)
+
+            if idx == history_count - 1:
+                highlight_bbox = [x - dot_radius - 4, axis_y - dot_radius - 4, x + dot_radius + 4, axis_y + dot_radius + 4]
+                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=2)
+
+            label = f"G{slice_start + idx + 1}"
+            label_bbox = draw.textbbox((0, 0), label, font=body_font)
+            label_x = x - (label_bbox[2] - label_bbox[0]) / 2
+            draw.text((label_x, axis_y + dot_radius + 8), label, font=body_font, fill=QUEUE_IMG_TEXT)
 
     score_font = load_font(72, "bold")
     # Every teammate shares the same round-win count, so take the max (not sum) to avoid double-counting.
@@ -1732,13 +1778,47 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
             queue_guids = set.union(*anchor_guid_sets)
 
+        # Preserve the chronological order of the identified rounds using the anchor players' match histories.
+        ordered_queue_guids: list[str] = []
+        seen_guids: set[str] = set()
+        for team_players in teams:
+            for player in team_players:
+                try:
+                    discord_id = int(player.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                token = get_user_token(discord_id)
+                if not token:
+                    continue
+
+                own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
+                for match in own_matches:
+                    guid = match.get("guid")
+                    if guid in queue_guids and guid not in seen_guids:
+                        ordered_queue_guids.append(guid)
+                        seen_guids.add(guid)
+
+        for guid in queue_guids:
+            if guid not in seen_guids:
+                ordered_queue_guids.append(guid)
+                seen_guids.add(guid)
+
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
         players: dict[str, dict] = {}
-        for guid in queue_guids:
+        round_winning_team_ids: list[int | None] = []
+        for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
+
+            winner_team_id = None
+            for p in board:
+                if p.get("rank") == 1 and p.get("team_id") is not None:
+                    winner_team_id = p.get("team_id")
+                    break
+            round_winning_team_ids.append(winner_team_id)
+
             for p in board:
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
@@ -1782,6 +1862,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         # A game can involve more teams than just the queue's own (e.g. public matchmaking lobbies with
         # random other squads) — only show the top 2 places so unrelated teams never clutter the image.
+        result_team_ids = [team_ids[i] for i in range(len(result_teams))]
+        top_two_indices = set(range(len(result_teams)))
         if len(result_teams) > 2:
             team_best_rank = {}
             for tid in team_ids:
@@ -1792,21 +1874,39 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 for tid in sorted(team_ids, key=lambda tid: team_best_rank[tid])[:2]
             }
             result_teams = [team for i, team in enumerate(result_teams) if i in top_two_indices]
+            result_team_ids = [team_id for i, team_id in enumerate(result_team_ids) if i in top_two_indices]
 
         # Reorder to match NeatQueue's own Team 1/Team 2 display order, using known discord_ids as votes.
-        def neatqueue_order_key(team):
+        def neatqueue_order_key(pair):
+            team, _ = pair
             votes = [neatqueue_team_index_by_discord_id[e["discord_id"]] for e in team if e["discord_id"] in neatqueue_team_index_by_discord_id]
             if not votes:
                 return len(teams)  # no known players on this team — push to the end
             return max(set(votes), key=votes.count)
 
-        result_teams.sort(key=neatqueue_order_key)
+        ordered_pairs = sorted(zip(result_teams, result_team_ids), key=neatqueue_order_key)
+        if ordered_pairs:
+            result_teams, result_team_ids = zip(*ordered_pairs)
+            result_teams = [list(team) for team in result_teams]
+            result_team_ids = list(result_team_ids)
+        else:
+            result_teams = []
+            result_team_ids = []
 
         # Winning team = whoever won more rounds overall (every teammate shares the same round-win count).
         team_round_wins = [max((e["stats"]["wins"] for e in team), default=0) for team in result_teams]
         winning_team_index = team_round_wins.index(max(team_round_wins)) if team_round_wins and max(team_round_wins) > 0 else None
 
-        return {"teams": result_teams, "winning_team_index": winning_team_index}, None
+        team_id_to_display_index = {team_id: idx for idx, team_id in enumerate(result_team_ids)}
+        match_history: list[bool | None] = []
+        for winner_team_id in round_winning_team_ids:
+            if winner_team_id is None or winning_team_index is None:
+                match_history.append(None)
+                continue
+            display_index = team_id_to_display_index.get(winner_team_id)
+            match_history.append(display_index == winning_team_index if display_index is not None else None)
+
+        return {"teams": result_teams, "winning_team_index": winning_team_index, "match_history": match_history}, None
 
 
 # ------------------------------------------------------------------
@@ -1903,7 +2003,12 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         return None, None, "This NeatQueue match has no player roster to show stats for."
 
     await resolve_queue_user_display_names(teams, bot)
-    image_buffer = generate_queue_result_image(match_id, teams, match_result["winning_team_index"])
+    image_buffer = generate_queue_result_image(
+        match_id,
+        teams,
+        match_result["winning_team_index"],
+        match_result.get("match_history")
+    )
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
     return f"Queue stats for match #{match_id}", file, None
 
