@@ -547,7 +547,7 @@ def generate_queue_result_image(
             width=2
         )
 
-        title_text = "MATCH TIMELINE (slightly broken rn)"
+        title_text = "MATCH TIMELINE"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
         draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
@@ -837,7 +837,8 @@ async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_
 def get_match_history_timestamp(match: dict) -> int | None:
     if not isinstance(match, dict):
         return None
-    for key in ("start_time_ms", "start_time", "time", "timestamp", "created_at", "createdAt"):
+    # "end_time" (e.g. "2026-08-07T15:20:37.255Z") is the real field survev.de sends; the rest are fallbacks.
+    for key in ("end_time", "end_time_ms", "start_time_ms", "start_time", "time", "timestamp", "created_at", "createdAt"):
         value = match.get(key)
         if value is None:
             continue
@@ -848,7 +849,11 @@ def get_match_history_timestamp(match: dict) -> int | None:
                 return int(value)
             except ValueError:
                 try:
-                    return int(datetime.fromisoformat(value).timestamp() * 1000)
+                    # fromisoformat can't parse a trailing "Z" (pre-3.11) — normalize to an explicit offset first.
+                    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    return int(parsed.timestamp() * 1000)
                 except ValueError:
                     continue
     return None
