@@ -1408,10 +1408,15 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
     async with aiohttp.ClientSession() as session:
         nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
         entries = extract_neatqueue_entries(nq_data) if nq_data else []
+        match = entries[0] if entries else None
 
-        if entries:
+        # NeatQueue creates the history record early (after the first game) and does NOT keep updating
+        # it as a Best-of-N series continues — only "winner" gets set once the whole series concludes.
+        # So an entry existing isn't enough; only trust it once it actually has a decided winner.
+        is_finished = match is not None and get_nested_value(match, "winner") is not None
+
+        if is_finished:
             # NeatQueue returns the requested match as the first entry in the result.
-            match = entries[0]
 
             start_ms = get_match_start_ms(match)
             if start_ms is None:
