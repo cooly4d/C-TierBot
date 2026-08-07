@@ -2173,7 +2173,7 @@ class QueueResultView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Account stats unlinked? Verify here for a gf.", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify")
+    @discord.ui.button(label="Account unlinked?  Verify here for a gf.", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         print(f"DEBUG - verify_button callback invoked by {interaction.user}")
         await interaction.response.defer(ephemeral=True)
