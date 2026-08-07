@@ -134,6 +134,11 @@ async def log_interaction(interaction: discord.Interaction):
     elif custom_id == "leaderboard_monthly":
         print(f"DEBUG - handling leaderboard_monthly click for {interaction.user}")
         await refresh_leaderboard_message(interaction, "Monthly", 30)
+    elif custom_id == "inventory_prev" or custom_id == "inventory_next":
+        print(f"DEBUG - handling inventory pagination {custom_id} for {interaction.user}")
+        view = interaction.message.view
+        if isinstance(view, InventoryPaginationView):
+            await view.prev_button(interaction, None) if custom_id == "inventory_prev" else await view.next_button(interaction, None)
 
 
 bot.add_listener(log_interaction, "on_interaction")
@@ -811,19 +816,24 @@ def group_inventory_items(items: list[dict]) -> list[dict]:
 INVENTORY_GRID_COLUMNS = 4
 INVENTORY_CARD_HEIGHT = 150
 INVENTORY_CARD_GAP = 24
+INVENTORY_ITEMS_PER_PAGE = 12
 
 
-def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
+def generate_inventory_image(username: str, items: list[dict], page: int = 0) -> BytesIO:
     grouped_items = group_inventory_items(items)
     grouped_items.sort(key=lambda entry: (entry["rarity"], entry["value"] or 0), reverse=True)
-    shown_items = grouped_items[:12]
+    
+    start_idx = page * INVENTORY_ITEMS_PER_PAGE
+    end_idx = start_idx + INVENTORY_ITEMS_PER_PAGE
+    shown_items = grouped_items[start_idx:end_idx]
+    total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
 
     header_height = QUEUE_IMG_HEADER_HEIGHT
     grid_top = header_height + QUEUE_IMG_PADDING
     grid_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
     card_width = (grid_width - INVENTORY_CARD_GAP * (INVENTORY_GRID_COLUMNS - 1)) // INVENTORY_GRID_COLUMNS
     rows = max(1, -(-len(shown_items) // INVENTORY_GRID_COLUMNS))
-    height = grid_top + rows * (INVENTORY_CARD_HEIGHT + INVENTORY_CARD_GAP) + QUEUE_IMG_PADDING
+    height = grid_top + rows * (INVENTORY_CARD_HEIGHT + INVENTORY_CARD_GAP) + QUEUE_IMG_PADDING + 60
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
@@ -847,7 +857,7 @@ def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
     draw.text((QUEUE_IMG_PADDING, 26), "survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text(
         (QUEUE_IMG_PADDING, 86),
-        f"{username}'s items — showing {len(shown_items)} of {len(grouped_items)} unique skins",
+        f"{username}'s items — Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
         font=subtitle_font,
         fill=QUEUE_IMG_MUTED
     )
@@ -873,6 +883,11 @@ def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
         value = entry["value"]
         value_text = f"{value:,} 💰" if isinstance(value, (int, float)) and value else "Stock"
         draw.text((x0 + 16, y1 - 42), value_text, font=value_font, fill=QUEUE_IMG_ACCENT)
+
+    page_text = f"Page {page + 1} of {total_pages}"
+    page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
+    page_x = (QUEUE_IMG_WIDTH - page_width) / 2
+    draw.text((page_x, height - 52), page_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
@@ -1056,21 +1071,23 @@ def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
     return buffer
 
 
-def build_inventory_image_payload(target_user: discord.User, access_token: str):
+def build_inventory_image_payload(target_user: discord.User, access_token: str, page: int = 0):
     async def wrapper():
         async with aiohttp.ClientSession() as session:
             inventory, error = await fetch_user_inventory(session, access_token)
             if error:
-                return None, None, error
+                return None, None, error, None
 
             if not inventory:
-                return None, None, "survev.de returned an empty inventory response."
+                return None, None, "survev.de returned an empty inventory response.", None
 
             username = inventory.get("username") or str(target_user)
             items = inventory.get("items", [])
-            image_buffer = generate_inventory_image(username, items)
+            grouped_items = group_inventory_items(items)
+            total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
+            image_buffer = generate_inventory_image(username, items, page)
             file = discord.File(image_buffer, filename=f"inventory_{target_user.id}.png")
-            return f"{username}'s survev.de inventory", file, None
+            return f"{username}'s survev.de inventory", file, None, total_pages
 
     return wrapper()
 
@@ -2262,6 +2279,48 @@ class QueueResultView(discord.ui.View):
             pass
 
 
+class InventoryPaginationView(discord.ui.View):
+    """View for paginating through inventory items."""
+    def __init__(self, target_user: discord.User, access_token: str, total_pages: int, current_page: int = 0):
+        super().__init__(timeout=None)
+        self.target_user = target_user
+        self.access_token = access_token
+        self.total_pages = total_pages
+        self.current_page = current_page
+        self.update_button_states()
+
+    def update_button_states(self):
+        self.prev_button.disabled = self.current_page <= 0
+        self.next_button.disabled = self.current_page >= self.total_pages - 1
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="inventory_prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page > 0:
+            self.current_page -= 1
+            await self.refresh_inventory(interaction)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="inventory_next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            await self.refresh_inventory(interaction)
+
+    async def refresh_inventory(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        async with aiohttp.ClientSession() as session:
+            inventory, error = await fetch_user_inventory(session, self.access_token)
+            if error or not inventory:
+                await interaction.followup.send("Failed to reload inventory.")
+                return
+
+            items = inventory.get("items", [])
+            username = inventory.get("username") or str(self.target_user)
+            image_buffer = generate_inventory_image(username, items, self.current_page)
+            self.update_button_states()
+            file = discord.File(image_buffer, filename=f"inventory_{self.target_user.id}_p{self.current_page}.png")
+            await interaction.message.edit(attachments=[file], view=self)
+
+
 queue_result_view = QueueResultView()
 
 
@@ -2319,12 +2378,13 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
             await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
-    content, file, error_text = await build_inventory_image_payload(target, access_token)
+    content, file, error_text, total_pages = await build_inventory_image_payload(target, access_token, 0)
     if error_text:
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file)
+    view = InventoryPaginationView(target, access_token, total_pages or 1, 0)
+    await interaction.followup.send(content=content, file=file, view=view)
 
 
 @bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance as a graphic.")
