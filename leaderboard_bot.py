@@ -80,6 +80,17 @@ cursor.execute('''
         PRIMARY KEY (guild_id, match_id)
     )
 ''')
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS hall_of_fame (
+        record_type TEXT PRIMARY KEY,
+        value REAL NOT NULL,
+        discord_id INTEGER,
+        display_name TEXT,
+        match_id TEXT NOT NULL,
+        guild_id INTEGER NOT NULL,
+        achieved_at TEXT NOT NULL
+    )
+''')
 conn.commit()
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
@@ -279,6 +290,44 @@ def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
             (guild_id, str(match_id), datetime.now(timezone.utc).isoformat())
         )
         return cur.rowcount > 0
+
+
+# Every single-queue stat tracked in the /hall_of_fame board, keyed by DB record_type -> display label.
+HALL_OF_FAME_RECORDS = {
+    "most_kills": "Most Kills in a Queue",
+    "most_avg_damage": "Most Avg Damage in a Queue",
+}
+
+
+# Helper: Look up the current holder of a hall of fame record, if any has been set yet.
+def get_hall_of_fame_record(record_type: str) -> dict | None:
+    with sqlite3.connect("leaderboard.db") as c:
+        row = c.execute(
+            "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at FROM hall_of_fame WHERE record_type = ?",
+            (record_type,)
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "value": row[0], "discord_id": row[1], "display_name": row[2],
+            "match_id": row[3], "guild_id": row[4], "achieved_at": row[5]
+        }
+
+
+# Helper: Overwrites a hall of fame record only if value beats the current holder (or none exists yet).
+def try_set_hall_of_fame_record(
+    record_type: str, value: float, discord_id: int | None, display_name: str, match_id: str, guild_id: int
+) -> bool:
+    with sqlite3.connect("leaderboard.db") as c:
+        existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = ?", (record_type,)).fetchone()
+        if existing is not None and value <= existing[0]:
+            return False
+        c.execute(
+            "INSERT OR REPLACE INTO hall_of_fame "
+            "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (record_type, value, discord_id, display_name, str(match_id), guild_id, datetime.now(timezone.utc).isoformat())
+        )
+        return True
 
 
 def resolve_queue_font_path(paths: list[str | None]) -> str | None:
@@ -2621,6 +2670,35 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
 queue_result_view = QueueResultView()
 
 
+def check_queue_hall_of_fame_records(teams: list[list[dict]], match_id: str, guild_id: int) -> list[str]:
+    """Scans a queue's final teams for new all-time bests, updates the DB, and returns announcement lines."""
+    best_kills: tuple[int, dict] | None = None
+    best_avg_damage: tuple[float, dict] | None = None
+    for team in teams:
+        for entry in team:
+            stats = entry["stats"]
+            kills = stats.get("kills", 0)
+            if best_kills is None or kills > best_kills[0]:
+                best_kills = (kills, entry)
+
+            games = stats.get("games", 0)
+            if games > 0:
+                avg_damage = stats["damage"] / games
+                if best_avg_damage is None or avg_damage > best_avg_damage[0]:
+                    best_avg_damage = (avg_damage, entry)
+
+    announcements = []
+    for record_type, candidate in (("most_kills", best_kills), ("most_avg_damage", best_avg_damage)):
+        if candidate is None:
+            continue
+        value, entry = candidate
+        holder_name = entry.get("display_name") or entry.get("username") or "Unknown"
+        if try_set_hall_of_fame_record(record_type, value, entry.get("discord_id"), holder_name, match_id, guild_id):
+            value_text = f"{value:,.0f}" if record_type == "most_avg_damage" else str(int(value))
+            announcements.append(f"🏆 New Hall of Fame record! **{HALL_OF_FAME_RECORDS[record_type]}**: {value_text} by {holder_name}")
+    return announcements
+
+
 async def build_queue_stats_payload(match_id: str, guild_id: int):
     """Runs the NeatQueue/survev.de cross-reference and returns either
     (content, discord.File, None) on success or (None, None, error_text) on failure."""
@@ -2641,7 +2719,12 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_result.get("team_round_wins"),
     )
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
-    return f"Queue stats for match #{match_id}", file, None
+
+    content = f"Queue stats for match #{match_id}"
+    record_announcements = check_queue_hall_of_fame_records(teams, match_id, guild_id)
+    if record_announcements:
+        content += "\n" + "\n".join(record_announcements)
+    return content, file, None
 
 
 @bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
@@ -2659,6 +2742,35 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         return
 
     await interaction.followup.send(content=content, file=file, view=queue_result_view)
+
+
+async def build_hall_of_fame_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🏛️ NeatQueue Hall of Fame",
+        description="All-time best single-queue stats recorded by /queue_stats.",
+        color=discord.Color.gold()
+    )
+    for record_type, label in HALL_OF_FAME_RECORDS.items():
+        record = get_hall_of_fame_record(record_type)
+        if record is None:
+            embed.add_field(name=label, value="No record set yet.", inline=False)
+            continue
+        value_text = f"{record['value']:,.0f}" if record_type == "most_avg_damage" else str(int(record["value"]))
+        holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]
+        embed.add_field(
+            name=label,
+            value=f"**{value_text}** — {holder} (Queue #{record['match_id']})",
+            inline=False
+        )
+    embed.set_footer(text="Data courtesy of NeatQueue & survev.de APIs :)")
+    return embed
+
+
+@bot.tree.command(name="hall_of_fame", description="View the best single-queue stats ever recorded.")
+async def hall_of_fame(interaction: discord.Interaction):
+    await interaction.response.defer()
+    embed = await build_hall_of_fame_embed()
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="inventory", description="View a user's survev.de inventory")
