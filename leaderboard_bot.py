@@ -411,7 +411,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
 
             if idx == history_count - 1:
                 highlight_bbox = [x - dot_radius - 4, axis_y - dot_radius - 4, x + dot_radius + 4, axis_y + dot_radius + 4]
-                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=2)
+                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4)
 
             label = f"G{slice_start + idx + 1}"
             label_bbox = draw.textbbox((0, 0), label, font=body_font)
