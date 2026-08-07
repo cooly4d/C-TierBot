@@ -140,16 +140,46 @@ async def log_interaction(interaction: discord.Interaction):
 
     custom_id = interaction.data.get("custom_id")
 
+    def get_selected_sort_from_message(message: discord.Message | None) -> str:
+        if message is None:
+            return "kills"
+        for row in getattr(message, "components", []):
+            for component in getattr(row, "children", []):
+                if getattr(component, "custom_id", None) != "leaderboard_sort":
+                    continue
+                for option in getattr(component, "options", []):
+                    if getattr(option, "default", False):
+                        return option.value
+        return "kills"
+
+    def infer_leaderboard_period_from_message(message: discord.Message | None) -> tuple[str, int]:
+        if message is None or not message.embeds:
+            return "Weekly", 7
+        title = message.embeds[0].title or ""
+        if "Monthly" in title:
+            return "Monthly", 30
+        if "Weekly" in title:
+            return "Weekly", 7
+        return "Weekly", 7
+
     if custom_id == "queue_result_verify":
         print(f"DEBUG - handling queue_result_verify click for {interaction.user}")
         await interaction.response.defer(ephemeral=True)
         await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
     elif custom_id == "leaderboard_weekly":
         print(f"DEBUG - handling leaderboard_weekly click for {interaction.user}")
-        await refresh_leaderboard_message(interaction, "Weekly", 7)
+        selected_sort = get_selected_sort_from_message(interaction.message)
+        await refresh_leaderboard_message(interaction, "Weekly", 7, selected_sort)
     elif custom_id == "leaderboard_monthly":
         print(f"DEBUG - handling leaderboard_monthly click for {interaction.user}")
-        await refresh_leaderboard_message(interaction, "Monthly", 30)
+        selected_sort = get_selected_sort_from_message(interaction.message)
+        await refresh_leaderboard_message(interaction, "Monthly", 30, selected_sort)
+    elif custom_id == "leaderboard_sort":
+        print(f"DEBUG - handling leaderboard_sort select for {interaction.user}")
+        selected_values = interaction.data.get("values") or []
+        selected_sort = selected_values[0] if selected_values else "kills"
+        period, days = infer_leaderboard_period_from_message(interaction.message)
+        await refresh_leaderboard_message(interaction, period, days, selected_sort)
     elif custom_id == "inventory_prev" or custom_id == "inventory_next":
         print(f"DEBUG - handling inventory pagination {custom_id} for {interaction.user}")
         msg_id = interaction.message.id
@@ -258,6 +288,13 @@ def resolve_queue_font_path(paths: list[str | None]) -> str | None:
 
 QUEUE_FONT_PATH = resolve_queue_font_path(QUEUE_FONT_PATHS)
 QUEUE_FONT_BOLD_PATH = resolve_queue_font_path(QUEUE_FONT_BOLD_PATHS) or QUEUE_FONT_PATH
+
+LEADERBOARD_SORT_CONFIG = {
+    "kills": {"label": "Kills", "emoji": "⚔️"},
+    "wins": {"label": "Wins", "emoji": "🏆"},
+    "games": {"label": "Games", "emoji": "🎮"},
+    "damage": {"label": "Damage", "emoji": "💥"},
+}
 
 
 def load_font(size: int, weight: str = "regular"):
@@ -1518,7 +1555,11 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> 
     return data if isinstance(data, list) else None
 
 
-async def generate_leaderboard_embed(period: str, days: int):
+async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kills"):
+    sort_key = sort_by if sort_by in LEADERBOARD_SORT_CONFIG else "kills"
+    sort_label = LEADERBOARD_SORT_CONFIG[sort_key]["label"]
+    sort_emoji = LEADERBOARD_SORT_CONFIG[sort_key]["emoji"]
+
     now = datetime.now(timezone.utc)
     to_ms = int(now.timestamp() * 1000)
     from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
@@ -1535,12 +1576,11 @@ async def generate_leaderboard_embed(period: str, days: int):
                     "stats": stats
                 })
 
-    # Sort by total Kills
-    leaderboard_data.sort(key=lambda x: x["stats"]["kills"], reverse=True)
+    leaderboard_data.sort(key=lambda x: x["stats"][sort_key], reverse=True)
 
     embed = discord.Embed(
         title=f"🏆 Server {period} Leaderboard",
-        description=f"Performance over the past **{days} days** (Sorted by Kills)",
+        description=f"Performance over the past **{days} days** (Sorted by {sort_label})",
         color=discord.Color.gold() if period == "Weekly" else discord.Color.purple()
     )
     embed.set_image(url=LEADERBOARD_BANNER_URL)
@@ -1556,13 +1596,10 @@ async def generate_leaderboard_embed(period: str, days: int):
     for idx, entry in enumerate(leaderboard_data[:10]): # Top 10
         rank = rank_emojis[idx] if idx < 3 else f"`#{idx+1}`"
         stats = entry["stats"]
-        leaderboard_text += (
-            f"{rank} <@{entry['discord_id']}>\n"
-            f"⚔️ Kills: **{stats['kills']}** | 🏆 Wins: **{stats['wins']}**\n"
-            f"🎮 Games: **{stats['games']}** | 💥 Damage: **{stats['damage']:,}**\n\n"
-        )
+        stat_value = f"{stats[sort_key]:,}" if sort_key == "damage" else str(stats[sort_key])
+        leaderboard_text += f"{rank} <@{entry['discord_id']}>\n{sort_emoji} {sort_label}: **{stat_value}**\n\n"
 
-    embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
+    embed.add_field(name=f"Top Players by {sort_label}", value=leaderboard_text[:1024], inline=False)
     embed.set_footer(text="Data courtesy of survev.de API :)")
     return embed
 
@@ -2262,42 +2299,77 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 # ------------------------------------------------------------------
 # 4. SLASH COMMANDS
 # ------------------------------------------------------------------
-async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int):
+async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int, sort_by: str = "kills"):
     if not interaction.response.is_done():
         try:
             await interaction.response.defer()
         except discord.HTTPException:
             pass
-    embed = await generate_leaderboard_embed(period=period, days=days)
-    await interaction.message.edit(embed=embed, view=LeaderboardView(period))
+    embed = await generate_leaderboard_embed(period=period, days=days, sort_by=sort_by)
+    await interaction.message.edit(embed=embed, view=LeaderboardView(period, sort_by))
+
+
+class LeaderboardSortSelect(discord.ui.Select):
+    def __init__(self, selected_sort: str = "kills"):
+        sort_key = selected_sort if selected_sort in LEADERBOARD_SORT_CONFIG else "kills"
+        options = [
+            discord.SelectOption(label=cfg["label"], value=key, default=(key == sort_key))
+            for key, cfg in LEADERBOARD_SORT_CONFIG.items()
+        ]
+        super().__init__(
+            placeholder="Select leaderboard stat",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="leaderboard_sort"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        period = "Weekly"
+        days = 7
+        if isinstance(self.view, LeaderboardView):
+            period = self.view.initial_period
+            days = 30 if period == "Monthly" else 7
+        selected_sort = self.values[0] if self.values else "kills"
+        await refresh_leaderboard_message(interaction, period, days, selected_sort)
 
 
 class LeaderboardView(discord.ui.View):
-    def __init__(self, initial_period: str = "Weekly"):
+    def __init__(self, initial_period: str = "Weekly", initial_sort: str = "kills"):
         super().__init__(timeout=None)
         self.initial_period = initial_period
+        self.initial_sort = initial_sort if initial_sort in LEADERBOARD_SORT_CONFIG else "kills"
+
+        if initial_period == "Weekly":
+            self.weekly_button.style = discord.ButtonStyle.primary
+            self.monthly_button.style = discord.ButtonStyle.secondary
+        else:
+            self.weekly_button.style = discord.ButtonStyle.secondary
+            self.monthly_button.style = discord.ButtonStyle.primary
+
+        self.add_item(LeaderboardSortSelect(self.initial_sort))
 
     @discord.ui.button(label="Weekly", style=discord.ButtonStyle.primary, custom_id="leaderboard_weekly")
     async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await refresh_leaderboard_message(interaction, "Weekly", 7)
+        await refresh_leaderboard_message(interaction, "Weekly", 7, self.initial_sort)
 
     @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary, custom_id="leaderboard_monthly")
     async def monthly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await refresh_leaderboard_message(interaction, "Monthly", 30)
+        await refresh_leaderboard_message(interaction, "Monthly", 30, self.initial_sort)
 
 
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed("Weekly", 7)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly"))
+    embed = await generate_leaderboard_embed("Weekly", 7, "kills")
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly", "kills"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed("Monthly", 30)
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
+    embed = await generate_leaderboard_embed("Monthly", 30, "kills")
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly", "kills"))
 
 
 @bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")
