@@ -387,7 +387,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             width=2
         )
 
-        title_text = "MATCH HISTORY"
+        title_text = "MATCH HISTORY (broken for now)"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
         draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
