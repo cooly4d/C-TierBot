@@ -2010,18 +2010,29 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
         players: dict[str, dict] = {}
-        round_winning_team_ids: list[int | None] = []
+        # For each round guid, track the best (lowest) global placement rank for each team_id.
+        # This lets us determine which of the queue's displayed teams beat the other that round,
+        # even when neither team placed #1 overall in the public lobby.
+        round_team_best_rank_by_guid: dict[str, dict[int, int]] = {}
         for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
 
-            winner_team_id = None
+            per_round_team_ranks: dict[int, int] = {}
             for p in board:
-                if p.get("rank") == 1 and p.get("team_id") is not None:
-                    winner_team_id = p.get("team_id")
-                    break
-            round_winning_team_ids.append(winner_team_id)
+                team_id = p.get("team_id")
+                rank = p.get("rank")
+                if team_id is None or rank is None:
+                    continue
+                try:
+                    rank_int = int(rank)
+                except (TypeError, ValueError):
+                    continue
+                existing = per_round_team_ranks.get(team_id)
+                if existing is None or rank_int < existing:
+                    per_round_team_ranks[team_id] = rank_int
+            round_team_best_rank_by_guid[guid] = per_round_team_ranks
 
             for p in board:
                 username = (p.get("username") or "").strip()
@@ -2103,12 +2114,32 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         team_id_to_display_index = {team_id: idx for idx, team_id in enumerate(result_team_ids)}
         match_history: list[bool | None] = []
-        for winner_team_id in round_winning_team_ids:
-            if winner_team_id is None or winning_team_index is None:
+        for guid in ordered_queue_guids:
+            if winning_team_index is None:
                 match_history.append(None)
                 continue
-            display_index = team_id_to_display_index.get(winner_team_id)
-            match_history.append(display_index == winning_team_index if display_index is not None else None)
+
+            per_round_team_ranks = round_team_best_rank_by_guid.get(guid, {})
+            displayed_rank_pairs = []
+            for team_id, display_index in team_id_to_display_index.items():
+                team_rank = per_round_team_ranks.get(team_id)
+                if team_rank is not None:
+                    displayed_rank_pairs.append((team_rank, display_index))
+
+            # Need at least one displayed team rank to classify this round.
+            if not displayed_rank_pairs:
+                match_history.append(None)
+                continue
+
+            # Lower global placement rank is better. If two displayed teams tie best rank,
+            # treat the round outcome as unknown for timeline purposes.
+            displayed_rank_pairs.sort(key=lambda pair: pair[0])
+            if len(displayed_rank_pairs) > 1 and displayed_rank_pairs[0][0] == displayed_rank_pairs[1][0]:
+                match_history.append(None)
+                continue
+
+            round_winner_display_index = displayed_rank_pairs[0][1]
+            match_history.append(round_winner_display_index == winning_team_index)
 
         return {"teams": result_teams, "winning_team_index": winning_team_index, "match_history": match_history}, None
 
