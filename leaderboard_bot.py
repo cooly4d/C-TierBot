@@ -2204,17 +2204,13 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
         # round winners must be tracked per identity here and resolved via that identity later.
         round_player_rank_by_guid: dict[str, dict[str, int]] = {}
-        round_timestamp_by_guid: dict[str, int | None] = {}
         for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
 
             round_ranks = round_player_rank_by_guid.setdefault(guid, {})
-            round_timestamp = None
             for p in board:
-                if round_timestamp is None:
-                    round_timestamp = p.get("created_at") or p.get("createdAt") or p.get("timestamp")
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
                 key = slug or username.lower()
@@ -2240,7 +2236,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     agg["best_rank"] = parsed_rank
                 if parsed_rank is not None and (key not in round_ranks or parsed_rank < round_ranks[key]):
                     round_ranks[key] = parsed_rank
-            round_timestamp_by_guid[guid] = round_timestamp
 
         if not players:
             return None, "survev.de returned no player data for this queue's match(es)."
@@ -2334,68 +2329,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 match_history.append(None)
             else:
                 match_history.append(winner_idx == winning_team_index)
-
-        # Log timeline debug info for troubleshooting dot accuracy.
-        debug_log = []
-        debug_log.append(f"=== MATCH TIMELINE DEBUG LOG: Queue #{match_id} ===")
-        debug_log.append(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
-        debug_log.append(f"\n--- TEAMS & IDENTITIES ---")
-        debug_log.append(f"result_teams count: {len(result_teams)}")
-        debug_log.append(f"result_team_ids: {result_team_ids}")
-        for idx, team in enumerate(result_teams):
-            debug_log.append(f"\nTeam {idx} (display_index={idx}):")
-            for entry in team:
-                identity_key = entry["slug"] or entry["username"].lower()
-                debug_log.append(f"  - {identity_key}: {entry['username']} (discord_id={entry.get('discord_id')}, slug={entry.get('slug')})")
-        
-        debug_log.append(f"\n--- IDENTITY TO DISPLAY INDEX MAPPING ---")
-        for key, idx in identity_to_display_index.items():
-            debug_log.append(f"  {key} -> team {idx}")
-        
-        debug_log.append(f"\n--- PER-ROUND CLASSIFICATION ---")
-        debug_log.append(f"Rounds to process: {len(ordered_queue_guids)}")
-        for round_idx, guid in enumerate(ordered_queue_guids):
-            round_ts = round_timestamp_by_guid.get(guid)
-            ts_str = "unknown"
-            if round_ts:
-                try:
-                    if isinstance(round_ts, (int, float)):
-                        ts_ms = int(round_ts) if round_ts > 1e10 else int(round_ts * 1000)
-                        ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-                        ts_str = ts_dt.isoformat()
-                    elif isinstance(round_ts, str):
-                        ts_str = round_ts
-                except Exception:
-                    ts_str = str(round_ts)
-            debug_log.append(f"\nRound {round_idx + 1} (guid={guid}, timestamp={ts_str}):")
-            round_ranks = round_player_rank_by_guid.get(guid, {})
-            debug_log.append(f"  Rank 1 identities in this round: {[k for k, v in round_ranks.items() if v == 1]}")
-            debug_log.append(f"  All ranks in this round: {round_ranks}")
-            displayed_rank_one_winners = {
-                identity_to_display_index[key]
-                for key, rank in round_ranks.items()
-                if rank == 1 and key in identity_to_display_index
-            }
-            debug_log.append(f"  Displayed team indices with rank 1: {sorted(displayed_rank_one_winners)}")
-            debug_log.append(f"  Classification: team {next(iter(displayed_rank_one_winners)) if len(displayed_rank_one_winners) == 1 else 'AMBIGUOUS/NONE (grey dot)'}")
-        
-        debug_log.append(f"\n--- FINAL RESULTS ---")
-        debug_log.append(f"round_winner_display_indices: {round_winner_display_indices}")
-        debug_log.append(f"team_round_wins: {team_round_wins}")
-        debug_log.append(f"winning_team_index: {winning_team_index}")
-        debug_log.append(f"match_history (True=green, False=red, None=grey): {match_history}")
-        debug_log.append(f"Green dots (True count): {sum(1 for h in match_history if h is True)}")
-        debug_log.append(f"Red dots (False count): {sum(1 for h in match_history if h is False)}")
-        debug_log.append(f"Grey dots (None count): {sum(1 for h in match_history if h is None)}")
-        
-        log_content = "\n".join(debug_log)
-        try:
-            log_path = f"queue_stats_debug_match{match_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt"
-            with open(log_path, "w") as f:
-                f.write(log_content)
-            print(f"DEBUG: Timeline log saved to {log_path}")
-        except Exception as e:
-            print(f"DEBUG: Failed to write timeline log: {e}")
 
         return {
             "teams": result_teams,
