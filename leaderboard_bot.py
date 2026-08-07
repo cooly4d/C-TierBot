@@ -1817,7 +1817,11 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 # 4. SLASH COMMANDS
 # ------------------------------------------------------------------
 async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int):
-    await interaction.response.defer()
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
     embed = await generate_leaderboard_embed(period=period, days=days)
     await interaction.message.edit(embed=embed, view=LeaderboardView(period))
 
