@@ -102,6 +102,14 @@ async def on_ready():
         print(f"DEBUG - add_view FAILED: {exc!r}")
 
     try:
+        # Add a persistent inventory view template (buttons will be updated per message)
+        template_inventory_view = InventoryPaginationView(1)
+        bot.add_view(template_inventory_view)
+        print(f"DEBUG - inventory view added: is_persistent={template_inventory_view.is_persistent()}")
+    except Exception as exc:
+        print(f"DEBUG - inventory view add_view FAILED: {exc!r}")
+
+    try:
         store = bot._connection._view_store
         print(f"DEBUG - view_store synced custom_ids: {list(store._synced_message_views.keys()) if hasattr(store, '_synced_message_views') else 'n/a'}")
         print(f"DEBUG - view_store persistent listeners: {list(getattr(store, '_views', {}).keys())}")
@@ -136,9 +144,14 @@ async def log_interaction(interaction: discord.Interaction):
         await refresh_leaderboard_message(interaction, "Monthly", 30)
     elif custom_id == "inventory_prev" or custom_id == "inventory_next":
         print(f"DEBUG - handling inventory pagination {custom_id} for {interaction.user}")
-        view = interaction.message.view
-        if isinstance(view, InventoryPaginationView):
-            await view.prev_button(interaction, None) if custom_id == "inventory_prev" else await view.next_button(interaction, None)
+        msg_id = interaction.message.id
+        if msg_id in inventory_pagination_state:
+            target_user, access_token, current_page, total_pages = inventory_pagination_state[msg_id]
+            if custom_id == "inventory_prev":
+                current_page = max(0, current_page - 1)
+            else:
+                current_page = min(total_pages - 1, current_page + 1)
+            await refresh_inventory_message(interaction, target_user, access_token, current_page, msg_id)
 
 
 bot.add_listener(log_interaction, "on_interaction")
@@ -2280,45 +2293,59 @@ class QueueResultView(discord.ui.View):
 
 
 class InventoryPaginationView(discord.ui.View):
-    """View for paginating through inventory items."""
-    def __init__(self, target_user: discord.User, access_token: str, total_pages: int, current_page: int = 0):
+    """Persistent view for paginating through inventory items."""
+    def __init__(self, total_pages: int):
         super().__init__(timeout=None)
-        self.target_user = target_user
-        self.access_token = access_token
         self.total_pages = total_pages
-        self.current_page = current_page
-        self.update_button_states()
 
-    def update_button_states(self):
-        self.prev_button.disabled = self.current_page <= 0
-        self.next_button.disabled = self.current_page >= self.total_pages - 1
+    def update_button_states(self, current_page: int):
+        self.prev_button.disabled = current_page <= 0
+        self.next_button.disabled = current_page >= self.total_pages - 1
 
     @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="inventory_prev")
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page > 0:
-            self.current_page -= 1
-            await self.refresh_inventory(interaction)
+        # Handled by log_interaction
+        pass
 
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="inventory_next")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if self.current_page < self.total_pages - 1:
-            self.current_page += 1
-            await self.refresh_inventory(interaction)
+        # Handled by log_interaction
+        pass
 
-    async def refresh_inventory(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        async with aiohttp.ClientSession() as session:
-            inventory, error = await fetch_user_inventory(session, self.access_token)
-            if error or not inventory:
-                await interaction.followup.send("Failed to reload inventory.")
-                return
 
-            items = inventory.get("items", [])
-            username = inventory.get("username") or str(self.target_user)
-            image_buffer = generate_inventory_image(username, items, self.current_page)
-            self.update_button_states()
-            file = discord.File(image_buffer, filename=f"inventory_{self.target_user.id}_p{self.current_page}.png")
-            await interaction.message.edit(attachments=[file], view=self)
+# Store pagination state: msg_id -> (target_user, access_token, current_page, total_pages)
+inventory_pagination_state: dict[int, tuple[discord.User, str, int, int]] = {}
+
+
+async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, page: int, msg_id: int):
+    """Refresh the inventory message with a new page."""
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        inventory, error = await fetch_user_inventory(session, access_token)
+        if error or not inventory:
+            await interaction.followup.send("Failed to reload inventory.")
+            return
+
+        items = inventory.get("items", [])
+        username = inventory.get("username") or str(target_user)
+        grouped_items = group_inventory_items(items)
+        total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
+        
+        # Clamp page to valid range
+        page = max(0, min(page, total_pages - 1))
+        
+        # Update state
+        inventory_pagination_state[msg_id] = (target_user, access_token, page, total_pages)
+        
+        # Generate new image
+        image_buffer = generate_inventory_image(username, items, page)
+        file = discord.File(image_buffer, filename=f"inventory_{target_user.id}_p{page}.png")
+        
+        # Create view with updated button states
+        view = InventoryPaginationView(total_pages)
+        view.update_button_states(page)
+        
+        await interaction.message.edit(attachments=[file], view=view)
 
 
 queue_result_view = QueueResultView()
@@ -2383,8 +2410,12 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
         await interaction.followup.send(error_text)
         return
 
-    view = InventoryPaginationView(target, access_token, total_pages or 1, 0)
-    await interaction.followup.send(content=content, file=file, view=view)
+    view = InventoryPaginationView(total_pages or 1)
+    view.update_button_states(0)
+    msg = await interaction.followup.send(content=content, file=file, view=view)
+    
+    # Store pagination state
+    inventory_pagination_state[msg.id] = (target, access_token, 0, total_pages or 1)
 
 
 @bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance as a graphic.")
