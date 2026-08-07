@@ -474,7 +474,7 @@ def generate_queue_result_image(
             width=2
         )
 
-        title_text = "MATCH TIMELINE (broken for now)"
+        title_text = "MATCH TIMELINE"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
         draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
@@ -2201,30 +2201,15 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
         players: dict[str, dict] = {}
-        # For each round guid, track each team's best (lowest) global placement rank.
-        # Later, timeline dots only classify a round when exactly one displayed queue team
-        # achieved rank 1 in that round.
-        round_team_best_rank_by_guid: dict[str, dict[int, int]] = {}
+        # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
+        # round winners must be tracked per identity here and resolved via that identity later.
+        round_player_rank_by_guid: dict[str, dict[str, int]] = {}
         for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
 
-            per_round_team_ranks: dict[int, int] = {}
-            for p in board:
-                team_id = p.get("team_id")
-                rank = p.get("rank")
-                if team_id is None or rank is None:
-                    continue
-                try:
-                    rank_int = int(rank)
-                except (TypeError, ValueError):
-                    continue
-                existing = per_round_team_ranks.get(team_id)
-                if existing is None or rank_int < existing:
-                    per_round_team_ranks[team_id] = rank_int
-            round_team_best_rank_by_guid[guid] = per_round_team_ranks
-
+            round_ranks = round_player_rank_by_guid.setdefault(guid, {})
             for p in board:
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
@@ -2249,6 +2234,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 agg["damage"] += p.get("damage_dealt", 0)
                 if parsed_rank is not None and (agg["best_rank"] is None or parsed_rank < agg["best_rank"]):
                     agg["best_rank"] = parsed_rank
+                if parsed_rank is not None and (key not in round_ranks or parsed_rank < round_ranks[key]):
+                    round_ranks[key] = parsed_rank
 
         if not players:
             return None, "survev.de returned no player data for this queue's match(es)."
@@ -2316,18 +2303,23 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             if max_wins > 0 and team_round_wins.count(max_wins) == 1:
                 winning_team_index = team_round_wins.index(max_wins)
 
-        team_id_to_display_index = {team_id: idx for idx, team_id in enumerate(result_team_ids)}
+        # Identity, not team_id, is what stays stable across a series' separate games.
+        identity_to_display_index: dict[str, int] = {
+            (entry["slug"] or entry["username"].lower()): idx
+            for idx, team in enumerate(result_teams) for entry in team
+        }
         round_winner_display_indices: list[int | None] = []
         for guid in ordered_queue_guids:
-            per_round_team_ranks = round_team_best_rank_by_guid.get(guid, {})
-            displayed_rank_one_winners = []
-            for team_id, display_index in team_id_to_display_index.items():
-                if per_round_team_ranks.get(team_id) == 1:
-                    displayed_rank_one_winners.append(display_index)
+            round_ranks = round_player_rank_by_guid.get(guid, {})
+            displayed_rank_one_winners = {
+                identity_to_display_index[key]
+                for key, rank in round_ranks.items()
+                if rank == 1 and key in identity_to_display_index
+            }
 
             # Only classify round when exactly one displayed team has rank 1 for that game.
             if len(displayed_rank_one_winners) == 1:
-                round_winner_display_indices.append(displayed_rank_one_winners[0])
+                round_winner_display_indices.append(next(iter(displayed_rank_one_winners)))
             else:
                 round_winner_display_indices.append(None)
 
