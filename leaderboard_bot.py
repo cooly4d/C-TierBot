@@ -1316,7 +1316,7 @@ def generate_compare_image(
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare (wip broken asf)", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text((QUEUE_IMG_PADDING, 92), "All-time verified stats side-by-side", font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
