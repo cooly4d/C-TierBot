@@ -48,30 +48,6 @@ QUEUE_FONT_BOLD_PATHS = [
 #all supposed to be environment variables by cba
 
 
-def write_queue_result_debug_log(match_id: str, guild_id: int, round_entries: list[dict], ordered_guids: list[str] | None = None):
-    """Writes a JSON log file for a queue-result run containing each round's raw match dict and parsed timestamp."""
-    log_dir = os.path.join(os.path.dirname(__file__), "log")
-    os.makedirs(log_dir, exist_ok=True)
-
-    safe_match_id = re.sub(r"[^A-Za-z0-9._-]+", "_", str(match_id))
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_path = os.path.join(log_dir, f"queue_result_{safe_match_id}_{timestamp}.json")
-
-    payload = {
-        "match_id": str(match_id),
-        "guild_id": guild_id,
-        "run_at_utc": timestamp,
-        "ordered_guids": ordered_guids or [],
-        "rounds": round_entries,
-    }
-
-    with open(log_path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, default=str)
-        handle.write("\n")
-
-    return log_path
-
-
 # Database initialization
 conn = sqlite3.connect("leaderboard.db")
 cursor = conn.cursor()
@@ -2254,7 +2230,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         ordered_queue_guids: list[str] = []
         seen_guids: set[str] = set()
-        round_debug_entries: list[dict] = []
         if anchor_matches_by_discord:
             guid_timestamps: dict[str, int] = {}
             for matches in anchor_matches_by_discord.values():
@@ -2266,12 +2241,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
                         guid_timestamps[guid] = timestamp
 
-                    round_debug_entries.append({
-                        "guid": guid,
-                        "timestamp_ms": timestamp,
-                        "match_dictionary": match,
-                    })
-
             ordered_queue_guids = sorted(
                 queue_guids,
                 key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
@@ -2282,9 +2251,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             if guid not in seen_guids:
                 ordered_queue_guids.append(guid)
                 seen_guids.add(guid)
-
-        log_path = write_queue_result_debug_log(match_id, guild_id, round_debug_entries, ordered_queue_guids)
-        print(f"DEBUG - queue-result log written to {log_path}")
 
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
