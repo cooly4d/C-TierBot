@@ -2330,6 +2330,56 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             else:
                 match_history.append(winner_idx == winning_team_index)
 
+        # Log timeline debug info for troubleshooting dot accuracy.
+        debug_log = []
+        debug_log.append(f"=== MATCH TIMELINE DEBUG LOG: Queue #{match_id} ===")
+        debug_log.append(f"Timestamp: {datetime.now(timezone.utc).isoformat()}")
+        debug_log.append(f"\n--- TEAMS & IDENTITIES ---")
+        debug_log.append(f"result_teams count: {len(result_teams)}")
+        debug_log.append(f"result_team_ids: {result_team_ids}")
+        for idx, team in enumerate(result_teams):
+            debug_log.append(f"\nTeam {idx} (display_index={idx}):")
+            for entry in team:
+                identity_key = entry["slug"] or entry["username"].lower()
+                debug_log.append(f"  - {identity_key}: {entry['username']} (discord_id={entry.get('discord_id')}, slug={entry.get('slug')})")
+        
+        debug_log.append(f"\n--- IDENTITY TO DISPLAY INDEX MAPPING ---")
+        for key, idx in identity_to_display_index.items():
+            debug_log.append(f"  {key} -> team {idx}")
+        
+        debug_log.append(f"\n--- PER-ROUND CLASSIFICATION ---")
+        debug_log.append(f"Rounds to process: {len(ordered_queue_guids)}")
+        for round_idx, guid in enumerate(ordered_queue_guids):
+            debug_log.append(f"\nRound {round_idx + 1} (guid={guid}):")
+            round_ranks = round_player_rank_by_guid.get(guid, {})
+            debug_log.append(f"  Rank 1 identities in this round: {[k for k, v in round_ranks.items() if v == 1]}")
+            debug_log.append(f"  All ranks in this round: {round_ranks}")
+            displayed_rank_one_winners = {
+                identity_to_display_index[key]
+                for key, rank in round_ranks.items()
+                if rank == 1 and key in identity_to_display_index
+            }
+            debug_log.append(f"  Displayed team indices with rank 1: {sorted(displayed_rank_one_winners)}")
+            debug_log.append(f"  Classification: team {next(iter(displayed_rank_one_winners)) if len(displayed_rank_one_winners) == 1 else 'AMBIGUOUS/NONE (grey dot)'}")
+        
+        debug_log.append(f"\n--- FINAL RESULTS ---")
+        debug_log.append(f"round_winner_display_indices: {round_winner_display_indices}")
+        debug_log.append(f"team_round_wins: {team_round_wins}")
+        debug_log.append(f"winning_team_index: {winning_team_index}")
+        debug_log.append(f"match_history (True=green, False=red, None=grey): {match_history}")
+        debug_log.append(f"Green dots (True count): {sum(1 for h in match_history if h is True)}")
+        debug_log.append(f"Red dots (False count): {sum(1 for h in match_history if h is False)}")
+        debug_log.append(f"Grey dots (None count): {sum(1 for h in match_history if h is None)}")
+        
+        log_content = "\n".join(debug_log)
+        try:
+            log_path = f"queue_stats_debug_match{match_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(log_path, "w") as f:
+                f.write(log_content)
+            print(f"DEBUG: Timeline log saved to {log_path}")
+        except Exception as e:
+            print(f"DEBUG: Failed to write timeline log: {e}")
+
         return {
             "teams": result_teams,
             "winning_team_index": winning_team_index,
