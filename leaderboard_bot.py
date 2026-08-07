@@ -1022,6 +1022,140 @@ def build_goldenfries_image_payload(target_user: discord.User, access_token: str
     return wrapper()
 
 
+def generate_leaderboard_fries_image(leaderboard_rows: list[dict]) -> BytesIO:
+    header_height = QUEUE_IMG_HEADER_HEIGHT
+    row_height = QUEUE_IMG_ROW_HEIGHT
+    table_top = header_height + QUEUE_IMG_PADDING
+    height = table_top + max(len(leaderboard_rows), 1) * row_height + QUEUE_IMG_PADDING
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(46, "bold")
+    subtitle_font = load_font(24, "bold")
+    header_font = load_font(18, "bold")
+    body_font = load_font(20)
+    footer_font = load_font(15)
+
+    for y in range(header_height):
+        ratio = y / max(1, header_height - 1)
+        gradient_color = (
+            QUEUE_IMG_HEADER_BG[0] + int((QUEUE_IMG_HEADER_GRADIENT_END[0] - QUEUE_IMG_HEADER_BG[0]) * ratio),
+            QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
+            QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
+        )
+        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+
+    draw.text((QUEUE_IMG_PADDING, 26), "Server Golden Fries Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 84), "Top verified users by their survev.de Golden Fries balance.", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    table_x = QUEUE_IMG_PADDING
+    columns = [
+        table_x,
+        table_x + round(table_width * 0.10),
+        table_x + round(table_width * 0.55),
+        table_x + round(table_width * 0.80)
+    ]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+
+    header_y = table_top
+    labels = ["#", "Player", "Balance", "Status"]
+    for col_idx, label in enumerate(labels):
+        label_x = columns[col_idx]
+        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
+        if col_idx == 0:
+            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        elif col_idx == 1:
+            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        else:
+            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    row_y = header_y + row_height
+    for row_index, entry in enumerate(leaderboard_rows):
+        if row_index % 2 == 0:
+            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+
+        balance = entry["balance"]
+        display_name = entry.get("display_name") or f"Player {entry['discord_id']}"
+        row_values = [
+            str(entry["rank"]),
+            display_name,
+            f"{balance:,}",
+            "Verified"
+        ]
+
+        for col_idx, value in enumerate(row_values):
+            font = body_font
+            fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
+            cell_x = columns[col_idx]
+            if col_idx == 0:
+                draw.text((cell_x, row_y + 18), value, font=font, fill=fill)
+            elif col_idx == 1:
+                draw.text((cell_x, row_y + 18), value, font=font, fill=fill)
+            else:
+                value_width = draw.textbbox((0, 0), value, font=font)[2]
+                centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
+                draw.text((centered_x, row_y + 18), value, font=font, fill=fill)
+
+        row_y += row_height
+
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
+    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def build_leaderboard_fries_image_payload():
+    users = get_all_users()
+    if not users:
+        return None, None, "No verified users found."
+
+    leaderboard_data = []
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            for discord_id, token in users:
+                market_data, error = await fetch_user_market(session, token)
+                if error:
+                    continue
+
+                if not market_data:
+                    continue
+
+                balance = market_data.get("balance")
+                if balance is None:
+                    continue
+
+                leaderboard_data.append({
+                    "discord_id": discord_id,
+                    "balance": balance,
+                    "display_name": None
+                })
+
+        if not leaderboard_data:
+            return None, None, "No Golden Fries balances could be retrieved from verified users."
+
+        leaderboard_data.sort(key=lambda x: x["balance"], reverse=True)
+        top_rows = []
+        for idx, entry in enumerate(leaderboard_data[:10], start=1):
+            top_rows.append({
+                "rank": idx,
+                "discord_id": entry["discord_id"],
+                "balance": entry["balance"],
+                "display_name": None
+            })
+
+        image_buffer = generate_leaderboard_fries_image(top_rows)
+        file = discord.File(image_buffer, filename="leaderboard_fries.png")
+        return "Server Golden Fries Leaderboard", file, None
+
+    return wrapper()
+
+
 async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
     with no survev.de account at all (they still show up with a username, just slug=None)."""
@@ -1672,6 +1806,16 @@ async def leaderboard_monthly(interaction: discord.Interaction):
         await interaction.followup.send(error)
         return
     await interaction.followup.send(content=content, file=file, view=LeaderboardView("Monthly"))
+
+
+@bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")
+async def leaderboard_fries(interaction: discord.Interaction):
+    await interaction.response.defer()
+    content, file, error = await build_leaderboard_fries_image_payload()
+    if error:
+        await interaction.followup.send(error)
+        return
+    await interaction.followup.send(content=content, file=file)
 
 
 class QueueResultView(discord.ui.View):
