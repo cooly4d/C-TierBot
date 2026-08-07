@@ -357,7 +357,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 32), f"NeatQueue #{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 32), f"NeatQueue#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
         winner_text = f"Team {winning_team_index + 1} Wins"
