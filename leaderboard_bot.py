@@ -325,7 +325,13 @@ def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Free
     return f"{text}…" if text else "…"
 
 
-def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_team_index: int | None, match_history: list[bool | None] | None = None) -> BytesIO:
+def generate_queue_result_image(
+    match_id: str,
+    teams: list[list[dict]],
+    winning_team_index: int | None,
+    match_history: list[bool | None] | None = None,
+    team_round_wins: list[int] | None = None,
+) -> BytesIO:
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
 
@@ -387,7 +393,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             width=2
         )
 
-        title_text = "MATCH TIMELINE (broken for now)"
+        title_text = "MATCH TIMELINE"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
         draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
@@ -416,8 +422,11 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             draw.text((label_x, axis_y + dot_radius + 8), label, font=body_font, fill=QUEUE_IMG_TEXT)
 
     score_font = load_font(72, "bold")
-    # Every teammate shares the same round-win count, so take the max (not sum) to avoid double-counting.
-    team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
+    if team_round_wins is not None and len(team_round_wins) == num_teams:
+        team_scores = team_round_wins
+    else:
+        # Fallback for compatibility if explicit round totals are unavailable.
+        team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
     if num_teams == 2:
         left_text = str(team_scores[0])
         right_text = str(team_scores[1])
@@ -2108,17 +2117,9 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             result_teams = []
             result_team_ids = []
 
-        # Winning team = whoever won more rounds overall (every teammate shares the same round-win count).
-        team_round_wins = [max((e["stats"]["wins"] for e in team), default=0) for team in result_teams]
-        winning_team_index = team_round_wins.index(max(team_round_wins)) if team_round_wins and max(team_round_wins) > 0 else None
-
         team_id_to_display_index = {team_id: idx for idx, team_id in enumerate(result_team_ids)}
-        match_history: list[bool | None] = []
+        round_winner_display_indices: list[int | None] = []
         for guid in ordered_queue_guids:
-            if winning_team_index is None:
-                match_history.append(None)
-                continue
-
             per_round_team_ranks = round_team_best_rank_by_guid.get(guid, {})
             displayed_rank_pairs = []
             for team_id, display_index in team_id_to_display_index.items():
@@ -2128,20 +2129,46 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
             # Need at least one displayed team rank to classify this round.
             if not displayed_rank_pairs:
-                match_history.append(None)
+                round_winner_display_indices.append(None)
                 continue
 
             # Lower global placement rank is better. If two displayed teams tie best rank,
             # treat the round outcome as unknown for timeline purposes.
             displayed_rank_pairs.sort(key=lambda pair: pair[0])
             if len(displayed_rank_pairs) > 1 and displayed_rank_pairs[0][0] == displayed_rank_pairs[1][0]:
-                match_history.append(None)
+                round_winner_display_indices.append(None)
                 continue
 
             round_winner_display_index = displayed_rank_pairs[0][1]
-            match_history.append(round_winner_display_index == winning_team_index)
+            round_winner_display_indices.append(round_winner_display_index)
 
-        return {"teams": result_teams, "winning_team_index": winning_team_index, "match_history": match_history}, None
+        # Single source of truth for the series score: count per-round winners for displayed teams.
+        team_round_wins = [0 for _ in result_teams]
+        for winner_idx in round_winner_display_indices:
+            if winner_idx is None:
+                continue
+            if 0 <= winner_idx < len(team_round_wins):
+                team_round_wins[winner_idx] += 1
+
+        winning_team_index = None
+        if team_round_wins:
+            max_wins = max(team_round_wins)
+            if max_wins > 0 and team_round_wins.count(max_wins) == 1:
+                winning_team_index = team_round_wins.index(max_wins)
+
+        match_history: list[bool | None] = []
+        for winner_idx in round_winner_display_indices:
+            if winner_idx is None or winning_team_index is None:
+                match_history.append(None)
+            else:
+                match_history.append(winner_idx == winning_team_index)
+
+        return {
+            "teams": result_teams,
+            "winning_team_index": winning_team_index,
+            "match_history": match_history,
+            "team_round_wins": team_round_wins,
+        }, None
 
 
 # ------------------------------------------------------------------
@@ -2242,7 +2269,8 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_id,
         teams,
         match_result["winning_team_index"],
-        match_result.get("match_history")
+        match_result.get("match_history"),
+        match_result.get("team_round_wins"),
     )
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
     return f"Queue stats for match #{match_id}", file, None
