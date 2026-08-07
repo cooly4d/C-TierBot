@@ -770,32 +770,69 @@ def rarity_label(rarity: int) -> str:
     }.get(rarity, f"Rarity {rarity}")
 
 
-def prettify_source(source: str | None) -> str:
-    if not source:
-        return "Unknown"
-    return source.replace("_", " ").title()
-
-
 def prettify_shop_item_type(item_type: str | None) -> str:
     if not item_type:
         return "Unknown"
     return item_type.replace("_", " ").title()
 
 
+# Grid card outline colors, keyed by the same rarity ints as rarity_label.
+RARITY_COLORS: dict[int, tuple[int, int, int]] = {
+    0: (140, 140, 140),   # Stock - grey
+    1: (85, 190, 90),     # Common - green
+    2: (85, 190, 90),     # Uncommon - green
+    3: (110, 190, 245),   # Rare - light blue
+    4: (176, 90, 220),    # Epic - purple
+    5: (191, 87, 0),      # Mythic - burnt orange
+}
+
+
+def rarity_color(rarity: int) -> tuple[int, int, int]:
+    return RARITY_COLORS.get(rarity, QUEUE_IMG_MUTED)
+
+
+def group_inventory_items(items: list[dict]) -> list[dict]:
+    """Collapses duplicate copies of the same skin into one entry with a count."""
+    grouped: dict[tuple, dict] = {}
+    for item in items:
+        name = item.get("name", "Unknown Item")
+        rarity = item.get("rarity", 0)
+        key = (name, rarity)
+        group = grouped.get(key)
+        if group is None:
+            group = {"name": name, "rarity": rarity, "count": 0, "value": item.get("value")}
+            grouped[key] = group
+        group["count"] += 1
+        if group["value"] is None:
+            group["value"] = item.get("value")
+    return list(grouped.values())
+
+
+INVENTORY_GRID_COLUMNS = 4
+INVENTORY_CARD_HEIGHT = 150
+INVENTORY_CARD_GAP = 24
+
+
 def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
-    item_count = len(items)
-    shown_items = sorted(items, key=lambda item: (item.get("rarity", 0), item.get("value", 0)), reverse=True)[:10]
+    grouped_items = group_inventory_items(items)
+    grouped_items.sort(key=lambda entry: (entry["rarity"], entry["value"] or 0), reverse=True)
+    shown_items = grouped_items[:12]
+
     header_height = QUEUE_IMG_HEADER_HEIGHT
-    row_height = 56
-    table_top = header_height + QUEUE_IMG_PADDING
-    height = table_top + len(shown_items) * row_height + QUEUE_IMG_PADDING * 2 + 40
+    grid_top = header_height + QUEUE_IMG_PADDING
+    grid_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    card_width = (grid_width - INVENTORY_CARD_GAP * (INVENTORY_GRID_COLUMNS - 1)) // INVENTORY_GRID_COLUMNS
+    rows = max(1, -(-len(shown_items) // INVENTORY_GRID_COLUMNS))
+    height = grid_top + rows * (INVENTORY_CARD_HEIGHT + INVENTORY_CARD_GAP) + QUEUE_IMG_PADDING
+
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
     title_font = load_font(44, "bold")
     subtitle_font = load_font(22, "bold")
-    header_font = load_font(18, "bold")
-    body_font = load_font(18)
+    name_font = load_font(21, "bold")
+    count_font = load_font(18, "bold")
+    value_font = load_font(20, "bold")
     footer_font = load_font(15)
 
     for y in range(header_height):
@@ -807,54 +844,35 @@ def generate_inventory_image(username: str, items: list[dict]) -> BytesIO:
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 26), f"survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s items — showing {len(shown_items)} of {item_count}", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text(
+        (QUEUE_IMG_PADDING, 86),
+        f"{username}'s items — showing {len(shown_items)} of {len(grouped_items)} unique skins",
+        font=subtitle_font,
+        fill=QUEUE_IMG_MUTED
+    )
 
-    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
-    table_x = QUEUE_IMG_PADDING
-    columns = [
-        table_x,
-        table_x + round(table_width * 0.34),
-        table_x + round(table_width * 0.52),
-        table_x + round(table_width * 0.68),
-        table_x + round(table_width * 0.82)
-    ]
-    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+    for idx, entry in enumerate(shown_items):
+        col = idx % INVENTORY_GRID_COLUMNS
+        row = idx // INVENTORY_GRID_COLUMNS
+        x0 = QUEUE_IMG_PADDING + col * (card_width + INVENTORY_CARD_GAP)
+        y0 = grid_top + row * (INVENTORY_CARD_HEIGHT + INVENTORY_CARD_GAP)
+        x1 = x0 + card_width
+        y1 = y0 + INVENTORY_CARD_HEIGHT
 
-    labels = ["Item", "Rarity", "Source", "Value", "Stats"]
-    for col_idx, label in enumerate(labels):
-        label_x = columns[col_idx]
-        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-        if col_idx == 0:
-            draw.text((label_x, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
-        else:
-            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, table_top), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        draw.rounded_rectangle(
+            [x0, y0, x1, y1], radius=16, fill=QUEUE_IMG_ROW_ALT, outline=rarity_color(entry["rarity"]), width=4
+        )
 
-    row_y = table_top + row_height
-    for row_index, item in enumerate(shown_items):
-        if row_index % 2 == 0:
-            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+        name_text = truncate_to_width(draw, entry["name"], name_font, card_width - 32)
+        draw.text((x0 + 16, y0 + 18), name_text, font=name_font, fill=QUEUE_IMG_TEXT)
 
-        name = truncate_text(item.get("name", "Unknown Item"), 30)
-        rarity = rarity_label(item.get("rarity", 0))
-        source = prettify_source(item.get("source"))
-        price_paid = item.get("pricePaid")
-        value = item.get("value")
-        value_text = f"{price_paid} paid" if price_paid is not None else (f"{value}💰" if value else "Stock")
-        stats_text = f"G:{item.get('games',0)} K:{item.get('kills',0)} D:{item.get('damage',0)}"
+        if entry["count"] > 1:
+            draw.text((x0 + 16, y0 + 52), f"x{entry['count']}", font=count_font, fill=QUEUE_IMG_MUTED)
 
-        values = [name, rarity, source, value_text, stats_text]
-        for col_idx, value in enumerate(values):
-            font = body_font
-            fill = QUEUE_IMG_TEXT
-            cell_x = columns[col_idx]
-            if col_idx == 0:
-                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
-            else:
-                value_width = draw.textbbox((0, 0), value, font=font)[2]
-                draw.text((cell_x + (col_widths[col_idx] - value_width) / 2, row_y + 14), value, font=font, fill=fill)
-
-        row_y += row_height
+        value = entry["value"]
+        value_text = f"{value:,} 💰" if isinstance(value, (int, float)) and value else "Stock"
+        draw.text((x0 + 16, y1 - 42), value_text, font=value_font, fill=QUEUE_IMG_ACCENT)
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
