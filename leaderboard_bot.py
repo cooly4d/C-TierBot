@@ -184,12 +184,20 @@ async def log_interaction(interaction: discord.Interaction):
         print(f"DEBUG - handling inventory pagination {custom_id} for {interaction.user}")
         msg_id = interaction.message.id
         if msg_id in inventory_pagination_state:
-            target_user, access_token, current_page, total_pages = inventory_pagination_state[msg_id]
+            target_user, access_token, rarity_filter, current_page, total_pages = inventory_pagination_state[msg_id]
             if custom_id == "inventory_prev":
                 current_page = max(0, current_page - 1)
             else:
                 current_page = min(total_pages - 1, current_page + 1)
-            await refresh_inventory_message(interaction, target_user, access_token, current_page, msg_id)
+            await refresh_inventory_message(interaction, target_user, access_token, rarity_filter, current_page, msg_id)
+    elif custom_id == "inventory_rarity":
+        print(f"DEBUG - handling inventory rarity select for {interaction.user}")
+        msg_id = interaction.message.id
+        if msg_id in inventory_pagination_state:
+            target_user, access_token, _, _, _ = inventory_pagination_state[msg_id]
+            selected_values = interaction.data.get("values") or []
+            rarity_filter = selected_values[0] if selected_values else "all"
+            await refresh_inventory_message(interaction, target_user, access_token, rarity_filter, 0, msg_id)
     elif custom_id == "market_prev" or custom_id == "market_next":
         print(f"DEBUG - handling market pagination {custom_id} for {interaction.user}")
         msg_id = interaction.message.id
@@ -885,10 +893,39 @@ INVENTORY_GRID_COLUMNS = 4
 INVENTORY_CARD_HEIGHT = 150
 INVENTORY_CARD_GAP = 24
 INVENTORY_ITEMS_PER_PAGE = 12
+INVENTORY_RARITY_FILTERS: dict[str, str] = {
+    "all": "All Rarities",
+    "0": "Stock",
+    "1": "Common",
+    "2": "Uncommon",
+    "3": "Rare",
+    "4": "Epic",
+    "5": "Mythic",
+}
 
 
-def generate_inventory_image(username: str, items: list[dict], page: int = 0) -> BytesIO:
+def normalize_inventory_rarity_filter(rarity_filter: str | None) -> str:
+    key = (rarity_filter or "all").strip().lower()
+    return key if key in INVENTORY_RARITY_FILTERS else "all"
+
+
+def build_inventory_rarity_counts(grouped_items: list[dict]) -> dict[str, int]:
+    counts = {key: 0 for key in INVENTORY_RARITY_FILTERS}
+    counts["all"] = len(grouped_items)
+    for entry in grouped_items:
+        rarity_key = str(entry.get("rarity", ""))
+        if rarity_key in counts:
+            counts[rarity_key] += 1
+    return counts
+
+
+def generate_inventory_image(username: str, items: list[dict], page: int = 0, rarity_filter: str = "all") -> BytesIO:
+    rarity_key = normalize_inventory_rarity_filter(rarity_filter)
+
     grouped_items = group_inventory_items(items)
+    if rarity_key != "all":
+        rarity_value = int(rarity_key)
+        grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
     grouped_items.sort(key=lambda entry: (entry["rarity"], entry["value"] or 0), reverse=True)
     
     start_idx = page * INVENTORY_ITEMS_PER_PAGE
@@ -925,10 +962,18 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0) ->
     draw.text((QUEUE_IMG_PADDING, 26), "survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text(
         (QUEUE_IMG_PADDING, 86),
-        f"{username}'s items — Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
+        f"{username}'s items ({INVENTORY_RARITY_FILTERS[rarity_key]}) — Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
         font=subtitle_font,
         fill=QUEUE_IMG_MUTED
     )
+
+    if not shown_items:
+        empty_text = "No items in this rarity."
+        empty_font = load_font(30, "bold")
+        empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
+        empty_x = (QUEUE_IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) / 2
+        empty_y = grid_top + (INVENTORY_CARD_HEIGHT / 2)
+        draw.text((empty_x, empty_y), empty_text, font=empty_font, fill=QUEUE_IMG_MUTED)
 
     for idx, entry in enumerate(shown_items):
         col = idx % INVENTORY_GRID_COLUMNS
@@ -1146,24 +1191,29 @@ def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
     return buffer
 
 
-def build_inventory_image_payload(target_user: discord.User, access_token: str, page: int = 0):
+def build_inventory_image_payload(target_user: discord.User, access_token: str, page: int = 0, rarity_filter: str = "all"):
     async def wrapper():
         async with aiohttp.ClientSession() as session:
             inventory, error = await fetch_user_inventory(session, access_token)
             if error:
-                return None, None, error, None, None
+                return None, None, error, None, None, None
 
             if not inventory:
-                return None, None, "survev.de returned an empty inventory response.", None, None
+                return None, None, "survev.de returned an empty inventory response.", None, None, None
 
             username = inventory.get("username") or str(target_user)
             items = inventory.get("items", [])
+            rarity_key = normalize_inventory_rarity_filter(rarity_filter)
             grouped_items = group_inventory_items(items)
+            rarity_counts = build_inventory_rarity_counts(grouped_items)
+            if rarity_key != "all":
+                rarity_value = int(rarity_key)
+                grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
             total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
-            image_buffer = generate_inventory_image(username, items, page)
+            image_buffer = generate_inventory_image(username, items, page, rarity_key)
             filename = f"inventory_{target_user.id}_p{page}.png"
             file = discord.File(image_buffer, filename=filename)
-            return f"{username}'s survev.de inventory", file, None, total_pages, filename
+            return f"{username}'s survev.de inventory", file, None, total_pages, filename, rarity_counts
 
     return wrapper()
 
@@ -2410,11 +2460,39 @@ class QueueResultView(discord.ui.View):
             pass
 
 
+class InventoryRaritySelect(discord.ui.Select):
+    def __init__(self, selected_rarity: str = "all", rarity_counts: dict[str, int] | None = None):
+        rarity_key = normalize_inventory_rarity_filter(selected_rarity)
+        counts = rarity_counts or {key: 0 for key in INVENTORY_RARITY_FILTERS}
+        options = [
+            discord.SelectOption(
+                label=f"{label} ({counts.get(value, 0)})",
+                value=value,
+                default=(value == rarity_key)
+            )
+            for value, label in INVENTORY_RARITY_FILTERS.items()
+        ]
+        super().__init__(
+            placeholder="Select rarity",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="inventory_rarity"
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        # Handled by log_interaction
+        pass
+
+
 class InventoryPaginationView(discord.ui.View):
     """Persistent view for paginating through inventory items."""
-    def __init__(self, total_pages: int):
+    def __init__(self, total_pages: int, rarity_filter: str = "all", rarity_counts: dict[str, int] | None = None):
         super().__init__(timeout=None)
         self.total_pages = total_pages
+        self.rarity_filter = normalize_inventory_rarity_filter(rarity_filter)
+        self.rarity_counts = rarity_counts or {key: 0 for key in INVENTORY_RARITY_FILTERS}
+        self.add_item(InventoryRaritySelect(self.rarity_filter, self.rarity_counts))
 
     def update_button_states(self, current_page: int):
         self.prev_button.disabled = current_page <= 0
@@ -2432,7 +2510,7 @@ class InventoryPaginationView(discord.ui.View):
 
 
 # Store pagination state: msg_id -> (target_user, access_token, mode, current_page, total_pages)
-inventory_pagination_state: dict[int, tuple[discord.User, str, int, int]] = {}
+inventory_pagination_state: dict[int, tuple[discord.User, str, str, int, int]] = {}
 
 # Store market pagination state: msg_id -> (target_user, access_token, mode, current_page, total_pages)
 market_pagination_state: dict[int, tuple[discord.User, str, str, int, int]] = {}
@@ -2505,7 +2583,7 @@ async def refresh_market_message(interaction: discord.Interaction, target_user: 
         await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
-async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, page: int, msg_id: int):
+async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, rarity_filter: str, page: int, msg_id: int):
     """Refresh the inventory message with a new page."""
     await interaction.response.defer()
     async with aiohttp.ClientSession() as session:
@@ -2516,27 +2594,33 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
 
         items = inventory.get("items", [])
         username = inventory.get("username") or str(target_user)
+        rarity_key = normalize_inventory_rarity_filter(rarity_filter)
         grouped_items = group_inventory_items(items)
+        rarity_counts = build_inventory_rarity_counts(grouped_items)
+        if rarity_key != "all":
+            rarity_value = int(rarity_key)
+            grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
         total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
         
         # Clamp page to valid range
         page = max(0, min(page, total_pages - 1))
         
         # Update state
-        inventory_pagination_state[msg_id] = (target_user, access_token, page, total_pages)
+        inventory_pagination_state[msg_id] = (target_user, access_token, rarity_key, page, total_pages)
         
         # Generate new image
-        image_buffer = generate_inventory_image(username, items, page)
+        image_buffer = generate_inventory_image(username, items, page, rarity_key)
         filename = f"inventory_{target_user.id}_p{page}.png"
         file = discord.File(image_buffer, filename=filename)
         
         # Create embed with image attached
-        embed = discord.Embed(title=f"{username}'s Inventory", color=discord.Color.blurple())
+        rarity_label_text = INVENTORY_RARITY_FILTERS[rarity_key]
+        embed = discord.Embed(title=f"{username}'s Inventory ({rarity_label_text})", color=discord.Color.blurple())
         embed.set_image(url=f"attachment://{filename}")
         embed.set_footer(text=f"Page {page + 1} of {total_pages}")
         
         # Create view with updated button states
-        view = InventoryPaginationView(total_pages)
+        view = InventoryPaginationView(total_pages, rarity_key, rarity_counts)
         view.update_button_states(page)
         
         await interaction.message.edit(attachments=[file], embed=embed, view=view)
@@ -2599,22 +2683,22 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
             await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
-    content, file, error_text, total_pages, filename = await build_inventory_image_payload(target, access_token, 0)
+    content, file, error_text, total_pages, filename, rarity_counts = await build_inventory_image_payload(target, access_token, 0, "all")
     if error_text:
         await interaction.followup.send(error_text)
         return
 
     # Create embed with image attached
-    embed = discord.Embed(title=content, color=discord.Color.blurple())
+    embed = discord.Embed(title=f"{content} (All Rarities)", color=discord.Color.blurple())
     embed.set_image(url=f"attachment://{filename}")
     embed.set_footer(text=f"Page 1 of {total_pages or 1}")
     
-    view = InventoryPaginationView(total_pages or 1)
+    view = InventoryPaginationView(total_pages or 1, "all", rarity_counts)
     view.update_button_states(0)
     msg = await interaction.followup.send(embed=embed, file=file, view=view)
     
     # Store pagination state
-    inventory_pagination_state[msg.id] = (target, access_token, 0, total_pages or 1)
+    inventory_pagination_state[msg.id] = (target, access_token, "all", 0, total_pages or 1)
 
 
 @bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance as a graphic.")
