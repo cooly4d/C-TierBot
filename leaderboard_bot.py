@@ -374,7 +374,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         slice_start = 0
         history_slice = match_history
 
-        timeline_box_width = min(720, 120 + history_count * 64)
+        timeline_box_width = 760
         timeline_box_height = 140
         timeline_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - timeline_box_width
         timeline_box_y = 32
@@ -387,7 +387,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             width=2
         )
 
-        title_text = "MATCH TIMELINE (broken for now)"
+        title_text = "MATCH TIMELINE"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
         draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
@@ -397,10 +397,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         axis_x1 = timeline_box_x + timeline_box_width - 28
         draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2)
 
-        if history_count == 1:
-            spacing = 0
-        else:
-            spacing = (axis_x1 - axis_x0) / (history_count - 1)
+        spacing = 0 if history_count <= 1 else (axis_x1 - axis_x0) / (history_count - 1)
 
         for idx, result in enumerate(history_slice):
             x = axis_x0 + spacing * idx
