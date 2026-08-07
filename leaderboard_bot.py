@@ -1155,10 +1155,10 @@ def build_shop_image_payload(target_user: discord.User, access_token: str, mode:
             total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
             
             # Clamp page
-            page = max(0, min(page, total_pages - 1))
+            clamped_page = max(0, min(page, total_pages - 1))
             
-            image_buffer = generate_shop_image(username, market_data, mode, page)
-            filename = f"shop_{target_user.id}_{mode}_p{page}.png"
+            image_buffer = generate_shop_image(username, market_data, mode, clamped_page)
+            filename = f"shop_{target_user.id}_{mode}_p{clamped_page}.png"
             file = discord.File(image_buffer, filename=filename)
             
             mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
