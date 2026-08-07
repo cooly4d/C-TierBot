@@ -2204,13 +2204,17 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
         # round winners must be tracked per identity here and resolved via that identity later.
         round_player_rank_by_guid: dict[str, dict[str, int]] = {}
+        round_timestamp_by_guid: dict[str, int | None] = {}
         for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
 
             round_ranks = round_player_rank_by_guid.setdefault(guid, {})
+            round_timestamp = None
             for p in board:
+                if round_timestamp is None:
+                    round_timestamp = p.get("created_at") or p.get("createdAt") or p.get("timestamp")
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
                 key = slug or username.lower()
@@ -2236,6 +2240,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     agg["best_rank"] = parsed_rank
                 if parsed_rank is not None and (key not in round_ranks or parsed_rank < round_ranks[key]):
                     round_ranks[key] = parsed_rank
+            round_timestamp_by_guid[guid] = round_timestamp
 
         if not players:
             return None, "survev.de returned no player data for this queue's match(es)."
@@ -2350,7 +2355,19 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         debug_log.append(f"\n--- PER-ROUND CLASSIFICATION ---")
         debug_log.append(f"Rounds to process: {len(ordered_queue_guids)}")
         for round_idx, guid in enumerate(ordered_queue_guids):
-            debug_log.append(f"\nRound {round_idx + 1} (guid={guid}):")
+            round_ts = round_timestamp_by_guid.get(guid)
+            ts_str = "unknown"
+            if round_ts:
+                try:
+                    if isinstance(round_ts, (int, float)):
+                        ts_ms = int(round_ts) if round_ts > 1e10 else int(round_ts * 1000)
+                        ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+                        ts_str = ts_dt.isoformat()
+                    elif isinstance(round_ts, str):
+                        ts_str = round_ts
+                except Exception:
+                    ts_str = str(round_ts)
+            debug_log.append(f"\nRound {round_idx + 1} (guid={guid}, timestamp={ts_str}):")
             round_ranks = round_player_rank_by_guid.get(guid, {})
             debug_log.append(f"  Rank 1 identities in this round: {[k for k, v in round_ranks.items() if v == 1]}")
             debug_log.append(f"  All ranks in this round: {round_ranks}")
