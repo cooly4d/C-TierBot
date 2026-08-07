@@ -374,7 +374,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
         slice_start = 0
         history_slice = match_history
 
-        timeline_box_width = 760
+        timeline_box_width = 560
         timeline_box_height = 140
         timeline_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - timeline_box_width
         timeline_box_y = 32
