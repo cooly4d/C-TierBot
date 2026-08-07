@@ -410,8 +410,8 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             draw.ellipse(dot_bbox, fill=dot_color)
 
             if idx == history_count - 1:
-                highlight_bbox = [x - dot_radius - 4, axis_y - dot_radius - 4, x + dot_radius + 4, axis_y + dot_radius + 4]
-                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=2)
+                highlight_bbox = [x - dot_radius - 6, axis_y - dot_radius - 6, x + dot_radius + 6, axis_y + dot_radius + 6]
+                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4)
 
             label = f"G{slice_start + idx + 1}"
             label_bbox = draw.textbbox((0, 0), label, font=body_font)
@@ -1917,17 +1917,16 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             result_teams = []
             result_team_ids = []
 
-        # Winning team = whoever won more rounds overall (every teammate shares the same round-win count).
-        team_round_wins = [max((e["stats"]["wins"] for e in team), default=0) for team in result_teams]
+        # Winning team = whoever won more rounds overall based on the actual round winners.
+        team_round_wins = [round_winning_team_ids.count(team_id) for team_id in result_team_ids]
         winning_team_index = team_round_wins.index(max(team_round_wins)) if team_round_wins and max(team_round_wins) > 0 else None
 
-        team_id_to_display_index = {team_id: idx for idx, team_id in enumerate(result_team_ids)}
         match_history: list[bool | None] = []
         for winner_team_id in round_winning_team_ids:
             if winner_team_id is None or winning_team_index is None:
                 match_history.append(None)
                 continue
-            display_index = team_id_to_display_index.get(winner_team_id)
+            display_index = result_team_ids.index(winner_team_id) if winner_team_id in result_team_ids else None
             match_history.append(display_index == winning_team_index if display_index is not None else None)
 
         return {"teams": result_teams, "winning_team_index": winning_team_index, "match_history": match_history}, None
