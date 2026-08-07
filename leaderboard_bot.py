@@ -370,11 +370,11 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     draw.text((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font, fill=winner_color)
 
     if match_history:
-        history_count = min(len(match_history), 7)
-        slice_start = len(match_history) - history_count
-        history_slice = match_history[-history_count:]
+        history_count = len(match_history)
+        slice_start = 0
+        history_slice = match_history
 
-        timeline_box_width = 440
+        timeline_box_width = min(720, 120 + history_count * 64)
         timeline_box_height = 140
         timeline_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - timeline_box_width
         timeline_box_y = 32
@@ -387,7 +387,10 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
             width=2
         )
 
-        draw.text((timeline_box_x + 20, timeline_box_y + 16), "MATCH HISTORY", font=header_font, fill=QUEUE_IMG_TEXT)
+        title_text = "MATCH HISTORY"
+        title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
+        title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
+        draw.text((title_x, timeline_box_y + 16), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
 
         axis_y = timeline_box_y + 72
         axis_x0 = timeline_box_x + 28
@@ -669,6 +672,26 @@ async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_
         offset += limit
 
     return all_matches
+
+
+def get_match_history_timestamp(match: dict) -> int | None:
+    if not isinstance(match, dict):
+        return None
+    for key in ("start_time_ms", "start_time", "time", "timestamp", "created_at", "createdAt"):
+        value = match.get(key)
+        if value is None:
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                try:
+                    return int(datetime.fromisoformat(value).timestamp() * 1000)
+                except ValueError:
+                    continue
+    return None
 
 
 async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int):
@@ -1755,6 +1778,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # history and use its guids to pin down exactly which survev.de match(es) this queue played.
         # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
         anchor_guid_sets = []
+        anchor_matches_by_discord: dict[int, list[dict]] = {}
         for team_players in teams:
             for player in team_players:
                 try:
@@ -1769,6 +1793,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 guids = {m.get("guid") for m in own_matches if m.get("guid")}
                 if guids:
                     anchor_guid_sets.append(guids)
+                    anchor_matches_by_discord[discord_id] = own_matches
 
         if not anchor_guid_sets:
             return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
@@ -1778,25 +1803,24 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
             queue_guids = set.union(*anchor_guid_sets)
 
-        # Preserve the chronological order of the identified rounds using the anchor players' match histories.
         ordered_queue_guids: list[str] = []
         seen_guids: set[str] = set()
-        for team_players in teams:
-            for player in team_players:
-                try:
-                    discord_id = int(player.get("id"))
-                except (TypeError, ValueError):
-                    continue
-                token = get_user_token(discord_id)
-                if not token:
-                    continue
-
-                own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
-                for match in own_matches:
+        if anchor_matches_by_discord:
+            guid_timestamps: dict[str, int] = {}
+            for matches in anchor_matches_by_discord.values():
+                for match in matches:
                     guid = match.get("guid")
-                    if guid in queue_guids and guid not in seen_guids:
-                        ordered_queue_guids.append(guid)
-                        seen_guids.add(guid)
+                    if guid not in queue_guids or guid is None:
+                        continue
+                    timestamp = get_match_history_timestamp(match) or 0
+                    if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
+                        guid_timestamps[guid] = timestamp
+
+            ordered_queue_guids = sorted(
+                queue_guids,
+                key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
+            )
+            seen_guids.update(ordered_queue_guids)
 
         for guid in queue_guids:
             if guid not in seen_guids:
