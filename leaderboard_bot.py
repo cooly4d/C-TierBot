@@ -110,6 +110,14 @@ async def on_ready():
         print(f"DEBUG - inventory view add_view FAILED: {exc!r}")
 
     try:
+        # Add a persistent shop view template (buttons will be updated per message)
+        template_shop_view = ShopPaginationView(1)
+        bot.add_view(template_shop_view)
+        print(f"DEBUG - shop view added: is_persistent={template_shop_view.is_persistent()}")
+    except Exception as exc:
+        print(f"DEBUG - shop view add_view FAILED: {exc!r}")
+
+    try:
         store = bot._connection._view_store
         print(f"DEBUG - view_store synced custom_ids: {list(store._synced_message_views.keys()) if hasattr(store, '_synced_message_views') else 'n/a'}")
         print(f"DEBUG - view_store persistent listeners: {list(getattr(store, '_views', {}).keys())}")
@@ -152,6 +160,16 @@ async def log_interaction(interaction: discord.Interaction):
             else:
                 current_page = min(total_pages - 1, current_page + 1)
             await refresh_inventory_message(interaction, target_user, access_token, current_page, msg_id)
+    elif custom_id == "market_prev" or custom_id == "market_next":
+        print(f"DEBUG - handling market pagination {custom_id} for {interaction.user}")
+        msg_id = interaction.message.id
+        if msg_id in market_pagination_state:
+            target_user, access_token, mode, current_page, total_pages = market_pagination_state[msg_id]
+            if custom_id == "market_prev":
+                current_page = max(0, current_page - 1)
+            else:
+                current_page = min(total_pages - 1, current_page + 1)
+            await refresh_market_message(interaction, target_user, access_token, mode, current_page, msg_id)
 
 
 bot.add_listener(log_interaction, "on_interaction")
@@ -913,20 +931,17 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0) ->
     return buffer
 
 
-def generate_shop_image(username: str, market_data: dict, mode: str = "all") -> BytesIO:
+SHOP_GRID_COLUMNS = 2
+SHOP_CARD_HEIGHT = 160
+SHOP_CARD_GAP = 24
+SHOP_ITEMS_PER_PAGE = 6
+
+
+def generate_shop_image(username: str, market_data: dict, mode: str = "all", page: int = 0) -> BytesIO:
     balance = market_data.get("balance", 0)
-    day = market_data.get("day", "Unknown")
-    week = market_data.get("week", "Unknown")
-    reset_time_ms = market_data.get("resetTime")
-    weekly_reset_time_ms = market_data.get("weeklyResetTime")
     offers = market_data.get("offers", [])
 
-    def format_reset(ms: int | None) -> str:
-        if not ms:
-            return "Unknown"
-        dt = datetime.fromtimestamp(ms / 1000, timezone.utc)
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
-
+    # Filter by mode
     if mode == "daily":
         shown_offers = [offer for offer in offers if offer.get("slot") in (0, 1)]
         mode_label = "Daily Offers"
@@ -935,24 +950,36 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all") -> 
         mode_label = "Weekly Offers"
     else:
         shown_offers = offers[:]
-        mode_label = "Daily + Weekly Offers"
+        mode_label = "All Offers"
 
     shown_offers = sorted(shown_offers, key=lambda o: o.get("slot", 0))
-    total_rows = max(len(shown_offers), 1)
+    total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
+    
+    # Clamp page
+    page = max(0, min(page, total_pages - 1))
+    
+    start_idx = page * SHOP_ITEMS_PER_PAGE
+    end_idx = start_idx + SHOP_ITEMS_PER_PAGE
+    page_offers = shown_offers[start_idx:end_idx]
+
     header_height = QUEUE_IMG_HEADER_HEIGHT
-    row_height = 56
-    section_height = 34
-    table_top = header_height + QUEUE_IMG_PADDING
-    height = table_top + section_height + total_rows * row_height + QUEUE_IMG_PADDING * 2 + 40
+    grid_top = header_height + QUEUE_IMG_PADDING
+    grid_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
+    card_width = (grid_width - SHOP_CARD_GAP * (SHOP_GRID_COLUMNS - 1)) // SHOP_GRID_COLUMNS
+    rows = max(1, -(-len(page_offers) // SHOP_GRID_COLUMNS))
+    height = grid_top + rows * (SHOP_CARD_HEIGHT + SHOP_CARD_GAP) + QUEUE_IMG_PADDING + 60
+
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
     title_font = load_font(44, "bold")
     subtitle_font = load_font(22, "bold")
-    header_font = load_font(18, "bold")
-    body_font = load_font(18)
+    item_font = load_font(18, "bold")
+    price_font = load_font(20, "bold")
+    status_font = load_font(16)
     footer_font = load_font(15)
 
+    # Gradient header
     for y in range(header_height):
         ratio = y / max(1, header_height - 1)
         gradient_color = (
@@ -962,65 +989,63 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all") -> 
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 26), f"survev.de Shop", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s {mode_label}", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Shop", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text(
+        (QUEUE_IMG_PADDING, 86),
+        f"{username}'s {mode_label} — Page {page + 1}/{total_pages} ({len(page_offers)} of {len(shown_offers)} offers)",
+        font=subtitle_font,
+        fill=QUEUE_IMG_MUTED
+    )
 
-    balance_text = f"Balance: {balance} Fries"
-    draw.text((QUEUE_IMG_PADDING, 124), balance_text, font=body_font, fill=QUEUE_IMG_TEXT)
+    balance_text = f"Balance: {balance:,} 🍟"
+    draw.text((QUEUE_IMG_PADDING, 130), balance_text, font=status_font, fill=QUEUE_IMG_ACCENT)
 
-    meta_text = f"Day: {day}   Week: {week}"
-    draw.text((QUEUE_IMG_PADDING, 152), meta_text, font=body_font, fill=QUEUE_IMG_MUTED)
+    # Render cards
+    for idx, offer in enumerate(page_offers):
+        col = idx % SHOP_GRID_COLUMNS
+        row = idx // SHOP_GRID_COLUMNS
+        x0 = QUEUE_IMG_PADDING + col * (card_width + SHOP_CARD_GAP)
+        y0 = grid_top + row * (SHOP_CARD_HEIGHT + SHOP_CARD_GAP)
+        x1 = x0 + card_width
+        y1 = y0 + SHOP_CARD_HEIGHT
 
-    table_y = table_top + section_height
-    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
-    table_x = QUEUE_IMG_PADDING
-    columns = [
-        table_x,
-        table_x + round(table_width * 0.14),
-        table_x + round(table_width * 0.42),
-        table_x + round(table_width * 0.68),
-        table_x + round(table_width * 0.86)
-    ]
-    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
+        # Card background and border - color by status
+        purchased = offer.get("purchased", False)
+        card_color = (60, 40, 40) if purchased else (40, 60, 40)
+        border_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
+        
+        draw.rounded_rectangle(
+            [x0, y0, x1, y1], radius=16, fill=card_color, outline=border_color, width=3
+        )
 
-    labels = ["Slot", "Item", "Price", "Status", "Type"]
-    for col_idx, label in enumerate(labels):
-        x = columns[col_idx]
-        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-        if col_idx == 0:
-            draw.text((x, table_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-        else:
-            draw.text((x + (col_widths[col_idx] - label_width) / 2, table_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
+        # Slot info
+        slot = offer.get("slot", "?")
+        slot_text = f"Slot {slot}"
+        draw.text((x0 + 12, y0 + 12), slot_text, font=status_font, fill=QUEUE_IMG_MUTED)
 
-    row_y = table_y + row_height
-    if not shown_offers:
-        draw.text((table_x, row_y + 16), "No offers available for this selection.", font=body_font, fill=QUEUE_IMG_MUTED)
-    else:
-        for idx, offer in enumerate(shown_offers):
-            if idx % 2 == 0:
-                draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
+        # Items
+        item_types = offer.get("items", [])
+        item_label = ", ".join(prettify_shop_item_type(item.get("type")) for item in item_types[:2])
+        if len(item_types) > 2:
+            item_label += ", …"
+        item_label = truncate_to_width(draw, item_label, item_font, card_width - 32)
+        draw.text((x0 + 12, y0 + 40), item_label, font=item_font, fill=QUEUE_IMG_TEXT)
 
-            slot = offer.get("slot", "?")
-            item_types = offer.get("items", [])
-            item_label = ", ".join(truncate_text(prettify_shop_item_type(item.get("type")), 18) for item in item_types[:2])
-            if len(item_types) > 2:
-                item_label += ", …"
-            price = offer.get("price")
-            price_label = f"{price} 💰" if price is not None else "?"
-            purchased = offer.get("purchased")
-            status_label = "Bought" if purchased else "Available"
-            offer_type = "Daily" if slot in (0, 1) else "Weekly" if slot in (2, 3) else "Other"
+        # Price
+        price = offer.get("price")
+        price_text = f"{price:,} 💰" if price is not None else "?"
+        draw.text((x0 + 12, y0 + 75), price_text, font=price_font, fill=QUEUE_IMG_ACCENT)
 
-            row_values = [str(slot), item_label, price_label, status_label, offer_type]
-            for col_idx, value in enumerate(row_values):
-                x = columns[col_idx]
-                if col_idx == 0:
-                    draw.text((x, row_y + 16), value, font=body_font, fill=QUEUE_IMG_TEXT)
-                else:
-                    value_width = draw.textbbox((0, 0), value, font=body_font)[2]
-                    draw.text((x + (col_widths[col_idx] - value_width) / 2, row_y + 16), value, font=body_font, fill=QUEUE_IMG_TEXT)
+        # Status
+        status_text = "✓ Bought" if purchased else "◯ Available"
+        status_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
+        draw.text((x0 + 12, y1 - 30), status_text, font=status_font, fill=status_color)
 
-            row_y += row_height
+    # Page indicator
+    page_text = f"Page {page + 1} of {total_pages}"
+    page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
+    page_x = (QUEUE_IMG_WIDTH - page_width) / 2
+    draw.text((page_x, height - 52), page_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
@@ -1106,20 +1131,40 @@ def build_inventory_image_payload(target_user: discord.User, access_token: str, 
     return wrapper()
 
 
-def build_shop_image_payload(target_user: discord.User, access_token: str, mode: str = "all"):
+def build_shop_image_payload(target_user: discord.User, access_token: str, mode: str = "all", page: int = 0):
     async def wrapper():
         async with aiohttp.ClientSession() as session:
             market_data, error = await fetch_user_market(session, access_token)
             if error:
-                return None, None, error
+                return None, None, None, error, None
 
             if not market_data:
-                return None, None, "survev.de returned an empty market response."
+                return None, None, None, "survev.de returned an empty market response.", None
 
             username = market_data.get("username") or str(target_user)
-            image_buffer = generate_shop_image(username, market_data, mode)
-            file = discord.File(image_buffer, filename=f"shop_{target_user.id}_{mode}.png")
-            return f"{username}'s survev.de shop", file, None
+            offers = market_data.get("offers", [])
+            
+            # Filter by mode
+            if mode == "daily":
+                shown_offers = [o for o in offers if o.get("slot") in (0, 1)]
+            elif mode == "weekly":
+                shown_offers = [o for o in offers if o.get("slot") in (2, 3)]
+            else:
+                shown_offers = offers
+            
+            total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
+            
+            # Clamp page
+            page = max(0, min(page, total_pages - 1))
+            
+            image_buffer = generate_shop_image(username, market_data, mode, page)
+            filename = f"shop_{target_user.id}_{mode}_p{page}.png"
+            file = discord.File(image_buffer, filename=filename)
+            
+            mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
+            content = f"{username}'s {mode_label} Offers"
+            
+            return content, file, filename, None, total_pages
 
     return wrapper()
 
@@ -2314,8 +2359,78 @@ class InventoryPaginationView(discord.ui.View):
         pass
 
 
-# Store pagination state: msg_id -> (target_user, access_token, current_page, total_pages)
+# Store pagination state: msg_id -> (target_user, access_token, mode, current_page, total_pages)
 inventory_pagination_state: dict[int, tuple[discord.User, str, int, int]] = {}
+
+# Store market pagination state: msg_id -> (target_user, access_token, mode, current_page, total_pages)
+market_pagination_state: dict[int, tuple[discord.User, str, str, int, int]] = {}
+
+
+class ShopPaginationView(discord.ui.View):
+    """Persistent view for paginating through shop offers."""
+    def __init__(self, total_pages: int):
+        super().__init__(timeout=None)
+        self.total_pages = total_pages
+
+    def update_button_states(self, current_page: int):
+        self.prev_button.disabled = current_page <= 0
+        self.next_button.disabled = current_page >= self.total_pages - 1
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="market_prev")
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="market_next")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
+
+
+async def refresh_market_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, mode: str, page: int, msg_id: int):
+    """Refresh the market message with a new page."""
+    await interaction.response.defer()
+    async with aiohttp.ClientSession() as session:
+        market_data, error = await fetch_user_market(session, access_token)
+        if error or not market_data:
+            await interaction.followup.send("Failed to reload shop offers.")
+            return
+
+        username = market_data.get("username") or str(target_user)
+        offers = market_data.get("offers", [])
+        
+        # Filter by mode
+        if mode == "daily":
+            shown_offers = [o for o in offers if o.get("slot") in (0, 1)]
+        elif mode == "weekly":
+            shown_offers = [o for o in offers if o.get("slot") in (2, 3)]
+        else:
+            shown_offers = offers
+        
+        total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
+        
+        # Clamp page to valid range
+        page = max(0, min(page, total_pages - 1))
+        
+        # Update state
+        market_pagination_state[msg_id] = (target_user, access_token, mode, page, total_pages)
+        
+        # Generate new image
+        image_buffer = generate_shop_image(username, market_data, mode, page)
+        filename = f"shop_{target_user.id}_{mode}_p{page}.png"
+        file = discord.File(image_buffer, filename=filename)
+        
+        # Create embed
+        mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
+        embed = discord.Embed(title=f"{username}'s {mode_label} Offers", color=discord.Color.blurple())
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"Page {page + 1} of {total_pages}")
+        
+        # Create view with updated button states
+        view = ShopPaginationView(total_pages)
+        view.update_button_states(page)
+        
+        await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
 async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, page: int, msg_id: int):
@@ -2491,12 +2606,24 @@ class MarketGroup(discord.app_commands.Group):
                 await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
             return
 
-        content, file, error_text = await build_shop_image_payload(target, access_token, mode="daily")
+        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode="daily", page=0)
         if error_text:
             await interaction.followup.send(error_text)
             return
 
-        await interaction.followup.send(content=content, file=file)
+        # Create embed with image
+        embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"Page 1 of {total_pages}")
+
+        # Create pagination view
+        view = ShopPaginationView(total_pages)
+        view.update_button_states(0)
+
+        msg = await interaction.followup.send(embed=embed, file=file, view=view)
+        
+        # Store pagination state
+        market_pagination_state[msg.id] = (target, access_token, "daily", 0, total_pages)
 
     @discord.app_commands.command(name="weekly", description="View only weekly shop offers.")
     @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
@@ -2512,12 +2639,24 @@ class MarketGroup(discord.app_commands.Group):
                 await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
             return
 
-        content, file, error_text = await build_shop_image_payload(target, access_token, mode="weekly")
+        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode="weekly", page=0)
         if error_text:
             await interaction.followup.send(error_text)
             return
 
-        await interaction.followup.send(content=content, file=file)
+        # Create embed with image
+        embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
+        embed.set_image(url=f"attachment://{filename}")
+        embed.set_footer(text=f"Page 1 of {total_pages}")
+
+        # Create pagination view
+        view = ShopPaginationView(total_pages)
+        view.update_button_states(0)
+
+        msg = await interaction.followup.send(embed=embed, file=file, view=view)
+        
+        # Store pagination state
+        market_pagination_state[msg.id] = (target, access_token, "weekly", 0, total_pages)
 
 
 bot.tree.add_command(MarketGroup())
