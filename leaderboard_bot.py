@@ -102,7 +102,7 @@ QUEUE_PANEL_TITLE_PATTERN = re.compile(r"Results for Queue#(\d+)", re.IGNORECASE
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # needed so client.get_all_members() has data — required for real display names
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 
 @bot.event
 async def on_ready():
