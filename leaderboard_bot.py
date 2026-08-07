@@ -763,9 +763,10 @@ def rarity_label(rarity: int) -> str:
     return {
         0: "Stock",
         1: "Common",
-        2: "Rare",
-        3: "Epic",
-        4: "Legendary"
+        2: "Uncommon",
+        3: "Rare",
+        4: "Epic",
+        5: "Mythic"
     }.get(rarity, f"Rarity {rarity}")
 
 
