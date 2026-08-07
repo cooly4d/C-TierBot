@@ -1346,6 +1346,54 @@ def build_leaderboard_image_payload(period: str, days: int):
     return wrapper()
 
 
+def build_leaderboard_fries_embed():
+    users = get_all_users()
+    if not users:
+        return None, "No verified users found."
+
+    leaderboard_data = []
+    async def wrapper():
+        async with aiohttp.ClientSession() as session:
+            for discord_id, token in users:
+                market_data, error = await fetch_user_market(session, token)
+                if error or not market_data:
+                    continue
+
+                balance = market_data.get("balance")
+                if balance is None:
+                    continue
+
+                leaderboard_data.append({
+                    "discord_id": discord_id,
+                    "balance": balance
+                })
+
+        if not leaderboard_data:
+            return None, "No Golden Fries balances could be retrieved from verified users."
+
+        leaderboard_data.sort(key=lambda x: x["balance"], reverse=True)
+        embed = discord.Embed(
+            title="🍟 Server Golden Fries Leaderboard",
+            description="Top verified users by their survev.de Golden Fries balance.",
+            color=discord.Color.gold()
+        )
+
+        rank_emojis = ["🥇", "🥈", "🥉"]
+        leaderboard_text = ""
+        for idx, entry in enumerate(leaderboard_data[:10]):
+            rank = rank_emojis[idx] if idx < 3 else f"`#{idx+1}`"
+            leaderboard_text += (
+                f"{rank} <@{entry['discord_id']}>\n"
+                f"🍟 Balance: **{entry['balance']:,}**\n\n"
+            )
+
+        embed.add_field(name="Top Golden Fries", value=leaderboard_text[:1024], inline=False)
+        embed.set_footer(text="Data courtesy of survev.de API :)")
+        return embed, None
+
+    return wrapper()
+
+
 # ------------------------------------------------------------------
 # 3. NEATQUEUE INTEGRATION ENGINE
 # ------------------------------------------------------------------
@@ -1791,31 +1839,25 @@ class LeaderboardView(discord.ui.View):
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
-    content, file, error = await build_leaderboard_image_payload("Weekly", 7)
-    if error:
-        await interaction.followup.send(error)
-        return
-    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Weekly"))
+    embed = await generate_leaderboard_embed("Weekly", 7)
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
-    content, file, error = await build_leaderboard_image_payload("Monthly", 30)
-    if error:
-        await interaction.followup.send(error)
-        return
-    await interaction.followup.send(content=content, file=file, view=LeaderboardView("Monthly"))
+    embed = await generate_leaderboard_embed("Monthly", 30)
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly"))
 
 
 @bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")
 async def leaderboard_fries(interaction: discord.Interaction):
     await interaction.response.defer()
-    content, file, error = await build_leaderboard_fries_image_payload()
+    embed, error = await build_leaderboard_fries_embed()
     if error:
         await interaction.followup.send(error)
         return
-    await interaction.followup.send(content=content, file=file)
+    await interaction.followup.send(embed=embed)
 
 
 class QueueResultView(discord.ui.View):
