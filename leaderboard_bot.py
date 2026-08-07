@@ -369,7 +369,7 @@ def generate_queue_result_image(match_id: str, teams: list[list[dict]], winning_
     winner_bbox = draw.textbbox((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font)
     draw.text((QUEUE_IMG_PADDING, 99), winner_text, font=subtitle_font, fill=QUEUE_IMG_WIN)
 
-    score_font = load_font(56, "bold")
+    score_font = load_font(72, "bold")
     # Every teammate shares the same round-win count, so take the max (not sum) to avoid double-counting.
     team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
     if num_teams == 2:
