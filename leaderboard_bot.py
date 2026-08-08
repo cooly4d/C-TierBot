@@ -297,6 +297,7 @@ HALL_OF_FAME_RECORDS = {
     "most_kills": "Most Kills in a Queue",
     "most_avg_damage": "Most Avg Damage in a Queue",
 }
+MIN_GAMES_FOR_HALL_OF_FAME_UPDATE = 4
 
 
 # Helper: Look up the current holder of a hall of fame record, if any has been set yet.
@@ -328,6 +329,12 @@ def try_set_hall_of_fame_record(
             (record_type, value, discord_id, display_name, str(match_id), guild_id, datetime.now(timezone.utc).isoformat())
         )
         return True
+
+
+def clear_hall_of_fame_records() -> int:
+    with sqlite3.connect("leaderboard.db") as c:
+        cur = c.execute("DELETE FROM hall_of_fame")
+        return cur.rowcount if cur.rowcount is not None else 0
 
 
 def resolve_queue_font_path(paths: list[str | None]) -> str | None:
@@ -2389,6 +2396,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             "winning_team_index": winning_team_index,
             "match_history": match_history,
             "team_round_wins": team_round_wins,
+            "total_games_played": len(ordered_queue_guids),
         }, None
 
 
@@ -2675,8 +2683,17 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
 queue_result_view = QueueResultView()
 
 
-def check_queue_hall_of_fame_records(teams: list[list[dict]], match_id: str, guild_id: int) -> list[str]:
+def check_queue_hall_of_fame_records(
+    teams: list[list[dict]],
+    match_id: str,
+    guild_id: int,
+    total_games_played: int,
+    min_games_required: int = MIN_GAMES_FOR_HALL_OF_FAME_UPDATE,
+) -> list[str]:
     """Scans a queue's final teams for new all-time bests, updates the DB, and returns announcement lines."""
+    if total_games_played < min_games_required:
+        return []
+
     best_kills: tuple[int, dict] | None = None
     best_avg_damage: tuple[float, dict] | None = None
     for team in teams:
@@ -2726,7 +2743,8 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
 
     content = f"Queue stats for match #{match_id}"
-    record_announcements = check_queue_hall_of_fame_records(teams, match_id, guild_id)
+    total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
+    record_announcements = check_queue_hall_of_fame_records(teams, match_id, guild_id, total_games_played)
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
     return content, file, None
@@ -2776,6 +2794,18 @@ async def hall_of_fame(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await build_hall_of_fame_embed()
     await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="reset_hall_of_fame", description="Clear all Hall of Fame records.")
+@discord.app_commands.default_permissions(administrator=True)
+@discord.app_commands.guild_only()
+async def reset_hall_of_fame(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    deleted_count = clear_hall_of_fame_records()
+    await interaction.followup.send(
+        f"✅ Hall of Fame reset complete. Removed {deleted_count} record(s).",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(name="inventory", description="View a user's survev.de inventory")
