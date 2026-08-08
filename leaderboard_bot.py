@@ -45,6 +45,7 @@ QUEUE_FONT_BOLD_PATHS = [
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
 ]
+QUEUE_STATS_LOG_DIR = "log"
 #all supposed to be environment variables by cba
 
 
@@ -349,6 +350,56 @@ def resolve_queue_font_path(paths: list[str | None]) -> str | None:
         except Exception:
             continue
     return None
+
+
+def write_queue_stats_command_log(
+    interaction: discord.Interaction,
+    match_id: str,
+    match_result: dict | None,
+    error_text: str | None,
+):
+    """Write one JSON log entry per /queue_stats command execution."""
+    os.makedirs(QUEUE_STATS_LOG_DIR, exist_ok=True)
+
+    now_utc = datetime.now(timezone.utc)
+    timestamp = now_utc.strftime("%Y%m%dT%H%M%S.%fZ")
+    safe_match_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(match_id))
+    guild_id = interaction.guild_id
+    user_id = interaction.user.id if interaction.user else None
+    file_name = f"queue_stats_{timestamp}_g{guild_id}_u{user_id}_m{safe_match_id}.json"
+    file_path = os.path.join(QUEUE_STATS_LOG_DIR, file_name)
+
+    payload = {
+        "event": "queue_stats_command",
+        "requested_at_utc": now_utc.isoformat(),
+        "match_id": str(match_id),
+        "guild_id": guild_id,
+        "channel_id": interaction.channel_id,
+        "requested_by": {
+            "discord_id": user_id,
+            "username": str(interaction.user) if interaction.user else None,
+            "display_name": getattr(interaction.user, "display_name", None),
+        },
+        "status": "error" if error_text else "ok",
+        "error": error_text,
+        "result_summary": None,
+        "individual_games": [],
+    }
+
+    if match_result:
+        teams = match_result.get("teams") or []
+        payload["result_summary"] = {
+            "winning_team_index": match_result.get("winning_team_index"),
+            "team_round_wins": match_result.get("team_round_wins"),
+            "match_history": match_result.get("match_history"),
+            "total_games_played": match_result.get("total_games_played"),
+            "team_count": len(teams),
+            "players_per_team": [len(team) for team in teams],
+        }
+        payload["individual_games"] = match_result.get("individual_games") or []
+
+    with open(file_path, "w", encoding="utf-8") as log_file:
+        json.dump(payload, log_file, ensure_ascii=True, indent=2)
 
 QUEUE_FONT_PATH = resolve_queue_font_path(QUEUE_FONT_PATHS)
 QUEUE_FONT_BOLD_PATH = resolve_queue_font_path(QUEUE_FONT_BOLD_PATHS) or QUEUE_FONT_PATH
@@ -2265,23 +2316,21 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
         # round winners must be tracked per identity here and resolved via that identity later.
         round_player_rank_by_guid: dict[str, dict[str, int]] = {}
+        game_details_by_guid: dict[str, dict] = {}
         for guid in ordered_queue_guids:
             board = await fetch_public_match_data(session, guid)
             if not board:
                 continue
 
             round_ranks = round_player_rank_by_guid.setdefault(guid, {})
+            game_entry = game_details_by_guid.setdefault(guid, {"guid": guid, "players": []})
             for p in board:
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
                 key = slug or username.lower()
                 if not key:
                     continue
-                agg = players.setdefault(key, {
-                    "username": username, "slug": slug, "team_id": p.get("team_id"),
-                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None
-                })
-                agg["games"] += 1
+
                 raw_rank = p.get("rank")
                 parsed_rank = None
                 if raw_rank is not None:
@@ -2289,6 +2338,21 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                         parsed_rank = int(raw_rank)
                     except (TypeError, ValueError):
                         parsed_rank = None
+
+                game_entry["players"].append({
+                    "username": username,
+                    "slug": slug,
+                    "team_id": p.get("team_id"),
+                    "rank": parsed_rank,
+                    "kills": p.get("kills", 0),
+                    "damage_dealt": p.get("damage_dealt", 0),
+                })
+
+                agg = players.setdefault(key, {
+                    "username": username, "slug": slug, "team_id": p.get("team_id"),
+                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None
+                })
+                agg["games"] += 1
 
                 agg["wins"] += 1 if parsed_rank == 1 else 0
                 agg["kills"] += p.get("kills", 0)
@@ -2384,6 +2448,25 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             else:
                 round_winner_display_indices.append(None)
 
+        individual_games: list[dict] = []
+        for game_index, guid in enumerate(ordered_queue_guids, start=1):
+            winner_idx = round_winner_display_indices[game_index - 1] if game_index - 1 < len(round_winner_display_indices) else None
+            game_entry = game_details_by_guid.get(guid, {"guid": guid, "players": []})
+            players_for_game = game_entry.get("players", [])
+            players_for_game.sort(
+                key=lambda player: (
+                    player.get("rank") is None,
+                    player.get("rank") if player.get("rank") is not None else 999,
+                    -(player.get("damage_dealt") or 0),
+                )
+            )
+            individual_games.append({
+                "game_number": game_index,
+                "guid": guid,
+                "winning_display_team_index": winner_idx,
+                "players": players_for_game,
+            })
+
         match_history: list[bool | None] = []
         for winner_idx in round_winner_display_indices:
             if winner_idx is None or winning_team_index is None:
@@ -2397,6 +2480,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             "match_history": match_history,
             "team_round_wins": team_round_wins,
             "total_games_played": len(ordered_queue_guids),
+            "individual_games": individual_games,
         }, None
 
 
@@ -2723,14 +2807,14 @@ def check_queue_hall_of_fame_records(
 
 async def build_queue_stats_payload(match_id: str, guild_id: int):
     """Runs the NeatQueue/survev.de cross-reference and returns either
-    (content, discord.File, None) on success or (None, None, error_text) on failure."""
+    (content, discord.File, None, match_result) on success or (None, None, error_text, None) on failure."""
     match_result, error = await calculate_queue_match_stats(match_id, guild_id)
     if error:
-        return None, None, f"❌ {error}"
+        return None, None, f"❌ {error}", None
 
     teams = match_result["teams"]
     if not any(teams):
-        return None, None, "This NeatQueue match has no player roster to show stats for."
+        return None, None, "This NeatQueue match has no player roster to show stats for.", None
 
     await resolve_queue_user_display_names(teams, bot)
     image_buffer = generate_queue_result_image(
@@ -2747,7 +2831,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     record_announcements = check_queue_hall_of_fame_records(teams, match_id, guild_id, total_games_played)
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
-    return content, file, None
+    return content, file, None, match_result
 
 
 @bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
@@ -2759,7 +2843,8 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send("❌ This command only works in a server.")
         return
 
-    content, file, error_text = await build_queue_stats_payload(match_id, interaction.guild_id)
+    content, file, error_text, match_result = await build_queue_stats_payload(match_id, interaction.guild_id)
+    write_queue_stats_command_log(interaction, match_id, match_result, error_text)
     if error_text:
         await interaction.followup.send(error_text)
         return
@@ -3003,7 +3088,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
     # Give the game server a moment to finish writing this match's results before querying survev.de.
     await asyncio.sleep(QUEUE_RESULT_FETCH_DELAY_SECONDS)
 
-    content, file, error_text = await build_queue_stats_payload(match_id, message.guild.id)
+    content, file, error_text, _ = await build_queue_stats_payload(match_id, message.guild.id)
     if error_text:
         await message.reply(error_text)
     else:
@@ -3076,7 +3161,7 @@ async def backfill_missed_queue_results():
                 if not try_mark_match_processed(guild_id, match_id):
                     continue  # already posted live before the bot went down
 
-                content, file, error_text = await build_queue_stats_payload(match_id, guild_id)
+                content, file, error_text, _ = await build_queue_stats_payload(match_id, guild_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
                 await channel.send(content=f"*(Catching up)* {content}", file=file, view=queue_result_view)
