@@ -584,7 +584,7 @@ def generate_queue_result_image(
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 32), f"NeatQueue#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 32), f"#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
         winner_text = f"Team {winning_team_index + 1} Wins"
@@ -2875,7 +2875,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     )
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
 
-    content = f"Queue stats for match #{match_id}"
+    content = f"Queue stats for NeatQueue#{match_id}"
     total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
     record_announcements = check_queue_hall_of_fame_records(
         teams,
