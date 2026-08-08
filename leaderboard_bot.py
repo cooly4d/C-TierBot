@@ -89,9 +89,15 @@ cursor.execute('''
         display_name TEXT,
         match_id TEXT NOT NULL,
         guild_id INTEGER NOT NULL,
-        achieved_at TEXT NOT NULL
+        achieved_at TEXT NOT NULL,
+        duration_ms INTEGER
     )
 ''')
+# Older DBs created before duration tracking existed — add it on if missing.
+try:
+    cursor.execute("ALTER TABLE hall_of_fame ADD COLUMN duration_ms INTEGER")
+except sqlite3.OperationalError:
+    pass
 conn.commit()
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
@@ -297,28 +303,46 @@ def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
 HALL_OF_FAME_RECORDS = {
     "most_kills": "Most Kills in a Queue",
     "most_avg_damage": "Most Avg Damage in a Queue",
+    "longest_queue": "Longest Queue Duration",
 }
 MIN_GAMES_FOR_HALL_OF_FAME_UPDATE = 4
+
+
+def format_duration_ms(duration_ms: int) -> str:
+    total_seconds = max(0, int(duration_ms)) // 1000
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
 
 
 # Helper: Look up the current holder of a hall of fame record, if any has been set yet.
 def get_hall_of_fame_record(record_type: str) -> dict | None:
     with sqlite3.connect("leaderboard.db") as c:
         row = c.execute(
-            "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at FROM hall_of_fame WHERE record_type = ?",
+            "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms FROM hall_of_fame WHERE record_type = ?",
             (record_type,)
         ).fetchone()
         if row is None:
             return None
         return {
             "value": row[0], "discord_id": row[1], "display_name": row[2],
-            "match_id": row[3], "guild_id": row[4], "achieved_at": row[5]
+            "match_id": row[3], "guild_id": row[4], "achieved_at": row[5], "duration_ms": row[6]
         }
 
 
 # Helper: Overwrites a hall of fame record only if value beats the current holder (or none exists yet).
 def try_set_hall_of_fame_record(
-    record_type: str, value: float, discord_id: int | None, display_name: str, match_id: str, guild_id: int
+    record_type: str,
+    value: float,
+    discord_id: int | None,
+    display_name: str,
+    match_id: str,
+    guild_id: int,
+    duration_ms: int | None = None,
 ) -> bool:
     with sqlite3.connect("leaderboard.db") as c:
         existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = ?", (record_type,)).fetchone()
@@ -326,8 +350,17 @@ def try_set_hall_of_fame_record(
             return False
         c.execute(
             "INSERT OR REPLACE INTO hall_of_fame "
-            "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (record_type, value, discord_id, display_name, str(match_id), guild_id, datetime.now(timezone.utc).isoformat())
+            "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                record_type,
+                value,
+                discord_id,
+                display_name,
+                str(match_id),
+                guild_id,
+                datetime.now(timezone.utc).isoformat(),
+                duration_ms,
+            )
         )
         return True
 
@@ -2480,6 +2513,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             "match_history": match_history,
             "team_round_wins": team_round_wins,
             "total_games_played": len(ordered_queue_guids),
+            "duration_ms": max(0, end_ms - start_ms),
             "individual_games": individual_games,
         }, None
 
@@ -2772,6 +2806,7 @@ def check_queue_hall_of_fame_records(
     match_id: str,
     guild_id: int,
     total_games_played: int,
+    duration_ms: int | None = None,
     min_games_required: int = MIN_GAMES_FOR_HALL_OF_FAME_UPDATE,
 ) -> list[str]:
     """Scans a queue's final teams for new all-time bests, updates the DB, and returns announcement lines."""
@@ -2802,6 +2837,20 @@ def check_queue_hall_of_fame_records(
         if try_set_hall_of_fame_record(record_type, value, entry.get("discord_id"), holder_name, match_id, guild_id):
             value_text = f"{value:,.0f}" if record_type == "most_avg_damage" else str(int(value))
             announcements.append(f"🏆 New Hall of Fame record! **{HALL_OF_FAME_RECORDS[record_type]}**: {value_text} by {holder_name}")
+
+    if duration_ms is not None and duration_ms > 0:
+        if try_set_hall_of_fame_record(
+            "longest_queue",
+            float(duration_ms),
+            None,
+            "Queue Duration",
+            match_id,
+            guild_id,
+            duration_ms=duration_ms,
+        ):
+            announcements.append(
+                f"🏆 New Hall of Fame record! **{HALL_OF_FAME_RECORDS['longest_queue']}**: {format_duration_ms(duration_ms)}"
+            )
     return announcements
 
 
@@ -2828,7 +2877,13 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
 
     content = f"Queue stats for match #{match_id}"
     total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
-    record_announcements = check_queue_hall_of_fame_records(teams, match_id, guild_id, total_games_played)
+    record_announcements = check_queue_hall_of_fame_records(
+        teams,
+        match_id,
+        guild_id,
+        total_games_played,
+        duration_ms=match_result.get("duration_ms"),
+    )
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
     return content, file, None, match_result
@@ -2863,13 +2918,22 @@ async def build_hall_of_fame_embed() -> discord.Embed:
         if record is None:
             embed.add_field(name=label, value="No record set yet.", inline=False)
             continue
-        value_text = f"{record['value']:,.0f}" if record_type == "most_avg_damage" else str(int(record["value"]))
-        holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]
-        embed.add_field(
-            name=label,
-            value=f"**{value_text}** — {holder} (Queue #{record['match_id']})",
-            inline=False
-        )
+        if record_type == "most_avg_damage":
+            value_text = f"{record['value']:,.0f}"
+            holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]
+            field_value = f"**{value_text}** — {holder} (Queue #{record['match_id']})"
+        elif record_type == "longest_queue":
+            raw_duration = record.get("duration_ms")
+            if raw_duration is None:
+                raw_duration = int(record["value"])
+            value_text = format_duration_ms(int(raw_duration))
+            field_value = f"**{value_text}** (Queue #{record['match_id']})"
+        else:
+            value_text = str(int(record["value"]))
+            holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]
+            field_value = f"**{value_text}** — {holder} (Queue #{record['match_id']})"
+
+        embed.add_field(name=label, value=field_value, inline=False)
     embed.set_footer(text="Data courtesy of NeatQueue & survev.de APIs :)")
     return embed
 
