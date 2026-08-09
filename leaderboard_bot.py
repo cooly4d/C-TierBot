@@ -1954,7 +1954,7 @@ def build_leaderboard_fries_embed():
 
         leaderboard_data.sort(key=lambda x: x["balance"], reverse=True)
         embed = discord.Embed(
-            title="🍟 Server Golden Fries Leaderboard",
+            title="<:goldenfries:1535978920481136700> Server Golden Fries Leaderboard",
             description="Top verified users by their survev.de Golden Fries balance.",
             color=discord.Color.gold()
         )
@@ -1965,7 +1965,7 @@ def build_leaderboard_fries_embed():
             rank = rank_emojis[idx] if idx < 3 else f"`#{idx+1}`"
             leaderboard_text += (
                 f"{rank} <@{entry['discord_id']}>\n"
-                f"🍟 Balance: **{entry['balance']:,}**\n\n"
+                f"Balance: <:goldenfries:1535978920481136700> **{entry['balance']:,}**\n\n"
             )
 
         embed.add_field(name="Top Golden Fries", value=leaderboard_text[:1024], inline=False)
