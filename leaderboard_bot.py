@@ -2957,7 +2957,7 @@ async def reset_hall_of_fame(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="inventory", description="View a user's survev.de inventory")
+@bot.tree.command(name="inventory", description="View a user's survev.de inventory and Goldenv Fries balance.")
 @discord.app_commands.describe(member="Discord member whose inventory to display. Omit to use yourself.")
 async def inventory(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
@@ -2989,7 +2989,7 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
     inventory_pagination_state[msg.id] = (target, access_token, "all", 0, total_pages or 1)
 
 
-@bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance as a graphic.")
+@bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance.")
 @discord.app_commands.describe(member="Discord member whose balance to display. Omit to use yourself.")
 async def goldenfries(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
