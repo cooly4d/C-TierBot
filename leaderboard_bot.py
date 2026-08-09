@@ -1224,7 +1224,7 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
         fill=QUEUE_IMG_MUTED
     )
 
-    balance_text = f"Balance: {balance:,} 🍟"
+    balance_text = f"Balance: {balance:,} <:goldenfries:1535978920481136700>"
     draw.text((QUEUE_IMG_PADDING, 130), balance_text, font=status_font, fill=QUEUE_IMG_ACCENT)
 
     # Render cards
@@ -1401,7 +1401,7 @@ def build_shop_image_payload(target_user: discord.User, access_token: str, mode:
     return wrapper()
 
 
-def build_goldenfries_image_payload(target_user: discord.User, access_token: str):
+def build_goldenfries_embed_payload(target_user: discord.User, access_token: str):
     async def wrapper():
         async with aiohttp.ClientSession() as session:
             market_data, error = await fetch_user_market(session, access_token)
@@ -1413,9 +1413,7 @@ def build_goldenfries_image_payload(target_user: discord.User, access_token: str
 
             username = market_data.get("username") or str(target_user)
             balance = market_data.get("balance", 0)
-            image_buffer = generate_goldenfries_image(username, balance)
-            file = discord.File(image_buffer, filename=f"goldenfries_{target_user.id}.png")
-            return f"{username}'s Golden Fries balance", file, None
+            return username, int(balance), None
 
     return wrapper()
 
@@ -1965,7 +1963,7 @@ def build_leaderboard_fries_embed():
             rank = rank_emojis[idx] if idx < 3 else f"`#{idx+1}`"
             leaderboard_text += (
                 f"{rank} <@{entry['discord_id']}>\n"
-                f"Balance: <:goldenfries:1535978920481136700> **{entry['balance']:,}**\n\n"
+                f"🍟 Balance: **{entry['balance']:,}**\n\n"
             )
 
         embed.add_field(name="Top Golden Fries", value=leaderboard_text[:1024], inline=False)
@@ -2957,7 +2955,7 @@ async def reset_hall_of_fame(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="inventory", description="View a user's survev.de inventory and Goldenv Fries balance.")
+@bot.tree.command(name="inventory", description="View a user's survev.de inventory")
 @discord.app_commands.describe(member="Discord member whose inventory to display. Omit to use yourself.")
 async def inventory(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
@@ -3003,12 +3001,18 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
             await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
-    content, file, error_text = await build_goldenfries_image_payload(target, access_token)
+    username, balance, error_text = await build_goldenfries_embed_payload(target, access_token)
     if error_text:
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file)
+    embed = discord.Embed(
+        title="<:goldenfries:1535978920481136700> Golden Fries Balance",
+        description=f"**{username}** currently has **{balance:,}** Golden Fries.",
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text="Data courtesy of survev.de API :)")
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="compare", description="Compare two members' survev.de stats side-by-side.")
