@@ -3008,7 +3008,7 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
 
     embed = discord.Embed(
         title="<:goldenfries:1535978920481136700> Golden Fries Balance",
-        description=f"**{username}** currently has **{balance:,}** Golden Fries. <:goldenfries:1535978920481136700>",
+        description=f"**{username}** currently has **{balance:,}** Golden Fries <:goldenfries:1535978920481136700>.",
         color=discord.Color.gold(),
     )
     embed.set_footer(text="Data courtesy of survev.de API :)")
