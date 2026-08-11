@@ -98,6 +98,17 @@ try:
     cursor.execute("ALTER TABLE hall_of_fame ADD COLUMN duration_ms INTEGER")
 except sqlite3.OperationalError:
     pass
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS monthly_queue_leaderboard_stats (
+        discord_id INTEGER NOT NULL,
+        month_key TEXT NOT NULL,
+        total_damage REAL NOT NULL,
+        total_kills INTEGER NOT NULL,
+        total_time_ms INTEGER NOT NULL,
+        games_played INTEGER NOT NULL,
+        PRIMARY KEY (discord_id, month_key)
+    )
+''')
 conn.commit()
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
@@ -114,8 +125,9 @@ bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 @bot.event
 async def on_ready():
     try:
-        bot.add_view(queue_result_view)
-        print(f"DEBUG - add_view succeeded: is_persistent={queue_result_view.is_persistent()} children={queue_result_view.children}")
+        view = get_queue_result_view()
+        bot.add_view(view)
+        print(f"DEBUG - add_view succeeded: is_persistent={view.is_persistent()} children={view.children}")
     except Exception as exc:
         print(f"DEBUG - add_view FAILED: {exc!r}")
 
@@ -160,7 +172,7 @@ async def log_interaction(interaction: discord.Interaction):
 
     def get_selected_sort_from_message(message: discord.Message | None) -> str:
         if message is None:
-            return "kills"
+            return "avg_damage"
         for row in getattr(message, "components", []):
             for component in getattr(row, "children", []):
                 if getattr(component, "custom_id", None) != "leaderboard_sort":
@@ -168,7 +180,7 @@ async def log_interaction(interaction: discord.Interaction):
                 for option in getattr(component, "options", []):
                     if getattr(option, "default", False):
                         return option.value
-        return "kills"
+        return "avg_damage"
 
     def infer_leaderboard_period_from_message(message: discord.Message | None) -> tuple[str, int]:
         if message is None or not message.embeds:
@@ -195,7 +207,7 @@ async def log_interaction(interaction: discord.Interaction):
     elif custom_id == "leaderboard_sort":
         print(f"DEBUG - handling leaderboard_sort select for {interaction.user}")
         selected_values = interaction.data.get("values") or []
-        selected_sort = selected_values[0] if selected_values else "kills"
+        selected_sort = selected_values[0] if selected_values else "avg_damage"
         period, days = infer_leaderboard_period_from_message(interaction.message)
         await refresh_leaderboard_message(interaction, period, days, selected_sort)
     elif custom_id == "inventory_prev" or custom_id == "inventory_next":
@@ -438,11 +450,116 @@ QUEUE_FONT_PATH = resolve_queue_font_path(QUEUE_FONT_PATHS)
 QUEUE_FONT_BOLD_PATH = resolve_queue_font_path(QUEUE_FONT_BOLD_PATHS) or QUEUE_FONT_PATH
 
 LEADERBOARD_SORT_CONFIG = {
-    "kills": {"label": "Kills", "emoji": "⚔️"},
-    "wins": {"label": "Wins", "emoji": "🏆"},
-    "games": {"label": "Games", "emoji": "🎮"},
-    "damage": {"label": "Damage", "emoji": "💥"},
+    "avg_damage": {"label": "Avg Damage", "emoji": "💥"},
+    "total_kills": {"label": "Total Kills", "emoji": "⚔️"},
+    "total_time": {"label": "Total Time", "emoji": "⏱️"},
 }
+
+
+def get_month_key(dt: datetime | None = None) -> str:
+    dt = dt or datetime.now(timezone.utc)
+    return dt.strftime("%Y-%m")
+
+
+def get_month_label(month_key: str) -> str:
+    try:
+        return datetime.strptime(month_key, "%Y-%m").strftime("%B %Y")
+    except ValueError:
+        return month_key
+
+
+def get_monthly_stats(month_key: str | None = None) -> list[dict]:
+    month_key = month_key or get_month_key()
+    with sqlite3.connect("leaderboard.db") as c:
+        rows = c.execute(
+            """
+            SELECT discord_id, total_damage, total_kills, total_time_ms, games_played
+            FROM monthly_queue_leaderboard_stats
+            WHERE month_key = ?
+            ORDER BY discord_id
+            """,
+            (month_key,),
+        ).fetchall()
+    return [
+        {
+            "discord_id": row[0],
+            "total_damage": row[1],
+            "total_kills": row[2],
+            "total_time_ms": row[3],
+            "games_played": row[4],
+            "avg_damage": (row[1] / row[4]) if row[4] else 0,
+        }
+        for row in rows
+    ]
+
+
+def save_monthly_stats(
+    discord_id: int,
+    month_key: str,
+    total_damage: float,
+    total_kills: int,
+    total_time_ms: int,
+    games_played: int,
+) -> None:
+    with sqlite3.connect("leaderboard.db") as c:
+        existing = c.execute(
+            """
+            SELECT total_damage, total_kills, total_time_ms, games_played
+            FROM monthly_queue_leaderboard_stats
+            WHERE discord_id = ? AND month_key = ?
+            """,
+            (discord_id, month_key),
+        ).fetchone()
+        if existing is None:
+            c.execute(
+                """
+                INSERT INTO monthly_queue_leaderboard_stats
+                (discord_id, month_key, total_damage, total_kills, total_time_ms, games_played)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (discord_id, month_key, total_damage, total_kills, total_time_ms, games_played),
+            )
+        else:
+            c.execute(
+                """
+                UPDATE monthly_queue_leaderboard_stats
+                SET total_damage = ?, total_kills = ?, total_time_ms = ?, games_played = ?
+                WHERE discord_id = ? AND month_key = ?
+                """,
+                (
+                    existing[0] + total_damage,
+                    existing[1] + total_kills,
+                    existing[2] + total_time_ms,
+                    existing[3] + games_played,
+                    discord_id,
+                    month_key,
+                ),
+            )
+
+
+def record_monthly_stats_from_queue_result(match_result: dict, month_key: str | None = None) -> None:
+    month_key = month_key or get_month_key()
+    duration_ms = int(match_result.get("duration_ms") or 0)
+    for team in match_result.get("teams") or []:
+        for entry in team:
+            discord_id = entry.get("discord_id")
+            if discord_id is None:
+                continue
+            stats = entry.get("stats") or {}
+            games_played = int(stats.get("games") or 0)
+            total_kills = int(stats.get("kills") or 0)
+            total_damage = float(stats.get("damage") or 0)
+            if games_played <= 0 and total_kills <= 0 and total_damage <= 0 and duration_ms <= 0:
+                continue
+            save_monthly_stats(discord_id, month_key, total_damage, total_kills, duration_ms, games_played)
+
+
+def format_leaderboard_stat_value(sort_key: str, value: float | int) -> str:
+    if sort_key == "avg_damage":
+        return f"{float(value):,.0f}"
+    if sort_key == "total_time":
+        return format_duration_ms(int(value))
+    return f"{int(value):,}"
 
 
 def load_font(size: int, weight: str = "regular"):
@@ -1748,38 +1865,25 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> 
     return data if isinstance(data, list) else None
 
 
-async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kills"):
-    sort_key = sort_by if sort_by in LEADERBOARD_SORT_CONFIG else "kills"
+async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "avg_damage"):
+    sort_key = sort_by if sort_by in LEADERBOARD_SORT_CONFIG else "avg_damage"
     sort_label = LEADERBOARD_SORT_CONFIG[sort_key]["label"]
     sort_emoji = LEADERBOARD_SORT_CONFIG[sort_key]["emoji"]
 
-    now = datetime.now(timezone.utc)
-    to_ms = int(now.timestamp() * 1000)
-    from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
-
-    users = get_all_users()
-    leaderboard_data = []
-
-    async with aiohttp.ClientSession() as session:
-        for discord_id, token in users:
-            stats = await fetch_player_timeframe_stats(session, token, from_ms, to_ms)
-            if stats and stats["games"] > 0:
-                leaderboard_data.append({
-                    "discord_id": discord_id,
-                    "stats": stats
-                })
-
+    month_key = get_month_key()
+    rows = get_monthly_stats(month_key)
+    leaderboard_data = [{"discord_id": row["discord_id"], "stats": row} for row in rows]
     leaderboard_data.sort(key=lambda x: x["stats"][sort_key], reverse=True)
 
     embed = discord.Embed(
         title=f"🏆 Server {period} Leaderboard",
-        description=f"Performance over the past **{days} days** (Sorted by {sort_label})",
+        description=f"NeatQueue stats for **{get_month_label(month_key)}** (Sorted by {sort_label})",
         color=discord.Color.gold() if period == "Weekly" else discord.Color.purple()
     )
     embed.set_image(url=LEADERBOARD_BANNER_URL)
 
     if not leaderboard_data:
-        embed.description = "No matches logged by verified members in this timeframe."
+        embed.description = "No NeatQueue results recorded for this month yet."
         embed.set_footer(text="Data courtesy of survev.de API :)")
         return embed
 
@@ -1789,7 +1893,7 @@ async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kil
     for idx, entry in enumerate(leaderboard_data[:10]): # Top 10
         rank = rank_emojis[idx] if idx < 3 else f"`#{idx+1}`"
         stats = entry["stats"]
-        stat_value = f"{stats[sort_key]:,}" if sort_key == "damage" else str(stats[sort_key])
+        stat_value = format_leaderboard_stat_value(sort_key, stats[sort_key])
         leaderboard_text += f"{rank} <@{entry['discord_id']}>\n{sort_emoji} {sort_label}: **{stat_value}**\n\n"
 
     embed.add_field(name=f"Top Players by {sort_label}", value=leaderboard_text[:1024], inline=False)
@@ -1821,7 +1925,8 @@ def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[di
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
     draw.text((QUEUE_IMG_PADDING, 26), f"Server {period} Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 84), f"Performance over the past {days} days (Sorted by Kills)", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    month_key = get_month_key()
+    draw.text((QUEUE_IMG_PADDING, 84), f"NeatQueue stats for {get_month_label(month_key)} (Sorted by Avg Damage)", font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
     table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
     table_x = QUEUE_IMG_PADDING
@@ -1835,7 +1940,7 @@ def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[di
     col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
 
     header_y = table_top
-    labels = ["#", "Player", "Kills", "Wins", "Damage"]
+    labels = ["#", "Player", "Avg Dmg", "Total Kills", "Total Time"]
     for col_idx, label in enumerate(labels):
         label_x = columns[col_idx]
         label_width = draw.textbbox((0, 0), label, font=header_font)[2]
@@ -1854,9 +1959,9 @@ def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[di
         row_values = [
             str(entry["rank"]),
             display_name,
-            str(stats["kills"]),
-            str(stats["wins"]),
-            f"{stats['damage']:,}"
+            format_leaderboard_stat_value("avg_damage", stats["avg_damage"]),
+            format_leaderboard_stat_value("total_kills", stats["total_kills"]),
+            format_leaderboard_stat_value("total_time", stats["total_time_ms"]),
         ]
 
         for col_idx, value in enumerate(row_values):
@@ -1886,43 +1991,23 @@ def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[di
 
 
 def build_leaderboard_image_payload(period: str, days: int):
-    now = datetime.now(timezone.utc)
-    to_ms = int(now.timestamp() * 1000)
-    from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+    leaderboard_data = [{"discord_id": row["discord_id"], "stats": row} for row in get_monthly_stats(get_month_key())]
+    if not leaderboard_data:
+        return None, None, "No NeatQueue results recorded for this month yet."
 
-    users = get_all_users()
-    leaderboard_data = []
+    leaderboard_data.sort(key=lambda x: x["stats"]["avg_damage"], reverse=True)
+    top_rows = []
+    for idx, entry in enumerate(leaderboard_data[:10], start=1):
+        top_rows.append({
+            "rank": idx,
+            "discord_id": entry["discord_id"],
+            "stats": entry["stats"],
+            "display_name": None
+        })
 
-    async def build():
-        async with aiohttp.ClientSession() as session:
-            for discord_id, token in users:
-                stats = await fetch_player_timeframe_stats(session, token, from_ms, to_ms)
-                if stats and stats["games"] > 0:
-                    leaderboard_data.append({
-                        "discord_id": discord_id,
-                        "stats": stats
-                    })
-
-    async def wrapper():
-        await build()
-        if not leaderboard_data:
-            return None, None, "No matches logged by verified members in this timeframe."
-
-        leaderboard_data.sort(key=lambda x: x["stats"]["kills"], reverse=True)
-        top_rows = []
-        for idx, entry in enumerate(leaderboard_data[:10], start=1):
-            top_rows.append({
-                "rank": idx,
-                "discord_id": entry["discord_id"],
-                "stats": entry["stats"],
-                "display_name": None
-            })
-
-        image_buffer = generate_leaderboard_image(period, days, top_rows)
-        file = discord.File(image_buffer, filename=f"leaderboard_{period.lower()}.png")
-        return f"Server {period} Leaderboard", file, None
-
-    return wrapper()
+    image_buffer = generate_leaderboard_image(period, days, top_rows)
+    file = discord.File(image_buffer, filename=f"leaderboard_{period.lower()}.png")
+    return f"Server {period} Leaderboard", file, None
 
 
 def build_leaderboard_fries_embed():
@@ -2519,7 +2604,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 # ------------------------------------------------------------------
 # 4. SLASH COMMANDS
 # ------------------------------------------------------------------
-async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int, sort_by: str = "kills"):
+async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int, sort_by: str = "avg_damage"):
     if not interaction.response.is_done():
         try:
             await interaction.response.defer()
@@ -2530,8 +2615,8 @@ async def refresh_leaderboard_message(interaction: discord.Interaction, period: 
 
 
 class LeaderboardSortSelect(discord.ui.Select):
-    def __init__(self, selected_sort: str = "kills"):
-        sort_key = selected_sort if selected_sort in LEADERBOARD_SORT_CONFIG else "kills"
+    def __init__(self, selected_sort: str = "avg_damage"):
+        sort_key = selected_sort if selected_sort in LEADERBOARD_SORT_CONFIG else "avg_damage"
         options = [
             discord.SelectOption(label=cfg["label"], value=key, default=(key == sort_key))
             for key, cfg in LEADERBOARD_SORT_CONFIG.items()
@@ -2550,15 +2635,15 @@ class LeaderboardSortSelect(discord.ui.Select):
         if isinstance(self.view, LeaderboardView):
             period = self.view.initial_period
             days = 30 if period == "Monthly" else 7
-        selected_sort = self.values[0] if self.values else "kills"
+        selected_sort = self.values[0] if self.values else "avg_damage"
         await refresh_leaderboard_message(interaction, period, days, selected_sort)
 
 
 class LeaderboardView(discord.ui.View):
-    def __init__(self, initial_period: str = "Weekly", initial_sort: str = "kills"):
+    def __init__(self, initial_period: str = "Weekly", initial_sort: str = "avg_damage"):
         super().__init__(timeout=None)
         self.initial_period = initial_period
-        self.initial_sort = initial_sort if initial_sort in LEADERBOARD_SORT_CONFIG else "kills"
+        self.initial_sort = initial_sort if initial_sort in LEADERBOARD_SORT_CONFIG else "avg_damage"
 
         if initial_period == "Weekly":
             self.weekly_button.style = discord.ButtonStyle.primary
@@ -2581,15 +2666,15 @@ class LeaderboardView(discord.ui.View):
 @bot.tree.command(name="leaderboard_weekly", description="View the top players over the past 7 days.")
 async def leaderboard_weekly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed("Weekly", 7, "kills")
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly", "kills"))
+    embed = await generate_leaderboard_embed("Weekly", 7, "avg_damage")
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly", "avg_damage"))
 
 
 @bot.tree.command(name="leaderboard_monthly", description="View the top players over the past 30 days.")
 async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
-    embed = await generate_leaderboard_embed("Monthly", 30, "kills")
-    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly", "kills"))
+    embed = await generate_leaderboard_embed("Monthly", 30, "avg_damage")
+    await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly", "avg_damage"))
 
 
 @bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")
@@ -2796,7 +2881,14 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
         await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
-queue_result_view = QueueResultView()
+queue_result_view: QueueResultView | None = None
+
+
+def get_queue_result_view() -> QueueResultView:
+    global queue_result_view
+    if queue_result_view is None:
+        queue_result_view = QueueResultView()
+    return queue_result_view
 
 
 def check_queue_hall_of_fame_records(
@@ -2871,6 +2963,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_result.get("match_history"),
         match_result.get("team_round_wins"),
     )
+    record_monthly_stats_from_queue_result(match_result)
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
 
     content = f"Queue stats for NeatQueue#{match_id}"
@@ -2902,7 +2995,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file, view=queue_result_view)
+    await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
 
 
 async def build_hall_of_fame_embed() -> discord.Embed:
@@ -3160,7 +3253,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
     if error_text:
         await message.reply(error_text)
     else:
-        await message.reply(content=content, file=file, view=queue_result_view)
+        await message.reply(content=content, file=file, view=get_queue_result_view())
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
@@ -3232,10 +3325,11 @@ async def backfill_missed_queue_results():
                 content, file, error_text, _ = await build_queue_stats_payload(match_id, guild_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
-                await channel.send(content=f"*(Catching up)* {content}", file=file, view=queue_result_view)
+                await channel.send(content=f"*(Catching up)* {content}", file=file, view=get_queue_result_view())
 
             update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 
 
 # --- RUN BOT ---
-bot.run(DISCORD_BOT_TOKEN)
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN)
