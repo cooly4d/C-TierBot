@@ -93,9 +93,33 @@ cursor.execute('''
         duration_ms INTEGER
     )
 ''')
+# Cached per-player queue results used by /profile.
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS player_queue_stats (
+        guild_id INTEGER NOT NULL,
+        match_id TEXT NOT NULL,
+        player_key TEXT NOT NULL,
+        discord_id INTEGER,
+        display_name TEXT,
+        username TEXT,
+        slug TEXT,
+        team_index INTEGER NOT NULL,
+        total_damage INTEGER NOT NULL,
+        avg_damage REAL NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        match_start_ms INTEGER,
+        match_end_ms INTEGER,
+        cached_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, match_id, player_key)
+    )
+''')
 # Older DBs created before duration tracking existed — add it on if missing.
 try:
     cursor.execute("ALTER TABLE hall_of_fame ADD COLUMN duration_ms INTEGER")
+except sqlite3.OperationalError:
+    pass
+try:
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_queue_stats_discord_id ON player_queue_stats(discord_id)")
 except sqlite3.OperationalError:
     pass
 conn.commit()
@@ -370,6 +394,95 @@ def clear_hall_of_fame_records() -> int:
     with sqlite3.connect("leaderboard.db") as c:
         cur = c.execute("DELETE FROM hall_of_fame")
         return cur.rowcount if cur.rowcount is not None else 0
+
+
+def is_current_utc_month(timestamp_ms: int | None) -> bool:
+    if timestamp_ms is None:
+        return False
+
+    timestamp_dt = datetime.fromtimestamp(int(timestamp_ms) / 1000, tz=timezone.utc)
+    now = datetime.now(timezone.utc)
+    return timestamp_dt.year == now.year and timestamp_dt.month == now.month
+
+
+def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -> int:
+    """Caches finalized per-player queue stats for /profile when the match is eligible."""
+    if not match_result.get("is_final"):
+        return 0
+
+    if not is_current_utc_month(match_result.get("match_end_ms")):
+        return 0
+
+    teams = match_result.get("teams") or []
+    total_players = sum(len(team) for team in teams)
+    if total_players <= 4:
+        return 0
+
+    duration_ms = match_result.get("duration_ms")
+    if duration_ms is None:
+        return 0
+
+    cached_at = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for team_index, team in enumerate(teams):
+        for entry in team:
+            stats = entry.get("stats") or {}
+            discord_id = entry.get("discord_id")
+            username = entry.get("username")
+            slug = entry.get("slug")
+            display_name = entry.get("display_name") or username or "Unknown"
+            if discord_id is not None:
+                player_key = f"discord:{discord_id}"
+            else:
+                player_key = f"guest:{slug or username or display_name}"
+
+            games = int(stats.get("games") or 0)
+            total_damage = int(stats.get("damage") or 0)
+            avg_damage = total_damage / games if games > 0 else 0.0
+
+            rows.append((
+                guild_id,
+                str(match_id),
+                player_key,
+                discord_id,
+                display_name,
+                username,
+                slug,
+                team_index,
+                total_damage,
+                avg_damage,
+                int(duration_ms),
+                match_result.get("match_start_ms"),
+                match_result.get("match_end_ms"),
+                cached_at,
+            ))
+
+    if not rows:
+        return 0
+
+    with sqlite3.connect("leaderboard.db") as c:
+        c.executemany(
+            """
+            INSERT OR REPLACE INTO player_queue_stats (
+                guild_id, match_id, player_key, discord_id, display_name, username, slug,
+                team_index, total_damage, avg_damage, duration_ms, match_start_ms, match_end_ms, cached_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+
+    return len(rows)
+
+
+def get_player_queue_duration_summary(discord_id: int) -> tuple[int, int]:
+    with sqlite3.connect("leaderboard.db") as c:
+        row = c.execute(
+            "SELECT COUNT(*), COALESCE(SUM(duration_ms), 0) FROM player_queue_stats WHERE discord_id = ?",
+            (discord_id,),
+        ).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row[0] or 0), int(row[1] or 0)
 
 
 def resolve_queue_font_path(paths: list[str | None]) -> str | None:
@@ -2259,6 +2372,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         is_finished = match is not None and get_nested_value(match, "winner") is not None
 
         if is_finished:
+            is_final = True
             # NeatQueue returns the requested match as the first entry in the result.
 
             start_ms = get_match_start_ms(match)
@@ -2271,6 +2385,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             if not teams:
                 return None, "NeatQueue match entry contains no player roster."
         else:
+            is_final = False
             # No finished-match history yet — the queue is probably still in progress. Fall back to
             # NeatQueue's own panel/winner Discord message: its post time is the start, and "now" is
             # the end, so /queue_stats still works mid-queue instead of erroring out.
@@ -2527,6 +2642,9 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             "team_round_wins": team_round_wins,
             "total_games_played": len(ordered_queue_guids),
             "duration_ms": max(0, end_ms - start_ms),
+            "match_start_ms": start_ms,
+            "match_end_ms": end_ms,
+            "is_final": is_final,
             "individual_games": individual_games,
         }, None
 
@@ -2897,6 +3015,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
 
     content = f"Queue stats for NeatQueue#{match_id}"
     total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
+
     record_announcements = check_queue_hall_of_fame_records(
         teams,
         match_id,
@@ -2909,9 +3028,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     return content, file, None, match_result
 
 
-@bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
-@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
-async def queue_stats(interaction: discord.Interaction, match_id: str):
+async def run_queue_results(interaction: discord.Interaction, match_id: str):
     await interaction.response.defer()
 
     if interaction.guild_id is None:
@@ -2924,7 +3041,43 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send(error_text)
         return
 
+    cache_player_queue_stats(match_id, interaction.guild_id, match_result)
+
     await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
+
+
+@bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
+@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
+async def queue_stats(interaction: discord.Interaction, match_id: str):
+    await run_queue_results(interaction, match_id)
+
+
+@bot.tree.command(name="queueresults", description="Calculate player damage and stats for a specific NeatQueue match number.")
+@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
+async def queueresults(interaction: discord.Interaction, match_id: str):
+    await run_queue_results(interaction, match_id)
+
+
+@bot.tree.command(name="profile", description="View a user's cached NeatQueue duration.")
+@discord.app_commands.describe(member="Discord member whose NeatQueue time to display. Omit to use yourself.")
+async def profile(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
+
+    total_matches, total_duration_ms = get_player_queue_duration_summary(target.id)
+    if total_matches == 0:
+        await interaction.followup.send(f"No cached NeatQueue results found for {target.display_name} yet.")
+        return
+
+    embed = discord.Embed(
+        title=f"{target.display_name}'s NeatQueue Profile",
+        color=discord.Color.blurple(),
+        description="Cached queue results that matched the current-month cache rules.",
+    )
+    embed.add_field(name="Cached Queues", value=str(total_matches), inline=True)
+    embed.add_field(name="Total Duration", value=format_duration_ms(total_duration_ms), inline=True)
+    embed.set_footer(text="Only finalized queues with more than four players are cached.")
+    await interaction.followup.send(embed=embed)
 
 
 async def build_hall_of_fame_embed() -> discord.Embed:
