@@ -1104,10 +1104,10 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 26), "{username}'s Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text(
         (QUEUE_IMG_PADDING, 86),
-        f"{username}'s items ({INVENTORY_RARITY_FILTERS[rarity_key]}) — Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
+        f"Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
         font=subtitle_font,
         fill=QUEUE_IMG_MUTED
     )
