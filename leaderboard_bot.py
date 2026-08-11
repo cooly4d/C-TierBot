@@ -249,25 +249,6 @@ async def log_interaction(interaction: discord.Interaction):
 
 bot.add_listener(log_interaction, "on_interaction")
 
-
-async def safe_defer_interaction(interaction: discord.Interaction, *, ephemeral: bool = False) -> bool:
-    try:
-        await interaction.response.defer(ephemeral=ephemeral)
-        return True
-    except (discord.errors.NotFound, discord.HTTPException):
-        return False
-
-
-async def safe_followup_send(interaction: discord.Interaction, **kwargs) -> None:
-    try:
-        await interaction.followup.send(**kwargs)
-    except (discord.errors.NotFound, discord.HTTPException):
-        if interaction.channel is not None:
-            await interaction.channel.send(**kwargs)
-        else:
-            raise
-
-
 # Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
 def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None):
     with get_db_connection() as c:
@@ -3029,19 +3010,19 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
 @bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
 @discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
 async def queue_stats(interaction: discord.Interaction, match_id: str):
-    await safe_defer_interaction(interaction)
+    await interaction.response.defer()
 
     if interaction.guild_id is None:
-        await safe_followup_send(interaction, content="❌ This command only works in a server.")
+        await interaction.followup.send("❌ This command only works in a server.")
         return
 
     content, file, error_text, match_result = await build_queue_stats_payload(match_id, interaction.guild_id)
     write_queue_stats_command_log(interaction, match_id, match_result, error_text)
     if error_text:
-        await safe_followup_send(interaction, content=error_text)
+        await interaction.followup.send(error_text)
         return
 
-    await safe_followup_send(interaction, content=content, file=file, view=get_queue_result_view())
+    await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
 
 
 async def build_hall_of_fame_embed() -> discord.Embed:
