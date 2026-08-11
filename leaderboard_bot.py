@@ -49,15 +49,8 @@ QUEUE_STATS_LOG_DIR = "log"
 #all supposed to be environment variables by cba
 
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "leaderboard.db")
-
-
-def get_db_connection() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH)
-
-
 # Database initialization
-conn = get_db_connection()
+conn = sqlite3.connect("leaderboard.db")
 cursor = conn.cursor()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
@@ -251,7 +244,7 @@ bot.add_listener(log_interaction, "on_interaction")
 
 # Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
 def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         c.execute(
             "INSERT OR REPLACE INTO users (discord_id, access_token, slug, username) VALUES (?, ?, ?, ?)",
             (discord_id, token, slug, username)
@@ -259,34 +252,34 @@ def save_token(discord_id: int, token: str, slug: str | None = None, username: s
 
 # Helper: Get All User Tokens
 def get_all_users():
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         return c.execute("SELECT discord_id, access_token FROM users").fetchall()
 
 # Helper: Look up which verified Discord user owns a given survev.de slug, if any
 def get_discord_id_by_slug(slug: str):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         row = c.execute("SELECT discord_id FROM users WHERE slug = ?", (slug,)).fetchone()
         return row[0] if row else None
 
 # Helper: Get every verified user whose slug we haven't captured yet (e.g. verified before that existed)
 def get_users_missing_slug():
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         return c.execute("SELECT discord_id, access_token FROM users WHERE slug IS NULL").fetchall()
 
 # Helper: Fill in a previously-unknown slug/username for an already-verified user
 def update_user_slug(discord_id: int, slug: str, username: str):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         c.execute("UPDATE users SET slug = ?, username = ? WHERE discord_id = ?", (slug, username, discord_id))
 
 # Helper: Get Single User Token
 def get_user_token(discord_id: int):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         row = c.execute("SELECT access_token FROM users WHERE discord_id = ?", (discord_id,)).fetchone()
         return row[0] if row else None
 
 # Helper: Set the channel a guild wants NeatQueue results tracked in
 def set_guild_queue_channel(guild_id: int, channel_id: int):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         c.execute(
             "INSERT OR REPLACE INTO guild_settings (guild_id, channel_id, last_updated) VALUES (?, ?, ?)",
             (guild_id, channel_id, datetime.now(timezone.utc).isoformat())
@@ -294,23 +287,23 @@ def set_guild_queue_channel(guild_id: int, channel_id: int):
 
 # Helper: Get the channel configured for a guild, if any
 def get_guild_queue_channel(guild_id: int):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         row = c.execute("SELECT channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)).fetchone()
         return row[0] if row else None
 
 # Helper: Get every guild's configured channel + the last time its queue results were caught up on
 def get_all_guild_settings():
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         return c.execute("SELECT guild_id, channel_id, last_updated FROM guild_settings").fetchall()
 
 # Helper: Mark a guild as caught up as of the given timestamp, without touching its channel
 def update_guild_last_updated(guild_id: int, timestamp_iso: str):
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         c.execute("UPDATE guild_settings SET last_updated = ? WHERE guild_id = ?", (timestamp_iso, guild_id))
 
 # Helper: Record that a match's stats were posted. Returns False if it was already recorded (skip re-posting).
 def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         cur = c.execute(
             "INSERT OR IGNORE INTO processed_matches (guild_id, match_id, processed_at) VALUES (?, ?, ?)",
             (guild_id, str(match_id), datetime.now(timezone.utc).isoformat())
@@ -340,7 +333,7 @@ def format_duration_ms(duration_ms: int) -> str:
 
 # Helper: Look up the current holder of a hall of fame record, if any has been set yet.
 def get_hall_of_fame_record(record_type: str) -> dict | None:
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         row = c.execute(
             "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms FROM hall_of_fame WHERE record_type = ?",
             (record_type,)
@@ -363,7 +356,7 @@ def try_set_hall_of_fame_record(
     guild_id: int,
     duration_ms: int | None = None,
 ) -> bool:
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = ?", (record_type,)).fetchone()
         if existing is not None and value <= existing[0]:
             return False
@@ -385,7 +378,7 @@ def try_set_hall_of_fame_record(
 
 
 def clear_hall_of_fame_records() -> int:
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         cur = c.execute("DELETE FROM hall_of_fame")
         return cur.rowcount if cur.rowcount is not None else 0
 
@@ -477,7 +470,7 @@ def get_month_label(month_key: str) -> str:
 
 def get_monthly_stats(month_key: str | None = None) -> list[dict]:
     month_key = month_key or get_month_key()
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         rows = c.execute(
             """
             SELECT discord_id, total_damage, total_kills, total_time_ms, games_played
@@ -508,7 +501,7 @@ def save_monthly_stats(
     total_time_ms: int,
     games_played: int,
 ) -> None:
-    with get_db_connection() as c:
+    with sqlite3.connect("leaderboard.db") as c:
         existing = c.execute(
             """
             SELECT total_damage, total_kills, total_time_ms, games_played
@@ -982,26 +975,6 @@ async def run_survev_verification(discord_user_id: int, send_update):
 async def verify(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
-
-
-@bot.tree.command(name="debug_verified_users", description="Show the currently stored verified users in the leaderboard database.")
-@discord.app_commands.default_permissions(administrator=True)
-@discord.app_commands.guild_only()
-async def debug_verified_users(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    with get_db_connection() as c:
-        rows = c.execute("SELECT discord_id, slug, username, access_token FROM users ORDER BY discord_id").fetchall()
-
-    if not rows:
-        await interaction.followup.send("No verified users found in the database.", ephemeral=True)
-        return
-
-    lines = ["Verified users in the database:"]
-    for discord_id, slug, username, access_token in rows:
-        token_preview = "present" if access_token else "missing"
-        lines.append(f"- {discord_id}: slug={slug or 'None'}, username={username or 'None'}, token={token_preview}")
-
-    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 # ------------------------------------------------------------------
