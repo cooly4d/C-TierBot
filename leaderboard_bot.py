@@ -2461,19 +2461,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             result_teams = []
             result_team_ids = []
 
-        # Authoritative series score/winner should come from the actual round-by-round winners,
-        # not from a teammate's aggregate win count. That keeps the displayed result aligned with
-        # the queue's real series outcome when a team has multiple players or mixed standings.
-        team_round_wins = derive_team_round_wins_from_round_winners(round_winner_display_indices, len(result_teams))
-        if not any(team_round_wins):
-            team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
-
-        winning_team_index = None
-        if team_round_wins:
-            max_wins = max(team_round_wins)
-            if max_wins > 0 and team_round_wins.count(max_wins) == 1:
-                winning_team_index = team_round_wins.index(max_wins)
-
         # Identity, not team_id, is what stays stable across a series' separate games.
         identity_to_display_index: dict[str, int] = {
             (entry["slug"] or entry["username"].lower()): idx
@@ -2493,6 +2480,19 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 round_winner_display_indices.append(next(iter(displayed_rank_one_winners)))
             else:
                 round_winner_display_indices.append(None)
+
+        # Authoritative series score/winner should come from the actual round-by-round winners,
+        # not from a teammate's aggregate win count. That keeps the displayed result aligned with
+        # the queue's real series outcome when a team has multiple players or mixed standings.
+        team_round_wins = derive_team_round_wins_from_round_winners(round_winner_display_indices, len(result_teams))
+        if not any(team_round_wins):
+            team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
+
+        winning_team_index = None
+        if team_round_wins:
+            max_wins = max(team_round_wins)
+            if max_wins > 0 and team_round_wins.count(max_wins) == 1:
+                winning_team_index = team_round_wins.index(max_wins)
 
         individual_games: list[dict] = []
         for game_index, guid in enumerate(ordered_queue_guids, start=1):
