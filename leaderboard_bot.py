@@ -114,8 +114,9 @@ bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
 @bot.event
 async def on_ready():
     try:
-        bot.add_view(queue_result_view)
-        print(f"DEBUG - add_view succeeded: is_persistent={queue_result_view.is_persistent()} children={queue_result_view.children}")
+        view = get_queue_result_view()
+        bot.add_view(view)
+        print(f"DEBUG - add_view succeeded: is_persistent={view.is_persistent()} children={view.children}")
     except Exception as exc:
         print(f"DEBUG - add_view FAILED: {exc!r}")
 
@@ -2150,6 +2151,17 @@ def find_neatqueue_match(entries, match_id):
     return None
 
 
+def derive_team_round_wins_from_round_winners(round_winner_display_indices: list[int | None], num_teams: int) -> list[int]:
+    """Count how many rounds each displayed team actually won from the per-round winner indices."""
+    team_round_wins = [0] * max(num_teams, 0)
+    for winner_idx in round_winner_display_indices:
+        if winner_idx is None:
+            continue
+        if 0 <= winner_idx < len(team_round_wins):
+            team_round_wins[winner_idx] += 1
+    return team_round_wins
+
+
 def get_match_game_number(match):
     for key in NEATQUEUE_MATCH_ID_KEYS:
         value = get_nested_value(match, key)
@@ -2449,9 +2461,12 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             result_teams = []
             result_team_ids = []
 
-        # Authoritative series score/winner comes from aggregated rank-1 wins per displayed team.
-        # Every teammate on a team shares the same series win count, so take max to avoid duplicates.
-        team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
+        # Authoritative series score/winner should come from the actual round-by-round winners,
+        # not from a teammate's aggregate win count. That keeps the displayed result aligned with
+        # the queue's real series outcome when a team has multiple players or mixed standings.
+        team_round_wins = derive_team_round_wins_from_round_winners(round_winner_display_indices, len(result_teams))
+        if not any(team_round_wins):
+            team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
 
         winning_team_index = None
         if team_round_wins:
@@ -2796,7 +2811,14 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
         await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
-queue_result_view = QueueResultView()
+queue_result_view = None
+
+
+def get_queue_result_view():
+    global queue_result_view
+    if queue_result_view is None:
+        queue_result_view = QueueResultView()
+    return queue_result_view
 
 
 def check_queue_hall_of_fame_records(
@@ -2902,7 +2924,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file, view=queue_result_view)
+    await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
 
 
 async def build_hall_of_fame_embed() -> discord.Embed:
@@ -3160,7 +3182,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
     if error_text:
         await message.reply(error_text)
     else:
-        await message.reply(content=content, file=file, view=queue_result_view)
+        await message.reply(content=content, file=file, view=get_queue_result_view())
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
@@ -3232,10 +3254,11 @@ async def backfill_missed_queue_results():
                 content, file, error_text, _ = await build_queue_stats_payload(match_id, guild_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
-                await channel.send(content=f"*(Catching up)* {content}", file=file, view=queue_result_view)
+                await channel.send(content=f"*(Catching up)* {content}", file=file, view=get_queue_result_view())
 
             update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 
 
 # --- RUN BOT ---
-bot.run(DISCORD_BOT_TOKEN)
+if __name__ == "__main__":
+    bot.run(DISCORD_BOT_TOKEN)
