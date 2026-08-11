@@ -1104,7 +1104,7 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
         )
         draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
 
-    draw.text((QUEUE_IMG_PADDING, 26), "{username}'s Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 26), f"{username}'s Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text(
         (QUEUE_IMG_PADDING, 86),
         f"Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
