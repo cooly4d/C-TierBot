@@ -55,11 +55,15 @@ from queue_stats_service import (
     format_duration_ms,
     write_queue_stats_command_log,
 )
+from console_service import start_console_listener
 from survev_client import backfill_missing_slugs, run_survev_verification
+
+_console_listener_started = False
 
 
 @bot.event
 async def on_ready():
+    global _console_listener_started
     try:
         view = get_queue_result_view()
         bot.add_view(view)
@@ -94,6 +98,10 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await backfill_missing_slugs()
     await backfill_missed_queue_results()
+
+    if not _console_listener_started:
+        _console_listener_started = True
+        asyncio.create_task(start_console_listener(bot))
 
 
 async def log_interaction(interaction: discord.Interaction):
