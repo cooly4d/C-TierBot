@@ -169,7 +169,7 @@ QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 # Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
 QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.48, 0.66, 0.84]
-QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg Dmg"]
+QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg"]
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
 
 # Grid card outline colors, keyed by the same rarity ints as rarity_label.
