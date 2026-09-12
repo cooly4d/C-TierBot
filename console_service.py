@@ -302,9 +302,11 @@ async def start_console_listener(bot: commands.Bot):
     """Background task reading stdin asynchronously without blocking the event loop."""
     await bot.wait_until_ready()
 
-    # If running headless without an interactive terminal (e.g. background daemon/systemd),
-    # sys.stdin.readline returns immediately with EOF (''), which would spin a CPU loop.
-    if not sys.stdin.isatty():
+    # If stdin is completely unavailable (e.g. background daemon/systemd where stdin is
+    # /dev/null or closed), readline returns immediate EOF which would spin a CPU loop.
+    # We do NOT check isatty() because stdin is still readable in SSH, screen, and tmux
+    # sessions even though those aren't technically TTYs.
+    if sys.stdin is None or sys.stdin.closed:
         return
 
     print("\n" + "=" * 50)
