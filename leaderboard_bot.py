@@ -262,7 +262,7 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
     )
     embed.add_field(name="Cached Queues", value=str(total_matches), inline=True)
     embed.add_field(name="Total Duration", value=format_duration_ms(total_duration_ms), inline=True)
-    embed.set_footer(text="Only finalized queues with more than four players are cached.")
+    embed.set_footer(text="Only 4v4s are cached.")
     await interaction.followup.send(embed=embed)
 
 
