@@ -284,12 +284,47 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
     return len(rows)
 
 
-def get_player_queue_duration_summary(discord_id: int) -> tuple[int, int]:
+def get_player_queue_stats_summary(discord_id: int) -> dict:
+    """All-time and current-month summary of a player's cached queue stats.
+
+    Average damage is per game: rows store per-queue total_damage and the
+    per-game avg_damage, so games played is recovered as total_damage / avg_damage.
+    """
+    now = datetime.now(timezone.utc)
+    month_start_ms = int(datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp() * 1000)
+
+    # Games per queue = total_damage / avg_damage (skip rows with 0 avg to avoid div-by-zero).
+    games_expr = "CASE WHEN avg_damage > 0 THEN total_damage / avg_damage ELSE 0 END"
+
     with sqlite3.connect(DB_PATH) as c:
-        row = c.execute(
-            "SELECT COUNT(*), COALESCE(SUM(duration_ms), 0) FROM player_queue_stats WHERE discord_id = ?",
+        all_time = c.execute(
+            f"""
+            SELECT COUNT(*), COALESCE(SUM(duration_ms), 0),
+                   COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0)
+            FROM player_queue_stats
+            WHERE discord_id = ?
+            """,
             (discord_id,),
         ).fetchone()
-        if row is None:
-            return 0, 0
-        return int(row[0] or 0), int(row[1] or 0)
+        monthly = c.execute(
+            f"""
+            SELECT COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0)
+            FROM player_queue_stats
+            WHERE discord_id = ? AND match_end_ms >= ?
+            """,
+            (discord_id, month_start_ms),
+        ).fetchone()
+
+    matches = int(all_time[0] or 0)
+    total_duration_ms = int(all_time[1] or 0)
+    all_time_damage = float(all_time[2] or 0)
+    all_time_games = float(all_time[3] or 0)
+    monthly_damage = float(monthly[0] or 0)
+    monthly_games = float(monthly[1] or 0)
+
+    return {
+        "matches": matches,
+        "total_duration_ms": total_duration_ms,
+        "all_time_avg_damage": all_time_damage / all_time_games if all_time_games > 0 else None,
+        "monthly_avg_damage": monthly_damage / monthly_games if monthly_games > 0 else None,
+    }

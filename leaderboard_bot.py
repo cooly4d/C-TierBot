@@ -22,7 +22,7 @@ from db import (
     clear_hall_of_fame_records,
     get_all_guild_settings,
     get_guild_queue_channel,
-    get_player_queue_duration_summary,
+    get_player_queue_stats_summary,
     get_user_token,
     set_guild_queue_channel,
     try_mark_match_processed,
@@ -244,25 +244,37 @@ async def queueresults(interaction: discord.Interaction, match_id: str):
     await run_queue_results(interaction, match_id)
 
 
-@bot.tree.command(name="profile", description="View a user's cached NeatQueue duration.")
-@discord.app_commands.describe(member="Discord member whose NeatQueue time to display. Omit to use yourself.")
+@bot.tree.command(name="profile", description="View a user's cached NeatQueue stats.")
+@discord.app_commands.describe(member="Discord member whose NeatQueue stats to display. Omit to use yourself.")
 async def profile(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
     await interaction.response.defer()
 
-    total_matches, total_duration_ms = get_player_queue_duration_summary(target.id)
-    if total_matches == 0:
+    summary = get_player_queue_stats_summary(target.id)
+    if summary["matches"] == 0:
         await interaction.followup.send(f"No cached NeatQueue results found for {target.display_name} yet.")
         return
+
+    all_time_avg = summary["all_time_avg_damage"]
+    monthly_avg = summary["monthly_avg_damage"]
 
     embed = discord.Embed(
         title=f"{target.display_name}'s NeatQueue Profile",
         color=discord.Color.blurple(),
         description="Cached queue results that matched the current-month cache rules.",
     )
-    embed.add_field(name="Cached Queues", value=str(total_matches), inline=True)
-    embed.add_field(name="Total Duration", value=format_duration_ms(total_duration_ms), inline=True)
-    embed.set_footer(text="Only 4v4s are cached.")
+    embed.add_field(name="All-Time Duration", value=format_duration_ms(summary["total_duration_ms"]), inline=True)
+    embed.add_field(
+        name="All-Time Avg Damage",
+        value=f"{all_time_avg:,.0f}" if all_time_avg is not None else "N/A",
+        inline=True,
+    )
+    embed.add_field(
+        name="Monthly Avg Damage",
+        value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
+        inline=True,
+    )
+    embed.set_footer(text="Only 4v4s are cached. Averages are per game.")
     await interaction.followup.send(embed=embed)
 
 
