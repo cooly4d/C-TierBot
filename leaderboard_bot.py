@@ -274,7 +274,7 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
         value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
         inline=True,
     )
-    embed.set_footer(text="Only 4v4s are cached. Averages are per game.")
+    embed.set_footer(text="Only 4v4s are cached.")
     await interaction.followup.send(embed=embed)
 
 
