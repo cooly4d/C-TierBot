@@ -19,7 +19,6 @@ from bot_config import (
     bot,
 )
 from db import (
-    cache_player_queue_stats,
     clear_hall_of_fame_records,
     get_all_guild_settings,
     get_guild_queue_channel,
@@ -229,8 +228,6 @@ async def run_queue_results(interaction: discord.Interaction, match_id: str):
     if error_text:
         await interaction.followup.send(error_text)
         return
-
-    cache_player_queue_stats(match_id, interaction.guild_id, match_result)
 
     await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
 

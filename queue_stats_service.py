@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import discord
 
 from bot_config import HALL_OF_FAME_RECORDS, MIN_GAMES_FOR_HALL_OF_FAME_UPDATE, QUEUE_STATS_LOG_DIR, bot
-from db import get_hall_of_fame_record, try_set_hall_of_fame_record
+from db import cache_player_queue_stats, get_hall_of_fame_record, try_set_hall_of_fame_record
 from image_utils import generate_queue_result_image
 from neatqueue_client import calculate_queue_match_stats, resolve_queue_user_display_names
 
@@ -161,6 +161,8 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     )
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
+
+    cache_player_queue_stats(match_id, guild_id, match_result)
     return content, file, None, match_result
 
 
