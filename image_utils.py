@@ -741,8 +741,8 @@ def generate_compare_image(
         ("Total Damage", fmt(left_damage), fmt(right_damage), left_damage, right_damage),
         (
             "Inventory Worth",
-            fmt(left_worth, suffix=" \U0001f4b0"),
-            fmt(right_worth, suffix=" \U0001f4b0"),
+            fmt(left_worth, suffix=" GF"),
+            fmt(right_worth, suffix=" GF"),
             left_worth,
             right_worth,
         ),
