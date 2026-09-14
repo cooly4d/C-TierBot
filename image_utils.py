@@ -668,119 +668,148 @@ def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
     return buffer
 
 
+def _format_compare_duration_ms(duration_ms: int) -> str:
+    total_seconds = max(0, int(duration_ms)) // 1000
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _pick_compare_row_colors(left_num: float | None, right_num: float | None) -> tuple:
+    if left_num is None and right_num is None:
+        return QUEUE_IMG_MUTED, QUEUE_IMG_MUTED
+    if left_num is None:
+        return QUEUE_IMG_MUTED, QUEUE_IMG_TEXT
+    if right_num is None:
+        return QUEUE_IMG_TEXT, QUEUE_IMG_MUTED
+    if left_num == right_num:
+        return QUEUE_IMG_TEXT, QUEUE_IMG_TEXT
+    return (QUEUE_IMG_WIN, QUEUE_IMG_LOSE) if left_num > right_num else (QUEUE_IMG_LOSE, QUEUE_IMG_WIN)
+
+
 def generate_compare_image(
     left_name: str,
     left_stats: dict | None,
     left_worth: int | None,
+    left_queue_summary: dict | None,
     right_name: str,
     right_stats: dict | None,
     right_worth: int | None,
+    right_queue_summary: dict | None,
 ) -> BytesIO:
-    height = 820
-    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
-    draw = ImageDraw.Draw(image)
-
     title_font = load_font(48, "bold")
     subtitle_font = load_font(24, "bold")
     header_font = load_font(22, "bold")
-    value_font = load_font(32, "bold")
+    value_font = load_font(30, "bold")
     body_font = load_font(22)
     footer_font = load_font(16)
+
+    def stat_fields(stats, worth):
+        if stats is None:
+            return None, None, None
+        games = max(1, stats["games"])
+        return stats["wins"], stats["kills"] / games, stats["damage"]
+
+    left_wins, left_kd, left_damage = stat_fields(left_stats, left_worth)
+    right_wins, right_kd, right_damage = stat_fields(right_stats, right_worth)
+
+    def queue_fields(summary):
+        summary = summary or {}
+        matches = summary.get("matches", 0)
+        playtime_ms = summary.get("total_duration_ms") if matches else None
+        return playtime_ms, summary.get("all_time_avg_damage"), summary.get("monthly_avg_damage")
+
+    left_playtime_ms, left_all_avg, left_monthly_avg = queue_fields(left_queue_summary)
+    right_playtime_ms, right_all_avg, right_monthly_avg = queue_fields(right_queue_summary)
+
+    def fmt(value, suffix="", none_text="-", decimals=None):
+        if value is None:
+            return none_text
+        if decimals is not None:
+            return f"{value:{decimals}}{suffix}"
+        return f"{value:,}{suffix}"
+
+    rows = [
+        ("All-Time Wins", fmt(left_wins), fmt(right_wins), left_wins, right_wins),
+        ("K/D Ratio", fmt(left_kd, decimals=".2f"), fmt(right_kd, decimals=".2f"), left_kd, right_kd),
+        ("Total Damage", fmt(left_damage), fmt(right_damage), left_damage, right_damage),
+        (
+            "Inventory Worth",
+            fmt(left_worth, suffix=" \U0001f4b0"),
+            fmt(right_worth, suffix=" \U0001f4b0"),
+            left_worth,
+            right_worth,
+        ),
+        (
+            "Play Time",
+            _format_compare_duration_ms(left_playtime_ms) if left_playtime_ms is not None else "-",
+            _format_compare_duration_ms(right_playtime_ms) if right_playtime_ms is not None else "-",
+            left_playtime_ms,
+            right_playtime_ms,
+        ),
+        (
+            "All-Time Avg Damage",
+            fmt(left_all_avg, decimals=",.0f", none_text="N/A"),
+            fmt(right_all_avg, decimals=",.0f", none_text="N/A"),
+            left_all_avg,
+            right_all_avg,
+        ),
+        (
+            "Monthly Avg Damage",
+            fmt(left_monthly_avg, decimals=",.0f", none_text="No data"),
+            fmt(right_monthly_avg, decimals=",.0f", none_text="No data"),
+            left_monthly_avg,
+            right_monthly_avg,
+        ),
+    ]
+
+    row_top_offset = 140
+    row_spacing = 74
+    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    panel_height = row_top_offset + len(rows) * row_spacing + 30
+    height = panel_top + panel_height + QUEUE_IMG_PADDING
+
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
 
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT)
 
     draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare (wip broken asf)", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 92), "All-time verified stats side-by-side", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 92), "Stats side-by-side, best in each row highlighted", font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
-    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
-    panel_height = height - panel_top - QUEUE_IMG_PADDING
     panel_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 3) // 2
     left_x = QUEUE_IMG_PADDING
     right_x = QUEUE_IMG_PADDING * 2 + panel_width
 
-    draw.rounded_rectangle([left_x, panel_top, left_x + panel_width, panel_top + panel_height], radius=24, fill=(18, 68, 38), outline=QUEUE_IMG_WIN, width=4)
-    draw.rounded_rectangle([right_x, panel_top, right_x + panel_width, panel_top + panel_height], radius=24, fill=(68, 18, 18), outline=QUEUE_IMG_LOSE, width=4)
+    panel_fill = (28, 32, 44)
+    panel_outline = (70, 78, 96)
+    draw.rounded_rectangle([left_x, panel_top, left_x + panel_width, panel_top + panel_height], radius=24, fill=panel_fill, outline=panel_outline, width=3)
+    draw.rounded_rectangle([right_x, panel_top, right_x + panel_width, panel_top + panel_height], radius=24, fill=panel_fill, outline=panel_outline, width=3)
 
     draw.text((left_x + 28, panel_top + 24), left_name, font=header_font, fill=QUEUE_IMG_TEXT)
     draw.text((right_x + 28, panel_top + 24), right_name, font=header_font, fill=QUEUE_IMG_TEXT)
 
     left_status = "Verified" if left_stats is not None else "Not verified yet"
     right_status = "Verified" if right_stats is not None else "Not verified yet"
-    draw.text((left_x + 28, panel_top + 64), left_status, font=body_font, fill=QUEUE_IMG_TEXT)
-    draw.text((right_x + 28, panel_top + 64), right_status, font=body_font, fill=QUEUE_IMG_TEXT)
+    draw.text((left_x + 28, panel_top + 64), left_status, font=body_font, fill=QUEUE_IMG_MUTED)
+    draw.text((right_x + 28, panel_top + 64), right_status, font=body_font, fill=QUEUE_IMG_MUTED)
 
     label_x = left_x + 28
-    value_x = left_x + 300
-    right_value_x = right_x + 300
-    row_top = panel_top + 140
-    row_spacing = 90
-    labels = ["All-Time Wins", "K/D Ratio", "Total Damage", "Inventory Worth"]
+    value_x = left_x + 340
+    right_value_x = right_x + 340
+    row_top = panel_top + row_top_offset
 
-    for idx, label in enumerate(labels):
+    for idx, (label, left_value, right_value, left_num, right_num) in enumerate(rows):
         y = row_top + idx * row_spacing
         draw.text((label_x, y), label, font=body_font, fill=QUEUE_IMG_MUTED)
 
-        if left_stats is None:
-            if idx == 0:
-                left_value = "-"
-            elif idx == 1:
-                left_value = "-"
-            elif idx == 2:
-                left_value = "-"
-            else:
-                left_value = "-"
-        else:
-            if idx == 0:
-                left_value = str(left_stats["wins"])
-            elif idx == 1:
-                left_value = f"{left_stats['kills'] / max(1, left_stats['games']):.2f}"
-            elif idx == 2:
-                left_value = f"{left_stats['damage']:,}"
-            else:
-                left_value = f"{left_worth:,} 💰"
-
-        if right_stats is None:
-            if idx == 0:
-                right_value = "-"
-            elif idx == 1:
-                right_value = "-"
-            elif idx == 2:
-                right_value = "-"
-            else:
-                right_value = "-"
-        else:
-            if idx == 0:
-                right_value = str(right_stats["wins"])
-            elif idx == 1:
-                right_value = f"{right_stats['kills'] / max(1, right_stats['games']):.2f}"
-            elif idx == 2:
-                right_value = f"{right_stats['damage']:,}"
-            else:
-                right_value = f"{right_worth:,} 💰"
-
-        left_fill = QUEUE_IMG_WIN if left_stats is not None else QUEUE_IMG_MUTED
-        right_fill = QUEUE_IMG_LOSE if right_stats is not None else QUEUE_IMG_MUTED
+        left_fill, right_fill = _pick_compare_row_colors(left_num, right_num)
         draw.text((value_x, y), left_value, font=value_font, fill=left_fill)
         draw.text((right_value_x, y), right_value, font=value_font, fill=right_fill)
-
-    if left_stats is None:
-        message = "Not verified yet"
-        msg_bbox = draw.textbbox((0, 0), message, font=value_font)
-        draw.text(
-            (left_x + (panel_width - (msg_bbox[2] - msg_bbox[0])) / 2, row_top + 4 * row_spacing),
-            message,
-            font=value_font,
-            fill=QUEUE_IMG_MUTED
-        )
-    if right_stats is None:
-        message = "Not verified yet"
-        msg_bbox = draw.textbbox((0, 0), message, font=value_font)
-        draw.text(
-            (right_x + (panel_width - (msg_bbox[2] - msg_bbox[0])) / 2, row_top + 4 * row_spacing),
-            message,
-            font=value_font,
-            fill=QUEUE_IMG_MUTED
-        )
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]

@@ -7,7 +7,7 @@ import aiohttp
 import discord
 
 from bot_config import LEADERBOARD_BANNER_URL, LEADERBOARD_SORT_CONFIG
-from db import get_all_users, get_user_token
+from db import get_all_users, get_player_queue_stats_summary, get_user_token
 from survev_client import fetch_player_timeframe_stats, fetch_user_inventory, fetch_user_market
 from image_utils import (
     INVENTORY_ITEMS_PER_PAGE,
@@ -131,13 +131,18 @@ def build_compare_payload(member_a: discord.User, member_b: discord.User):
                 if inventory_b and isinstance(inventory_b, dict):
                     right_worth = compute_inventory_worth(inventory_b.get("items", []))
 
+            left_queue_summary = get_player_queue_stats_summary(member_a.id)
+            right_queue_summary = get_player_queue_stats_summary(member_b.id)
+
             image_buffer = generate_compare_image(
                 member_a.name,
                 left_stats,
                 left_worth if left_stats is not None else None,
+                left_queue_summary,
                 member_b.name,
                 right_stats,
                 right_worth if right_stats is not None else None,
+                right_queue_summary,
             )
             file = discord.File(image_buffer, filename=f"compare_{member_a.id}_{member_b.id}.png")
             return f"Compare {member_a.name} vs {member_b.name}", file, None
