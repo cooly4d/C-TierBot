@@ -4,6 +4,7 @@ Kept self-contained (no db/discord-client/network imports) so images can be
 generated and unit-tested independently of the rest of the bot.
 """
 import os
+from datetime import datetime
 from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
@@ -746,7 +747,7 @@ def generate_compare_image(
             right_worth,
         ),
         (
-            "Play Time",
+            "4v4 Play Time",
             _format_compare_duration_ms(left_playtime_ms) if left_playtime_ms is not None else "-",
             _format_compare_duration_ms(right_playtime_ms) if right_playtime_ms is not None else "-",
             left_playtime_ms,
@@ -760,7 +761,7 @@ def generate_compare_image(
             right_all_avg,
         ),
         (
-            "Monthly Avg Damage",
+            f"{datetime.now().strftime('%B')} Avg Damage",
             fmt(left_monthly_avg, decimals=",.0f", none_text="No data"),
             fmt(right_monthly_avg, decimals=",.0f", none_text="No data"),
             left_monthly_avg,

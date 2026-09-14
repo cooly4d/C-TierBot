@@ -270,7 +270,7 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
         inline=True,
     )
     embed.add_field(
-        name="Monthly Avg Damage",
+        name=f"{datetime.now(timezone.utc).strftime('%B')} Avg Damage",
         value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
         inline=True,
     )
