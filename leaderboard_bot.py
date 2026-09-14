@@ -259,11 +259,11 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
     monthly_avg = summary["monthly_avg_damage"]
 
     embed = discord.Embed(
-        title=f"{target.display_name}'s NeatQueue Profile",
+        title=f"{target.display_name}'s NeatQueue stats",
         color=discord.Color.blurple(),
         description="Cached queue results that matched the current-month cache rules.",
     )
-    embed.add_field(name="All-Time Duration", value=format_duration_ms(summary["total_duration_ms"]), inline=True)
+    embed.add_field(name="4v4 Play Time", value=format_duration_ms(summary["total_duration_ms"]), inline=True)
     embed.add_field(
         name="All-Time Avg Damage",
         value=f"{all_time_avg:,.0f}" if all_time_avg is not None else "N/A",
@@ -274,7 +274,7 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
         value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
         inline=True,
     )
-    embed.set_footer(text="Only 4v4s are cached.")
+    embed.set_footer(text="Stats from NeatQueue 4v4s only.")
     await interaction.followup.send(embed=embed)
 
 
