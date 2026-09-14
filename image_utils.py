@@ -703,9 +703,10 @@ def generate_compare_image(
 ) -> BytesIO:
     title_font = load_font(48, "bold")
     subtitle_font = load_font(24, "bold")
-    header_font = load_font(22, "bold")
-    value_font = load_font(30, "bold")
-    body_font = load_font(22)
+    name_font = load_font(38, "bold")
+    status_font = load_font(20)
+    label_font = load_font(22, "bold")
+    value_font = load_font(36, "bold")
     footer_font = load_font(16)
 
     def stat_fields(stats, worth):
@@ -767,11 +768,13 @@ def generate_compare_image(
         ),
     ]
 
-    row_top_offset = 140
-    row_spacing = 74
-    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
-    panel_height = row_top_offset + len(rows) * row_spacing + 30
-    height = panel_top + panel_height + QUEUE_IMG_PADDING
+    card_left = QUEUE_IMG_PADDING
+    card_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+    card_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    name_block_height = 130
+    row_height = 92
+    card_bottom = card_top + name_block_height + len(rows) * row_height
+    height = card_bottom + QUEUE_IMG_PADDING * 2
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
@@ -781,35 +784,62 @@ def generate_compare_image(
     draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare (wip broken asf)", font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text((QUEUE_IMG_PADDING, 92), "Stats side-by-side, best in each row highlighted", font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
-    panel_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 3) // 2
-    left_x = QUEUE_IMG_PADDING
-    right_x = QUEUE_IMG_PADDING * 2 + panel_width
+    card_fill = (26, 30, 42)
+    card_outline = (55, 62, 80)
+    row_alt_fill = (32, 37, 50)
+    bar_color = (88, 101, 242)
+    center_x = (card_left + card_right) / 2
+    left_center_x = (card_left + center_x) / 2
+    right_center_x = (center_x + card_right) / 2
+    label_half_width = 190
+    bar_x_left = center_x - label_half_width
+    bar_x_right = center_x + label_half_width
 
-    panel_fill = (28, 32, 44)
-    panel_outline = (70, 78, 96)
-    draw.rounded_rectangle([left_x, panel_top, left_x + panel_width, panel_top + panel_height], radius=24, fill=panel_fill, outline=panel_outline, width=3)
-    draw.rounded_rectangle([right_x, panel_top, right_x + panel_width, panel_top + panel_height], radius=24, fill=panel_fill, outline=panel_outline, width=3)
+    draw.rounded_rectangle([card_left, card_top, card_right, card_bottom], radius=24, fill=card_fill, outline=card_outline, width=2)
 
-    draw.text((left_x + 28, panel_top + 24), left_name, font=header_font, fill=QUEUE_IMG_TEXT)
-    draw.text((right_x + 28, panel_top + 24), right_name, font=header_font, fill=QUEUE_IMG_TEXT)
+    def draw_centered(text, center, y, font, fill):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        x = center - (bbox[2] - bbox[0]) / 2
+        draw.text((x, y), text, font=font, fill=fill)
+
+    draw_centered(left_name, left_center_x, card_top + 22, name_font, QUEUE_IMG_TEXT)
+    draw_centered(right_name, right_center_x, card_top + 22, name_font, QUEUE_IMG_TEXT)
 
     left_status = "Verified" if left_stats is not None else "Not verified yet"
     right_status = "Verified" if right_stats is not None else "Not verified yet"
-    draw.text((left_x + 28, panel_top + 64), left_status, font=body_font, fill=QUEUE_IMG_MUTED)
-    draw.text((right_x + 28, panel_top + 64), right_status, font=body_font, fill=QUEUE_IMG_MUTED)
+    draw_centered(left_status, left_center_x, card_top + 74, status_font, QUEUE_IMG_MUTED)
+    draw_centered(right_status, right_center_x, card_top + 74, status_font, QUEUE_IMG_MUTED)
 
-    label_x = left_x + 28
-    value_x = left_x + 340
-    right_value_x = right_x + 340
-    row_top = panel_top + row_top_offset
+    rows_top = card_top + name_block_height
+    draw.line([(card_left, rows_top), (card_right, rows_top)], fill=card_outline, width=2)
 
     for idx, (label, left_value, right_value, left_num, right_num) in enumerate(rows):
-        y = row_top + idx * row_spacing
-        draw.text((label_x, y), label, font=body_font, fill=QUEUE_IMG_MUTED)
+        y_top = rows_top + idx * row_height
+        if idx % 2 == 0:
+            draw.rectangle([card_left + 2, y_top, card_right - 2, y_top + row_height], fill=row_alt_fill)
+
+        bar_top = y_top + row_height * 0.22
+        bar_bottom = y_top + row_height * 0.78
+        draw.rectangle([bar_x_left - 3, bar_top, bar_x_left + 3, bar_bottom], fill=bar_color)
+        draw.rectangle([bar_x_right - 3, bar_top, bar_x_right + 3, bar_bottom], fill=bar_color)
 
         left_fill, right_fill = _pick_compare_row_colors(left_num, right_num)
-        draw.text((value_x, y), left_value, font=value_font, fill=left_fill)
-        draw.text((right_value_x, y), right_value, font=value_font, fill=right_fill)
+
+        label_bbox = draw.textbbox((0, 0), label, font=label_font)
+        label_y = y_top + (row_height - (label_bbox[3] - label_bbox[1])) / 2 - label_bbox[1]
+        draw_centered(label, center_x, label_y, label_font, QUEUE_IMG_MUTED)
+
+        value_bbox = draw.textbbox((0, 0), left_value, font=value_font)
+        value_y = y_top + (row_height - (value_bbox[3] - value_bbox[1])) / 2 - value_bbox[1]
+        left_value_x = bar_x_left - 20 - (value_bbox[2] - value_bbox[0])
+        draw.text((left_value_x, value_y), left_value, font=value_font, fill=left_fill)
+
+        value_bbox = draw.textbbox((0, 0), right_value, font=value_font)
+        value_y = y_top + (row_height - (value_bbox[3] - value_bbox[1])) / 2 - value_bbox[1]
+        draw.text((bar_x_right + 20, value_y), right_value, font=value_font, fill=right_fill)
+
+        if idx < len(rows) - 1:
+            draw.line([(card_left, y_top + row_height), (card_right, y_top + row_height)], fill=card_outline, width=1)
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
