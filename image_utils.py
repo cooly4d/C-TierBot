@@ -782,8 +782,8 @@ def generate_compare_image(
 
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT)
 
-    draw.text((QUEUE_IMG_PADDING, 28), "survev.de Compare (wip broken asf)", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 92), "Stats side-by-side, best in each row highlighted", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    draw.text((QUEUE_IMG_PADDING, 28), "Stats comparison", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 92), "All-time stats are from verification date.", font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
     card_fill = (26, 30, 42)
     card_outline = (55, 62, 80)
