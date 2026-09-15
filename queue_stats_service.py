@@ -92,11 +92,16 @@ def check_queue_hall_of_fame_records(
     for team in teams:
         for entry in team:
             stats = entry["stats"]
+            games = stats.get("games", 0)
+            # A sub who only played a fraction of the queue shouldn't be able to claim an
+            # all-time record off one lucky round, even though the queue overall qualifies.
+            if games < min_games_required:
+                continue
+
             kills = stats.get("kills", 0)
             if best_kills is None or kills > best_kills[0]:
                 best_kills = (kills, entry)
 
-            games = stats.get("games", 0)
             if games > 0:
                 avg_damage = stats["damage"] / games
                 if best_avg_damage is None or avg_damage > best_avg_damage[0]:
