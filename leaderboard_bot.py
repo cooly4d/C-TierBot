@@ -46,6 +46,7 @@ from leaderboard_service import (
     build_leaderboard_fries_embed,
     build_shop_image_payload,
     generate_leaderboard_embed,
+    generate_seasonal_leaderboard_embed,
 )
 from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number
 from queue_stats_service import (
@@ -204,6 +205,19 @@ async def leaderboard_monthly(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await generate_leaderboard_embed("Monthly", 30, "kills")
     await interaction.followup.send(embed=embed, view=LeaderboardView("Monthly", "kills"))
+
+
+@bot.tree.command(name="leaderboard_season", description="View the cached 4v4 average-damage leaderboard for a calendar month.")
+@discord.app_commands.describe(month="UTC calendar month in YYYY-MM format. Omit for the current month.")
+@discord.app_commands.guild_only()
+async def leaderboard_season(interaction: discord.Interaction, month: str | None = None):
+    await interaction.response.defer()
+    try:
+        embed = await generate_seasonal_leaderboard_embed(interaction.guild_id, month)
+    except ValueError as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
+        return
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")

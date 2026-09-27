@@ -1,13 +1,14 @@
 """Builds Discord-ready payloads (embeds/files) for leaderboard, inventory, shop,
 golden fries, and compare commands by combining survev.de API data with image_utils renderers.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import discord
 
 from bot_config import LEADERBOARD_BANNER_URL, LEADERBOARD_SORT_CONFIG
-from db import get_all_users, get_player_queue_stats_summary, get_user_token
+from db import get_all_users, get_player_queue_stats_summary, get_seasonal_queue_stats, get_user_token
 from survev_client import fetch_player_timeframe_stats, fetch_user_inventory, fetch_user_market
 from image_utils import (
     INVENTORY_ITEMS_PER_PAGE,
@@ -242,6 +243,60 @@ async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kil
 
     embed.add_field(name=f"Top Players by {sort_label}", value=leaderboard_text[:1024], inline=False)
     embed.set_footer(text="Data courtesy of survev.de API :)")
+    return embed
+
+
+def _parse_season_month(month: str | None) -> tuple[datetime, datetime]:
+    if month is None:
+        now = datetime.now(timezone.utc)
+        year, month_number = now.year, now.month
+    else:
+        if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+            raise ValueError("Month must use YYYY-MM format, for example 2026-09.")
+        try:
+            parsed_month = datetime.strptime(month, "%Y-%m")
+        except ValueError as exc:
+            raise ValueError("That calendar month is not valid.") from exc
+        year, month_number = parsed_month.year, parsed_month.month
+
+    start = datetime(year, month_number, 1, tzinfo=timezone.utc)
+    if month_number == 12:
+        next_start = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        next_start = datetime(year, month_number + 1, 1, tzinfo=timezone.utc)
+    return start, next_start
+
+
+async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None = None) -> discord.Embed:
+    month_start, next_month_start = _parse_season_month(month)
+    month_label = month_start.strftime("%B %Y")
+    stats = get_seasonal_queue_stats(
+        guild_id,
+        int(month_start.timestamp() * 1000),
+        int(next_month_start.timestamp() * 1000),
+    )
+
+    embed = discord.Embed(
+        title=f"🏆 {month_label} 4v4 Damage Leaderboard",
+        description="Ranked by average damage per game across cached queue results.",
+        color=discord.Color.gold(),
+    )
+    if not stats:
+        embed.description = f"No eligible cached queue stats found for {month_label}."
+        return embed
+
+    rank_emojis = ["🥇", "🥈", "🥉"]
+    leaderboard_text = ""
+    for index, entry in enumerate(stats[:10]):
+        rank = rank_emojis[index] if index < len(rank_emojis) else f"`#{index + 1}`"
+        leaderboard_text += (
+            f"{rank} <@{entry['discord_id']}>\n"
+            f"💥 Avg Damage: **{entry['avg_damage']:,.0f}** "
+            f"({entry['games']:,} games included)\n\n"
+        )
+
+    embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
+    embed.set_footer(text="Zero-damage queue entries are excluded. Stats from cached NeatQueue results.")
     return embed
 
 

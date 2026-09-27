@@ -66,6 +66,7 @@ cursor.execute('''
         team_index INTEGER NOT NULL,
         total_damage INTEGER NOT NULL,
         avg_damage REAL NOT NULL,
+        games INTEGER,
         duration_ms INTEGER NOT NULL,
         match_start_ms INTEGER,
         match_end_ms INTEGER,
@@ -73,6 +74,12 @@ cursor.execute('''
         PRIMARY KEY (guild_id, match_id, player_key)
     )
 ''')
+# Older databases retain their cached rows; their game counts can be inferred
+# for positive-damage rows when the seasonal leaderboard reads them.
+try:
+    cursor.execute("ALTER TABLE player_queue_stats ADD COLUMN games INTEGER")
+except sqlite3.OperationalError:
+    pass
 # Older DBs created before duration tracking existed — add it on if missing.
 try:
     cursor.execute("ALTER TABLE hall_of_fame ADD COLUMN duration_ms INTEGER")
@@ -80,6 +87,10 @@ except sqlite3.OperationalError:
     pass
 try:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_queue_stats_discord_id ON player_queue_stats(discord_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_player_queue_stats_guild_match_end "
+        "ON player_queue_stats(guild_id, match_end_ms)"
+    )
 except sqlite3.OperationalError:
     pass
 conn.commit()
@@ -261,6 +272,7 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
                 team_index,
                 total_damage,
                 avg_damage,
+                games,
                 int(duration_ms),
                 match_result.get("match_start_ms"),
                 match_result.get("match_end_ms"),
@@ -275,13 +287,63 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
             """
             INSERT OR REPLACE INTO player_queue_stats (
                 guild_id, match_id, player_key, discord_id, display_name, username, slug,
-                team_index, total_damage, avg_damage, duration_ms, match_start_ms, match_end_ms, cached_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                team_index, total_damage, avg_damage, games, duration_ms, match_start_ms, match_end_ms, cached_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
 
     return len(rows)
+
+
+def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_start_ms: int) -> list[dict]:
+    """Returns verified players' weighted damage averages for a UTC calendar month.
+
+    Rows with no positive damage are ignored. Legacy rows infer games from their
+    stored average when possible; newly cached rows use the explicit games count.
+    """
+    with sqlite3.connect(DB_PATH) as c:
+        rows = c.execute(
+            """
+            WITH eligible_rows AS (
+                SELECT discord_id, display_name, username, total_damage,
+                       CASE
+                           WHEN games IS NOT NULL THEN games
+                           WHEN avg_damage > 0 THEN CAST(ROUND(total_damage / avg_damage) AS INTEGER)
+                           ELSE NULL
+                       END AS game_count
+                FROM player_queue_stats
+                WHERE guild_id = ?
+                  AND discord_id IS NOT NULL
+                  AND total_damage > 0
+                  AND match_end_ms >= ?
+                  AND match_end_ms < ?
+            )
+            SELECT discord_id,
+                   MAX(display_name),
+                   MAX(username),
+                   SUM(total_damage),
+                   SUM(game_count),
+                   1.0 * SUM(total_damage) / SUM(game_count)
+            FROM eligible_rows
+            WHERE game_count > 0
+            GROUP BY discord_id
+            ORDER BY 1.0 * SUM(total_damage) / SUM(game_count) DESC, discord_id
+            """,
+            (guild_id, month_start_ms, next_month_start_ms),
+        ).fetchall()
+
+    return [
+        {
+            "discord_id": row[0],
+            "display_name": row[1],
+            "username": row[2],
+            "total_damage": int(row[3]),
+            "games": int(row[4]),
+            "avg_damage": float(row[5]),
+        }
+        for row in rows
+    ]
 
 
 def get_player_queue_stats_summary(discord_id: int) -> dict:
