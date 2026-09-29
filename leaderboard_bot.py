@@ -19,12 +19,13 @@ from bot_config import (
     bot,
 )
 from db import (
+    add_guild_queue_channel,
     clear_hall_of_fame_records,
     get_all_guild_settings,
-    get_guild_queue_channel,
+    get_guild_queue_channels,
     get_player_queue_stats_summary,
     get_user_token,
-    set_guild_queue_channel,
+    remove_guild_queue_channel,
     try_mark_match_processed,
     update_guild_last_updated,
 )
@@ -48,7 +49,7 @@ from leaderboard_service import (
     generate_leaderboard_embed,
     generate_seasonal_leaderboard_embed,
 )
-from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number
+from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number, get_nested_value
 from queue_stats_service import (
     build_hall_of_fame_embed,
     build_queue_stats_payload,
@@ -469,16 +470,30 @@ bot.tree.add_command(MarketGroup())
 # ------------------------------------------------------------------
 # Automatic NeatQueue result detection
 # ------------------------------------------------------------------
-@bot.tree.command(name="setup", description="Set the channel NeatQueue posts match results in, so stats get posted automatically.")
-@discord.app_commands.describe(channel="The channel where the NeatQueue bot posts its match result embeds")
+@bot.tree.command(name="setup", description="Add a channel NeatQueue posts match results in, so stats get posted automatically.")
+@discord.app_commands.describe(channel="A channel where the NeatQueue bot posts its match result embeds")
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.guild_only()
 async def setup(interaction: discord.Interaction, channel: discord.TextChannel):
-    set_guild_queue_channel(interaction.guild_id, channel.id)
-    await interaction.response.send_message(
-        f"✅ NeatQueue results in {channel.mention} will now be tracked automatically.",
-        ephemeral=True
+    added = add_guild_queue_channel(interaction.guild_id, channel.id)
+    message = (
+        f"✅ NeatQueue results in {channel.mention} will now be tracked automatically."
+        if added else f"{channel.mention} is already being tracked."
     )
+    tracked = ", ".join(f"<#{cid}>" for cid in get_guild_queue_channels(interaction.guild_id))
+    await interaction.response.send_message(f"{message}\nTracked channels: {tracked}", ephemeral=True)
+
+
+@bot.tree.command(name="unsetup", description="Stop tracking NeatQueue results in a channel.")
+@discord.app_commands.describe(channel="The channel to stop tracking")
+@discord.app_commands.default_permissions(administrator=True)
+@discord.app_commands.guild_only()
+async def unsetup(interaction: discord.Interaction, channel: discord.TextChannel):
+    removed = remove_guild_queue_channel(interaction.guild_id, channel.id)
+    message = (
+        f"✅ {channel.mention} is no longer tracked." if removed else f"{channel.mention} wasn't being tracked."
+    )
+    await interaction.response.send_message(message, ephemeral=True)
 
 
 def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[re.Pattern, ...]):
@@ -489,8 +504,7 @@ def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[r
     if message.guild is None or not message.embeds:
         return None
 
-    configured_channel_id = get_guild_queue_channel(message.guild.id)
-    if configured_channel_id is None or message.channel.id != configured_channel_id:
+    if message.channel.id not in get_guild_queue_channels(message.guild.id):
         return None
 
     for embed in message.embeds:
@@ -564,16 +578,18 @@ async def backfill_missed_queue_results():
     if not guild_configs:
         return
 
+    channels_by_guild: dict[int, list[int]] = {}
+    oldest_update: dict[int, str] = {}
+    for guild_id, channel_id, last_updated in guild_configs:
+        channels_by_guild.setdefault(guild_id, []).append(channel_id)
+        oldest_update[guild_id] = min(oldest_update.get(guild_id, last_updated), last_updated)
+
     async with aiohttp.ClientSession() as session:
-        for guild_id, channel_id, last_updated in guild_configs:
-            matches, error = await fetch_neatqueue_matches_since(session, guild_id, last_updated)
+        for guild_id, channel_ids in channels_by_guild.items():
+            matches, error = await fetch_neatqueue_matches_since(session, guild_id, oldest_update[guild_id])
             if error:
                 continue
             if not matches:
-                continue
-
-            channel = bot.get_channel(channel_id)
-            if channel is None:
                 continue
 
             for match in matches:
@@ -581,6 +597,21 @@ async def backfill_missed_queue_results():
                 if match_id is None:
                     continue
                 match_id = str(match_id)
+
+                # Post where NeatQueue announced the winner; with a single tracked channel, fall back to it.
+                winner_channel_id = get_nested_value(match, "winner_channel")
+                try:
+                    target_channel_id = int(winner_channel_id) if winner_channel_id else None
+                except (TypeError, ValueError):
+                    target_channel_id = None
+                if target_channel_id not in channel_ids:
+                    if len(channel_ids) != 1:
+                        continue
+                    target_channel_id = channel_ids[0]
+
+                channel = bot.get_channel(target_channel_id)
+                if channel is None:
+                    continue
 
                 if not try_mark_match_processed(guild_id, match_id):
                     continue  # already posted live before the bot went down

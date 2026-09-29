@@ -9,7 +9,7 @@ import aiohttp
 import discord
 
 from bot_config import bot, NEATQUEUE_API_BASE, NEATQUEUE_API_TOKEN, NEATQUEUE_BOT_ID, QUEUE_MATCH_FALLBACK_DURATION_MS
-from db import get_guild_queue_channel, get_discord_id_by_slug, get_user_token
+from db import get_guild_queue_channels, get_discord_id_by_slug, get_user_token
 from survev_client import fetch_player_matches_in_window, fetch_public_match_data, get_match_history_timestamp
 
 
@@ -244,27 +244,23 @@ def collect_neatqueue_teams(match):
 
 
 async def find_queue_panel_message(guild_id: int, match_id: str):
-    """Searches the guild's configured results channel for the (possibly still in-progress) NeatQueue
+    """Searches the guild's configured results channels for the (possibly still in-progress) NeatQueue
     panel/winner message for this match number — used when NeatQueue's history API has no entry yet
     because the queue hasn't finished."""
-    channel_id = get_guild_queue_channel(guild_id)
-    if channel_id is None:
-        return None
-
-    channel = bot.get_channel(channel_id)
-    if channel is None:
-        return None
-
     pattern = re.compile(rf"Queue#{re.escape(str(match_id))}\b")
-    try:
-        async for message in channel.history(limit=200):
-            if message.author.id != NEATQUEUE_BOT_ID:
-                continue
-            for embed in message.embeds:
-                if embed.title and pattern.search(embed.title):
-                    return message
-    except discord.HTTPException:
-        return None
+    for channel_id in get_guild_queue_channels(guild_id):
+        channel = bot.get_channel(channel_id)
+        if channel is None:
+            continue
+        try:
+            async for message in channel.history(limit=200):
+                if message.author.id != NEATQUEUE_BOT_ID:
+                    continue
+                for embed in message.embeds:
+                    if embed.title and pattern.search(embed.title):
+                        return message
+        except discord.HTTPException:
+            continue
     return None
 
 

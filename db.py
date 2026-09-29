@@ -26,13 +26,21 @@ for column_def in ("slug TEXT", "username TEXT"):
         cursor.execute(f"ALTER TABLE users ADD COLUMN {column_def}")
     except sqlite3.OperationalError:
         pass
+# Older DBs had guild_id as the sole primary key (one channel per guild) — rebuild with a composite key.
+_guild_settings_pk = {row[1] for row in cursor.execute("PRAGMA table_info(guild_settings)").fetchall() if row[5]}
+if _guild_settings_pk == {"guild_id"}:
+    cursor.execute("ALTER TABLE guild_settings RENAME TO guild_settings_old")
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS guild_settings (
-        guild_id INTEGER PRIMARY KEY,
+        guild_id INTEGER NOT NULL,
         channel_id INTEGER NOT NULL,
-        last_updated TEXT NOT NULL
+        last_updated TEXT NOT NULL,
+        PRIMARY KEY (guild_id, channel_id)
     )
 ''')
+if _guild_settings_pk == {"guild_id"}:
+    cursor.execute("INSERT INTO guild_settings SELECT guild_id, channel_id, last_updated FROM guild_settings_old")
+    cursor.execute("DROP TABLE guild_settings_old")
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS processed_matches (
         guild_id INTEGER NOT NULL,
@@ -131,26 +139,33 @@ def get_user_token(discord_id: int):
         row = c.execute("SELECT access_token FROM users WHERE discord_id = ?", (discord_id,)).fetchone()
         return row[0] if row else None
 
-# Helper: Set the channel a guild wants NeatQueue results tracked in
-def set_guild_queue_channel(guild_id: int, channel_id: int):
+# Helper: Add a channel a guild wants NeatQueue results tracked in (no-op if already configured)
+def add_guild_queue_channel(guild_id: int, channel_id: int) -> bool:
     with sqlite3.connect(DB_PATH) as c:
-        c.execute(
-            "INSERT OR REPLACE INTO guild_settings (guild_id, channel_id, last_updated) VALUES (?, ?, ?)",
+        cur = c.execute(
+            "INSERT OR IGNORE INTO guild_settings (guild_id, channel_id, last_updated) VALUES (?, ?, ?)",
             (guild_id, channel_id, datetime.now(timezone.utc).isoformat())
         )
+        return cur.rowcount > 0
 
-# Helper: Get the channel configured for a guild, if any
-def get_guild_queue_channel(guild_id: int):
+# Helper: Stop tracking a channel. Returns False if it wasn't configured.
+def remove_guild_queue_channel(guild_id: int, channel_id: int) -> bool:
     with sqlite3.connect(DB_PATH) as c:
-        row = c.execute("SELECT channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)).fetchone()
-        return row[0] if row else None
+        cur = c.execute("DELETE FROM guild_settings WHERE guild_id = ? AND channel_id = ?", (guild_id, channel_id))
+        return cur.rowcount > 0
+
+# Helper: Get every channel configured for a guild
+def get_guild_queue_channels(guild_id: int) -> list[int]:
+    with sqlite3.connect(DB_PATH) as c:
+        rows = c.execute("SELECT channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)).fetchall()
+        return [row[0] for row in rows]
 
 # Helper: Get every guild's configured channel + the last time its queue results were caught up on
 def get_all_guild_settings():
     with sqlite3.connect(DB_PATH) as c:
         return c.execute("SELECT guild_id, channel_id, last_updated FROM guild_settings").fetchall()
 
-# Helper: Mark a guild as caught up as of the given timestamp, without touching its channel
+# Helper: Mark all of a guild's channels as caught up as of the given timestamp
 def update_guild_last_updated(guild_id: int, timestamp_iso: str):
     with sqlite3.connect(DB_PATH) as c:
         c.execute("UPDATE guild_settings SET last_updated = ? WHERE guild_id = ?", (timestamp_iso, guild_id))
