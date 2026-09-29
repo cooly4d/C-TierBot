@@ -277,8 +277,8 @@ async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None =
     )
 
     embed = discord.Embed(
-        title=f"🏆 {month_label} 4v4 Damage Leaderboard",
-        description="Ranked by average damage per game across cached queue results.",
+        title=f"🏆 {month_label} 4v4 Avg Damage Leaderboard",
+        description="Ranked by average damage per game in 4v4 queues only.",
         color=discord.Color.gold(),
     )
     if not stats:
@@ -292,11 +292,11 @@ async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None =
         leaderboard_text += (
             f"{rank} <@{entry['discord_id']}>\n"
             f"💥 Avg Damage: **{entry['avg_damage']:,.0f}** "
-            f"({entry['games']:,} games included)\n\n"
+            f"({entry['games']:,} games)\n\n"
         )
 
     embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
-    embed.set_footer(text="Zero-damage queue entries are excluded. Stats from cached NeatQueue results.")
+    embed.set_footer(text="Zero-damage queue entries are excluded.")
     return embed
 
 
