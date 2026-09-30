@@ -267,14 +267,22 @@ def _parse_season_month(month: str | None) -> tuple[datetime, datetime]:
     return start, next_start
 
 
-async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None = None) -> discord.Embed:
+SEASON_PAGE_SIZE = 10  # keeps one page inside the 1024-character embed field limit
+
+
+async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = None, page: int = 0):
+    """Returns (embed, month_key, page, total_pages) for one page of a month's leaderboard; page is clamped."""
     month_start, next_month_start = _parse_season_month(month)
+    month_key = month_start.strftime("%Y-%m")
     month_label = month_start.strftime("%B %Y")
     stats = get_seasonal_queue_stats(
         guild_id,
         int(month_start.timestamp() * 1000),
         int(next_month_start.timestamp() * 1000),
     )
+
+    total_pages = max(1, -(-len(stats) // SEASON_PAGE_SIZE))
+    page = max(0, min(page, total_pages - 1))
 
     embed = discord.Embed(
         title=f"🏆 {month_label} 4v4 Avg Damage Leaderboard",
@@ -283,11 +291,13 @@ async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None =
     )
     if not stats:
         embed.description = f"No eligible cached queue stats found for {month_label}."
-        return embed
+        return embed, month_key, page, total_pages
 
+    first_index = page * SEASON_PAGE_SIZE
+    page_stats = stats[first_index:first_index + SEASON_PAGE_SIZE]
     rank_emojis = ["🥇", "🥈", "🥉"]
     leaderboard_text = ""
-    for index, entry in enumerate(stats[:10]):
+    for index, entry in enumerate(page_stats, start=first_index):
         rank = rank_emojis[index] if index < len(rank_emojis) else f"`#{index + 1}`"
         leaderboard_text += (
             f"{rank} <@{entry['discord_id']}>\n"
@@ -295,9 +305,13 @@ async def generate_seasonal_leaderboard_embed(guild_id: int, month: str | None =
             f"({entry['games']:,} games)\n\n"
         )
 
-    embed.add_field(name="Top Players", value=leaderboard_text[:1024], inline=False)
-    embed.set_footer(text="Zero-damage queue entries are excluded.")
-    return embed
+    field_name = "Top Players" if page == 0 else f"Ranks {first_index + 1}-{first_index + len(page_stats)}"
+    embed.add_field(name=field_name, value=leaderboard_text[:1024], inline=False)
+    footer = "Zero-damage queue entries are excluded."
+    if total_pages > 1:
+        footer = f"Page {page + 1} of {total_pages} • {footer}"
+    embed.set_footer(text=footer)
+    return embed, month_key, page, total_pages
 
 
 def build_leaderboard_image_payload(period: str, days: int):

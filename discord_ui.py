@@ -18,7 +18,7 @@ from image_utils import (
     group_inventory_items,
     normalize_inventory_rarity_filter,
 )
-from leaderboard_service import generate_leaderboard_embed
+from leaderboard_service import build_seasonal_leaderboard_payload, generate_leaderboard_embed
 from survev_client import fetch_user_inventory, fetch_user_market, run_survev_verification
 
 # Store pagination state: msg_id -> (target_user, access_token, mode/rarity, current_page, total_pages)
@@ -83,6 +83,42 @@ class LeaderboardView(discord.ui.View):
     @discord.ui.button(label="Monthly", style=discord.ButtonStyle.secondary, custom_id="leaderboard_monthly")
     async def monthly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await refresh_leaderboard_message(interaction, "Monthly", 30, self.initial_sort)
+
+
+class SeasonalLeaderboardView(discord.ui.View):
+    """Prev/Next paging for /leaderboard_season; clicks are handled in log_interaction."""
+    def __init__(self, month: str, page: int, total_pages: int):
+        super().__init__(timeout=None)
+        # custom_id carries the month and target page, so paging keeps working after a restart.
+        self.add_item(discord.ui.Button(
+            label="◀ Previous",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"season_prev:{month}:{max(0, page - 1)}",
+            disabled=page <= 0,
+        ))
+        self.add_item(discord.ui.Button(
+            label="Next ▶",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"season_next:{month}:{min(total_pages - 1, page + 1)}",
+            disabled=page >= total_pages - 1,
+        ))
+
+
+async def build_seasonal_leaderboard_message(guild_id: int, month: str | None = None, page: int = 0):
+    """Returns (embed, view); view is None when the whole leaderboard fits on one page."""
+    embed, month_key, page, total_pages = await build_seasonal_leaderboard_payload(guild_id, month, page)
+    view = SeasonalLeaderboardView(month_key, page, total_pages) if total_pages > 1 else None
+    return embed, view
+
+
+async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction, month: str, page: int):
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
+    embed, view = await build_seasonal_leaderboard_message(interaction.guild_id, month, page)
+    await interaction.message.edit(embed=embed, view=view)
 
 
 class QueueResultView(discord.ui.View):

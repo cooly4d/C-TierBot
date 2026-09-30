@@ -4,10 +4,14 @@ import unittest
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import discord
 
 import db
-from leaderboard_service import _parse_season_month
+import leaderboard_bot
+from discord_ui import build_seasonal_leaderboard_message, refresh_seasonal_leaderboard_message
+from leaderboard_service import _parse_season_month, build_seasonal_leaderboard_payload
 
 sqlite_connect = sqlite3.connect
 
@@ -161,6 +165,72 @@ class SeasonalQueueStatsTests(unittest.TestCase):
             _parse_season_month("2025-13")
         with self.assertRaises(ValueError):
             _parse_season_month("Dec 2025")
+
+
+def _fake_leaderboard_rows(count):
+    return [
+        {"discord_id": 1000 + i, "display_name": f"P{i}", "username": f"p{i}",
+         "total_damage": 2000 - i, "games": 2, "avg_damage": float(1000 - i)}
+        for i in range(count)
+    ]
+
+
+class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_payload_slices_ranks_and_clamps_out_of_range_pages(self):
+        with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
+            embed, month_key, page, total_pages = await build_seasonal_leaderboard_payload(10, "2026-09", 2)
+            clamped_high = (await build_seasonal_leaderboard_payload(10, "2026-09", 99))[2]
+            clamped_low = (await build_seasonal_leaderboard_payload(10, "2026-09", -5))[2]
+
+        self.assertEqual((month_key, page, total_pages), ("2026-09", 2, 3))
+        self.assertEqual((clamped_high, clamped_low), (2, 0))
+        field = embed.fields[0]
+        self.assertEqual(field.name, "Ranks 21-23")
+        self.assertEqual(field.value.count("<@"), 3)
+        self.assertIn("`#21`", field.value)
+        self.assertIn("Page 3 of 3", embed.footer.text)
+
+    async def test_first_page_keeps_top_players_layout_with_next_enabled(self):
+        with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
+            embed, view = await build_seasonal_leaderboard_message(10, "2026-09")
+
+        self.assertEqual(embed.fields[0].name, "Top Players")
+        self.assertEqual(embed.fields[0].value.count("<@"), 10)
+        self.assertEqual([c.custom_id for c in view.children], ["season_prev:2026-09:0", "season_next:2026-09:1"])
+        self.assertEqual([c.disabled for c in view.children], [True, False])
+
+    async def test_single_page_and_empty_results_have_no_buttons(self):
+        for row_count in (0, 10):
+            with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(row_count)):
+                _, view = await build_seasonal_leaderboard_message(10, "2026-09")
+            self.assertIsNone(view)
+
+    async def test_refresh_edits_message_with_requested_page(self):
+        interaction = MagicMock()
+        interaction.guild_id = 10
+        interaction.response.is_done.return_value = False
+        interaction.response.defer = AsyncMock()
+        interaction.message.edit = AsyncMock()
+
+        with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
+            await refresh_seasonal_leaderboard_message(interaction, "2026-09", 2)
+
+        interaction.response.defer.assert_awaited_once()
+        edit_kwargs = interaction.message.edit.await_args.kwargs
+        self.assertEqual(edit_kwargs["embed"].fields[0].name, "Ranks 21-23")
+        view = edit_kwargs["view"]
+        self.assertEqual([c.custom_id for c in view.children], ["season_prev:2026-09:1", "season_next:2026-09:2"])
+        self.assertEqual([c.disabled for c in view.children], [False, True])
+
+    async def test_paging_button_click_routes_to_refresh(self):
+        interaction = MagicMock()
+        interaction.type = discord.InteractionType.component
+        interaction.data = {"custom_id": "season_next:2026-09:2"}
+
+        with patch("leaderboard_bot.refresh_seasonal_leaderboard_message", new=AsyncMock()) as refresh:
+            await leaderboard_bot.log_interaction(interaction)
+
+        refresh.assert_awaited_once_with(interaction, "2026-09", 2)
 
 
 if __name__ == "__main__":

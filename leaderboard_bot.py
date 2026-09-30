@@ -33,12 +33,14 @@ from discord_ui import (
     InventoryPaginationView,
     LeaderboardView,
     ShopPaginationView,
+    build_seasonal_leaderboard_message,
     get_queue_result_view,
     inventory_pagination_state,
     market_pagination_state,
     refresh_inventory_message,
     refresh_leaderboard_message,
     refresh_market_message,
+    refresh_seasonal_leaderboard_message,
 )
 from leaderboard_service import (
     build_compare_payload,
@@ -47,7 +49,6 @@ from leaderboard_service import (
     build_leaderboard_fries_embed,
     build_shop_image_payload,
     generate_leaderboard_embed,
-    generate_seasonal_leaderboard_embed,
 )
 from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number, get_nested_value
 from queue_stats_service import (
@@ -155,6 +156,10 @@ async def log_interaction(interaction: discord.Interaction):
         selected_sort = selected_values[0] if selected_values else "kills"
         period, days = infer_leaderboard_period_from_message(interaction.message)
         await refresh_leaderboard_message(interaction, period, days, selected_sort)
+    elif custom_id and custom_id.startswith(("season_prev:", "season_next:")):
+        print(f"DEBUG - handling seasonal leaderboard paging {custom_id} for {interaction.user}")
+        _, month, page = custom_id.split(":")
+        await refresh_seasonal_leaderboard_message(interaction, month, int(page))
     elif custom_id == "inventory_prev" or custom_id == "inventory_next":
         print(f"DEBUG - handling inventory pagination {custom_id} for {interaction.user}")
         msg_id = interaction.message.id
@@ -214,11 +219,14 @@ async def leaderboard_monthly(interaction: discord.Interaction):
 async def leaderboard_season(interaction: discord.Interaction, month: str | None = None):
     await interaction.response.defer()
     try:
-        embed = await generate_seasonal_leaderboard_embed(interaction.guild_id, month)
+        embed, view = await build_seasonal_leaderboard_message(interaction.guild_id, month)
     except ValueError as exc:
         await interaction.followup.send(str(exc), ephemeral=True)
         return
-    await interaction.followup.send(embed=embed)
+    if view is None:  # followup.send rejects view=None
+        await interaction.followup.send(embed=embed)
+    else:
+        await interaction.followup.send(embed=embed, view=view)
 
 
 @bot.tree.command(name="leaderboard_fries", description="Rank users by their survev.de Golden Fries balance.")
