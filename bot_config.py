@@ -23,6 +23,9 @@ NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
+# NeatQueue messages older than this are never (re)processed live; NeatQueue occasionally mass-edits old
+# result messages, which would otherwise trigger a burst of replies for matches played long ago.
+QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS = int(os.getenv("QUEUE_RESULT_MAX_MESSAGE_AGE_HOURS", "24")) * 3600
 # Last-resort window length when NeatQueue gives us no usable end-of-match signal at all.
 QUEUE_MATCH_FALLBACK_DURATION_MS = int(os.getenv("QUEUE_MATCH_FALLBACK_DURATION_MINUTES", "10")) * 60 * 1000
 QUEUE_STATS_LOG_DIR = "log"

@@ -15,6 +15,7 @@ from bot_config import (
     NEATQUEUE_BOT_ID,
     QUEUE_PANEL_TITLE_PATTERN,
     QUEUE_RESULT_FETCH_DELAY_SECONDS,
+    QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS,
     QUEUE_WINNER_TITLE_PATTERN,
     bot,
 )
@@ -528,6 +529,14 @@ def find_neatqueue_embed_match(message: discord.Message, title_patterns: tuple[r
 
 async def post_queue_result(message: discord.Message, match_id: str):
     """Marks match_id as processed for this guild and, if new, replies to message with its stats."""
+    message_age_seconds = (datetime.now(timezone.utc) - message.created_at).total_seconds()
+    if message_age_seconds > QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS:
+        print(
+            f"[Queue] Ignoring Queue#{match_id}: message {message.id} is {message_age_seconds / 3600:.1f}h old "
+            f"(created {message.created_at.isoformat()}, last edited {message.edited_at.isoformat() if message.edited_at else 'never'})"
+        )
+        return  # old message touched by a non-edit update or re-sent, not a freshly finished queue
+
     if not try_mark_match_processed(message.guild.id, match_id):
         return  # already posted (e.g. the panel got edited again after a revert)
 
