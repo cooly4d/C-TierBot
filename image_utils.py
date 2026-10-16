@@ -168,7 +168,18 @@ QUEUE_IMG_WIN_BADGE = (34, 106, 72)
 QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
 QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
-# Column offsets as a fraction of a team panel's width: Player, Kills, Damage, Avg Damage
+QUEUE_IMG_CARD_BG = (22, 30, 46)
+QUEUE_IMG_CARD_RADIUS = 18
+QUEUE_IMG_CARD_INNER_PAD_X = 20
+QUEUE_IMG_CARD_BOTTOM_PAD = 16
+QUEUE_IMG_TEAM_BANNER_HEIGHT = 58
+QUEUE_IMG_COL_HEADER_HEIGHT = 48
+QUEUE_IMG_WIN_BANNER_BG = (27, 56, 47)
+QUEUE_IMG_LOSE_BANNER_BG = (56, 31, 41)
+QUEUE_IMG_NEUTRAL_BANNER_BG = (30, 41, 62)
+QUEUE_IMG_ROW_DIVIDER = (38, 50, 74)
+
+# Column offsets as a fraction of a team panel's inner width: Player, Kills, Damage, Avg Damage
 QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.48, 0.66, 0.84]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg"]
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
@@ -208,7 +219,18 @@ def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Free
     return f"{text}…" if text else "…"
 
 
-def _draw_header_gradient(draw: ImageDraw.ImageDraw, header_height: int):
+def _format_compare_duration_ms(duration_ms: int) -> str:
+    total_seconds = max(0, int(duration_ms)) // 1000
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m {seconds:02d}s"
+    if minutes > 0:
+        return f"{minutes}m {seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _draw_header_gradient(draw: ImageDraw.ImageDraw, header_height: int, width: int = QUEUE_IMG_WIDTH):
     for y in range(header_height):
         ratio = y / max(1, header_height - 1)
         gradient_color = (
@@ -216,7 +238,14 @@ def _draw_header_gradient(draw: ImageDraw.ImageDraw, header_height: int):
             QUEUE_IMG_HEADER_BG[1] + int((QUEUE_IMG_HEADER_GRADIENT_END[1] - QUEUE_IMG_HEADER_BG[1]) * ratio),
             QUEUE_IMG_HEADER_BG[2] + int((QUEUE_IMG_HEADER_GRADIENT_END[2] - QUEUE_IMG_HEADER_BG[2]) * ratio),
         )
-        draw.line([(0, y), (QUEUE_IMG_WIDTH, y)], fill=gradient_color)
+        draw.line([(0, y), (width, y)], fill=gradient_color)
+
+
+def _vcenter_y(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, box_top: float, box_bottom: float) -> float:
+    """Computes a consistent vertical y-offset for a given font within [box_top, box_bottom]
+    so all columns in the same row share an identical typographic baseline."""
+    bbox = draw.textbbox((0, 0), "Ay0", font=font)
+    return box_top + (box_bottom - box_top - (bbox[3] - bbox[1])) / 2 - bbox[1]
 
 
 def generate_queue_result_image(
@@ -225,32 +254,38 @@ def generate_queue_result_image(
     winning_team_index: int | None,
     match_history: list[bool | None] | None = None,
     team_round_wins: list[int] | None = None,
+    duration_ms: int | None = None,
 ) -> BytesIO:
+    S = 2  # 2x supersampling factor for smooth anti-aliased circles, borders, and text
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
 
     panel_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * (num_teams + 1)) // num_teams
     panel_x_positions = [QUEUE_IMG_PADDING + i * (panel_width + QUEUE_IMG_PADDING) for i in range(num_teams)]
-    columns = [round(ratio * panel_width) for ratio in QUEUE_IMG_COLUMN_RATIOS]
+    inner_width = panel_width - 2 * QUEUE_IMG_CARD_INNER_PAD_X
+    columns = [round(ratio * inner_width) for ratio in QUEUE_IMG_COLUMN_RATIOS]
 
-    rows_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING + QUEUE_IMG_TEAM_HEADER_HEIGHT
-    height = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT + QUEUE_IMG_PADDING
+    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    col_header_top = panel_top + QUEUE_IMG_TEAM_BANNER_HEIGHT
+    rows_top = col_header_top + QUEUE_IMG_COL_HEADER_HEIGHT
+    panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT + QUEUE_IMG_CARD_BOTTOM_PAD
+    height = panel_bottom + QUEUE_IMG_PADDING + 14
 
-    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH * S, height * S), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(66, "bold")
-    subtitle_font = load_font(38, "bold")
-    team_header_font = load_font(36, "bold")
-    header_font = load_font(28, "bold")
-    body_font = load_font(31)
-    body_font_bold = load_font(31, "bold")
-    footer_font = load_font(22)
+    title_font = load_font(66 * S, "bold")
+    subtitle_font = load_font(38 * S, "bold")
+    team_header_font = load_font(36 * S, "bold")
+    header_font = load_font(28 * S, "bold")
+    body_font = load_font(31 * S)
+    body_font_bold = load_font(31 * S, "bold")
+    footer_font = load_font(22 * S)
 
     # Top banner with subtle gradient
-    _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT)
+    _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
 
-    draw.text((QUEUE_IMG_PADDING, 28), f"#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING * S, 28 * S), f"#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
 
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
         winner_text = f"Team {winning_team_index + 1} Wins"
@@ -259,55 +294,55 @@ def generate_queue_result_image(
         winner_text = "Result unknown"
         winner_color = QUEUE_IMG_MUTED
 
-    draw.text((QUEUE_IMG_PADDING, 96), winner_text, font=subtitle_font, fill=winner_color)
+    draw.text((QUEUE_IMG_PADDING * S, 96 * S), winner_text, font=subtitle_font, fill=winner_color)
 
     if match_history:
         history_count = len(match_history)
         slice_start = 0
         history_slice = match_history
 
-        timeline_box_width = 560
-        timeline_box_height = 146
-        timeline_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - timeline_box_width
-        timeline_box_y = 32
+        timeline_box_width = 560 * S
+        timeline_box_height = 146 * S
+        timeline_box_x = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING) * S - timeline_box_width
+        timeline_box_y = 32 * S
         timeline_box_fill = (28, 40, 64)
         draw.rounded_rectangle(
             [timeline_box_x, timeline_box_y, timeline_box_x + timeline_box_width, timeline_box_y + timeline_box_height],
-            radius=20,
+            radius=20 * S,
             fill=timeline_box_fill,
             outline=QUEUE_IMG_MUTED,
-            width=2
+            width=2 * S
         )
 
         title_text = "MATCH TIMELINE"
         title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
         title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
-        draw.text((title_x, timeline_box_y + 14), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
+        draw.text((title_x, timeline_box_y + 14 * S), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
 
-        axis_y = timeline_box_y + 74
-        axis_x0 = timeline_box_x + 28
-        axis_x1 = timeline_box_x + timeline_box_width - 28
-        draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2)
+        axis_y = timeline_box_y + 74 * S
+        axis_x0 = timeline_box_x + 28 * S
+        axis_x1 = timeline_box_x + timeline_box_width - 28 * S
+        draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2 * S)
 
         spacing = 0 if history_count <= 1 else (axis_x1 - axis_x0) / (history_count - 1)
 
         for idx, result in enumerate(history_slice):
             x = axis_x0 + spacing * idx
             dot_color = QUEUE_IMG_MUTED if result is None else (QUEUE_IMG_WIN if result else QUEUE_IMG_LOSE)
-            dot_radius = 12 if idx < history_count - 1 else 14
+            dot_radius = (12 if idx < history_count - 1 else 14) * S
             dot_bbox = [x - dot_radius, axis_y - dot_radius, x + dot_radius, axis_y + dot_radius]
             draw.ellipse(dot_bbox, fill=dot_color)
 
             if idx == history_count - 1:
-                highlight_bbox = [x - dot_radius - 4, axis_y - dot_radius - 4, x + dot_radius + 4, axis_y + dot_radius + 4]
-                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4)
+                highlight_bbox = [x - dot_radius - 4 * S, axis_y - dot_radius - 4 * S, x + dot_radius + 4 * S, axis_y + dot_radius + 4 * S]
+                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4 * S)
 
             label = f"G{slice_start + idx + 1}"
             label_bbox = draw.textbbox((0, 0), label, font=body_font)
             label_x = x - (label_bbox[2] - label_bbox[0]) / 2
-            draw.text((label_x, axis_y + dot_radius + 10), label, font=body_font, fill=QUEUE_IMG_TEXT)
+            draw.text((label_x, axis_y + dot_radius + 10 * S), label, font=body_font, fill=QUEUE_IMG_TEXT)
 
-    score_font = load_font(72, "bold")
+    score_font = load_font(72 * S, "bold")
     if team_round_wins is not None and len(team_round_wins) == num_teams:
         team_scores = team_round_wins
     else:
@@ -333,8 +368,8 @@ def generate_queue_result_image(
         right_width = draw.textbbox((0, 0), right_text, font=score_font)[2]
         total_width = left_width + sep_width + right_width
 
-        x_pos = (QUEUE_IMG_WIDTH - total_width) / 2
-        y_pos = 88
+        x_pos = (QUEUE_IMG_WIDTH * S - total_width) / 2
+        y_pos = 88 * S
 
         draw.text((x_pos, y_pos), left_text, font=score_font, fill=left_color)
         draw.text((x_pos + left_width, y_pos), separator_text, font=score_font, fill=QUEUE_IMG_TEXT)
@@ -342,42 +377,96 @@ def generate_queue_result_image(
     else:
         score_text = " / ".join(str(score) for score in team_scores)
         score_bbox = draw.textbbox((0, 0), score_text, font=score_font)
-        x_pos = (QUEUE_IMG_WIDTH - (score_bbox[2] - score_bbox[0])) / 2
-        y_pos = 88
+        x_pos = (QUEUE_IMG_WIDTH * S - (score_bbox[2] - score_bbox[0])) / 2
+        y_pos = 88 * S
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
-    draw.text((QUEUE_IMG_PADDING, 152), "Data courtesy of NeatQueue & survev.de APIs :)", font=footer_font, fill=QUEUE_IMG_MUTED)
+    if duration_ms is not None and duration_ms > 0:
+        duration_label = f"Match Duration: {_format_compare_duration_ms(duration_ms)}"
+    else:
+        total_games = len(match_history) if match_history else 0
+        duration_label = f"{total_games} {'Game' if total_games == 1 else 'Games'} Played" if total_games else ""
+    if duration_label:
+        draw.text((QUEUE_IMG_PADDING * S, 152 * S), duration_label, font=footer_font, fill=QUEUE_IMG_MUTED)
 
-    panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    card_radius = QUEUE_IMG_CARD_RADIUS * S
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [inner_width - columns[-1]]
 
     for team_index in range(num_teams):
         team_players = teams[team_index] if team_index < len(teams) else []
         x0 = panel_x_positions[team_index]
         is_winner = winning_team_index == team_index
-        team_color = QUEUE_IMG_WIN if is_winner else (QUEUE_IMG_LOSE if winning_team_index is not None else QUEUE_IMG_MUTED)
+        if is_winner:
+            team_color = QUEUE_IMG_WIN
+            banner_bg = QUEUE_IMG_WIN_BANNER_BG
+        elif winning_team_index is not None:
+            team_color = QUEUE_IMG_LOSE
+            banner_bg = QUEUE_IMG_LOSE_BANNER_BG
+        else:
+            team_color = QUEUE_IMG_MUTED
+            banner_bg = QUEUE_IMG_NEUTRAL_BANNER_BG
+
+        # 1. Rounded card surface fill
+        draw.rounded_rectangle(
+            [x0 * S, panel_top * S, (x0 + panel_width) * S, panel_bottom * S],
+            radius=card_radius,
+            fill=QUEUE_IMG_CARD_BG,
+        )
+
+        # 2. Tinted team header banner (rounded top corners, flat bottom edge)
+        draw.rounded_rectangle(
+            [x0 * S + S, panel_top * S + S, (x0 + panel_width) * S - S, col_header_top * S],
+            radius=card_radius - S,
+            fill=banner_bg,
+        )
+        draw.rectangle(
+            [x0 * S + S, (col_header_top - QUEUE_IMG_CARD_RADIUS) * S, (x0 + panel_width) * S - S, col_header_top * S],
+            fill=banner_bg,
+        )
+        draw.line(
+            [(x0 * S + S, col_header_top * S), ((x0 + panel_width) * S - S, col_header_top * S)],
+            fill=team_color,
+            width=2 * S,
+        )
 
         team_label = f"Team {team_index + 1}"
-        team_label_width = draw.textbbox((0, 0), team_label, font=team_header_font)[2]
-        team_label_x = x0 + (panel_width - team_label_width) / 2
-        draw.text((team_label_x, panel_top), team_label, font=team_header_font, fill=team_color)
+        team_label_bbox = draw.textbbox((0, 0), team_label, font=team_header_font)
+        team_label_x = x0 * S + (panel_width * S - (team_label_bbox[2] - team_label_bbox[0])) / 2
+        team_label_y = _vcenter_y(draw, team_header_font, panel_top * S, col_header_top * S)
+        draw.text((team_label_x, team_label_y), team_label, font=team_header_font, fill=team_color)
 
-        header_y = panel_top + QUEUE_IMG_TEAM_HEADER_HEIGHT - 34
-        col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [panel_width - columns[-1]]
+        # 3. Column header strip + subtle bottom divider
+        inner_x0 = x0 + QUEUE_IMG_CARD_INNER_PAD_X
+        header_y = _vcenter_y(draw, header_font, col_header_top * S, rows_top * S)
         for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
-            label_x = x0 + columns[col_idx]
-            label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-            if col_idx != 0 and col_widths[col_idx] > label_width:
-                label_x += (col_widths[col_idx] - label_width) / 2
+            label_x = (inner_x0 + columns[col_idx]) * S
+            label_bbox = draw.textbbox((0, 0), label, font=header_font)
+            label_width = label_bbox[2] - label_bbox[0]
+            if col_idx != 0 and col_widths[col_idx] * S > label_width:
+                label_x += (col_widths[col_idx] * S - label_width) / 2
             draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
 
-        if not team_players:
-            draw.text((x0, rows_top), "No players", font=body_font, fill=QUEUE_IMG_MUTED)
+        draw.line(
+            [((x0 + 12) * S, rows_top * S), ((x0 + panel_width - 12) * S, rows_top * S)],
+            fill=QUEUE_IMG_ROW_DIVIDER,
+            width=1 * S,
+        )
 
+        if not team_players:
+            empty_y = _vcenter_y(draw, body_font, rows_top * S, (rows_top + QUEUE_IMG_ROW_HEIGHT) * S)
+            draw.text((inner_x0 * S, empty_y), "No players", font=body_font, fill=QUEUE_IMG_MUTED)
+
+        # 4. Player rows with inset rounded alternating row highlight
         for row_index, entry in enumerate(team_players):
             row_top = rows_top + row_index * QUEUE_IMG_ROW_HEIGHT
-            row_bottom = row_top + QUEUE_IMG_ROW_HEIGHT - 8
+            row_box_top = (row_top + 4) * S
+            row_box_bottom = (row_top + QUEUE_IMG_ROW_HEIGHT - 4) * S
             if row_index % 2 == 0:
-                draw.rectangle([x0, row_top, x0 + panel_width, row_bottom], fill=QUEUE_IMG_ROW_ALT)
+                draw.rounded_rectangle(
+                    [(x0 + 12) * S, row_box_top, (x0 + panel_width - 12) * S, row_box_bottom],
+                    radius=10 * S,
+                    fill=QUEUE_IMG_ROW_ALT,
+                )
 
             stats = entry["stats"]
             player_label = entry.get("display_name") or entry.get("username") or "Unknown"
@@ -400,23 +489,34 @@ def generate_queue_result_image(
             for col_idx, value in enumerate(row_values):
                 fill = QUEUE_IMG_ACCENT if col_idx == 3 else QUEUE_IMG_TEXT
                 font = body_font_bold if col_idx in (0, 2, 3) else body_font
-                cell_x = x0 + columns[col_idx]
+                cell_x = (inner_x0 + columns[col_idx]) * S
+                cell_y = _vcenter_y(draw, font, row_box_top, row_box_bottom)
                 if col_idx == 0:
-                    max_name_width = columns[1] - columns[0] - QUEUE_IMG_NAME_PADDING_RIGHT
+                    max_name_width = (columns[1] - columns[0] - QUEUE_IMG_NAME_PADDING_RIGHT) * S
                     value = truncate_to_width(draw, value, font, max_name_width)
-                    draw.text((cell_x, row_top + 20), value, font=font, fill=fill)
+                    draw.text((cell_x, cell_y), value, font=font, fill=fill)
                 else:
-                    value_width = draw.textbbox((0, 0), value, font=font)[2]
-                    centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
-                    draw.text((centered_x, row_top + 20), value, font=font, fill=fill)
+                    value_bbox = draw.textbbox((0, 0), value, font=font)
+                    value_width = value_bbox[2] - value_bbox[0]
+                    centered_x = cell_x + (col_widths[col_idx] * S - value_width) / 2
+                    draw.text((centered_x, cell_y), value, font=font, fill=fill)
 
-        panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT
-        draw.rectangle([x0 - 8, panel_top - 8, x0 + panel_width + 8, panel_bottom], outline=team_color, width=2)
+        # 5. Crisp rounded outer card border drawn over banner & card fill
+        draw.rounded_rectangle(
+            [x0 * S, panel_top * S, (x0 + panel_width) * S, panel_bottom * S],
+            radius=card_radius,
+            outline=team_color,
+            width=2 * S,
+        )
 
     footer_text = "Link your survev.de account with /verify to appear in future leaderboards!"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 6), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+    footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
+    footer_width = footer_bbox[2] - footer_bbox[0]
+    footer_x = (QUEUE_IMG_WIDTH * S - footer_width) / 2
+    footer_y = _vcenter_y(draw, footer_font, panel_bottom * S, height * S)
+    draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
 
     buffer = BytesIO()
     image.save(buffer, format="PNG")
@@ -667,17 +767,6 @@ def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
     image.save(buffer, format="PNG")
     buffer.seek(0)
     return buffer
-
-
-def _format_compare_duration_ms(duration_ms: int) -> str:
-    total_seconds = max(0, int(duration_ms)) // 1000
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours}h {minutes:02d}m {seconds:02d}s"
-    if minutes > 0:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
 
 
 def _pick_compare_row_colors(left_num: float | None, right_num: float | None) -> tuple:

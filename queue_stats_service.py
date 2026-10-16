@@ -151,6 +151,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_result["winning_team_index"],
         match_result.get("match_history"),
         match_result.get("team_round_wins"),
+        duration_ms=match_result.get("duration_ms"),
     )
     file = discord.File(image_buffer, filename=f"queue_stats_{match_id}.png")
 
