@@ -24,34 +24,52 @@ from image_utils import (
 )
 
 
+MAX_PAYLOAD_CACHE_ENTRIES = 200
+_inventory_cache: dict[int, dict] = {}
+_market_cache: dict[int, dict] = {}
+
+
+def _store_cache_entry(cache: dict[int, dict], user_id: int, data: dict):
+    cache.pop(user_id, None)
+    cache[user_id] = data
+    while len(cache) > MAX_PAYLOAD_CACHE_ENTRIES:
+        oldest_key = next(iter(cache))
+        cache.pop(oldest_key, None)
+
+
 async def build_inventory_image_payload(
     target_user: discord.User,
     access_token: str,
     page: int = 0,
     rarity_filter: str = "all",
+    use_cache: bool = False,
 ):
-    async with aiohttp.ClientSession() as session:
-        inventory, error = await fetch_user_inventory(session, access_token)
-        if error:
-            return None, None, error, None, None, None
+    inventory = _inventory_cache.get(target_user.id) if use_cache else None
+    if inventory is None:
+        async with aiohttp.ClientSession() as session:
+            inventory, error = await fetch_user_inventory(session, access_token)
+            if error:
+                return None, None, error, None, None, None
 
-        if not inventory:
-            return None, None, "survev.de returned an empty inventory response.", None, None, None
+            if not inventory:
+                return None, None, "survev.de returned an empty inventory response.", None, None, None
 
-        username = inventory.get("username") or str(target_user)
-        items = inventory.get("items", [])
-        rarity_key = normalize_inventory_rarity_filter(rarity_filter)
-        grouped_items = group_inventory_items(items)
-        rarity_counts = build_inventory_rarity_counts(grouped_items)
-        if rarity_key != "all":
-            rarity_value = int(rarity_key)
-            grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
-        total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
-        clamped_page = max(0, min(page, total_pages - 1))
-        image_buffer = await asyncio.to_thread(generate_inventory_image, username, items, clamped_page, rarity_key)
-        filename = f"inventory_{target_user.id}_p{clamped_page}.png"
-        file = discord.File(image_buffer, filename=filename)
-        return f"{username}'s survev.de inventory", file, None, total_pages, filename, rarity_counts
+        _store_cache_entry(_inventory_cache, target_user.id, inventory)
+
+    username = inventory.get("username") or str(target_user)
+    items = inventory.get("items", [])
+    rarity_key = normalize_inventory_rarity_filter(rarity_filter)
+    grouped_items = group_inventory_items(items)
+    rarity_counts = build_inventory_rarity_counts(grouped_items)
+    if rarity_key != "all":
+        rarity_value = int(rarity_key)
+        grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
+    total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
+    clamped_page = max(0, min(page, total_pages - 1))
+    image_buffer = await asyncio.to_thread(generate_inventory_image, username, items, clamped_page, rarity_key)
+    filename = f"inventory_{target_user.id}_p{clamped_page}.png"
+    file = discord.File(image_buffer, filename=filename)
+    return f"{username}'s survev.de inventory", file, None, total_pages, filename, rarity_counts
 
 
 async def build_shop_image_payload(
@@ -59,36 +77,41 @@ async def build_shop_image_payload(
     access_token: str,
     mode: str = "all",
     page: int = 0,
+    use_cache: bool = False,
 ):
-    async with aiohttp.ClientSession() as session:
-        market_data, error = await fetch_user_market(session, access_token)
-        if error:
-            return None, None, None, error, None
+    market_data = _market_cache.get(target_user.id) if use_cache else None
+    if market_data is None:
+        async with aiohttp.ClientSession() as session:
+            market_data, error = await fetch_user_market(session, access_token)
+            if error:
+                return None, None, None, error, None
 
-        if not market_data:
-            return None, None, None, "survev.de returned an empty market response.", None
+            if not market_data:
+                return None, None, None, "survev.de returned an empty market response.", None
 
-        username = market_data.get("username") or str(target_user)
-        offers = market_data.get("offers", [])
+        _store_cache_entry(_market_cache, target_user.id, market_data)
 
-        if mode == "daily":
-            shown_offers = [o for o in offers if o.get("slot") in (0, 1)]
-        elif mode == "weekly":
-            shown_offers = [o for o in offers if o.get("slot") in (2, 3)]
-        else:
-            shown_offers = offers
+    username = market_data.get("username") or str(target_user)
+    offers = market_data.get("offers", [])
 
-        total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
-        clamped_page = max(0, min(page, total_pages - 1))
+    if mode == "daily":
+        shown_offers = [o for o in offers if o.get("slot") in (0, 1)]
+    elif mode == "weekly":
+        shown_offers = [o for o in offers if o.get("slot") in (2, 3)]
+    else:
+        shown_offers = offers
 
-        image_buffer = await asyncio.to_thread(generate_shop_image, username, market_data, mode, clamped_page)
-        filename = f"shop_{target_user.id}_{mode}_p{clamped_page}.png"
-        file = discord.File(image_buffer, filename=filename)
+    total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
+    clamped_page = max(0, min(page, total_pages - 1))
 
-        mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
-        content = f"{username}'s {mode_label} Offers"
+    image_buffer = await asyncio.to_thread(generate_shop_image, username, market_data, mode, clamped_page)
+    filename = f"shop_{target_user.id}_{mode}_p{clamped_page}.png"
+    file = discord.File(image_buffer, filename=filename)
 
-        return content, file, filename, None, total_pages
+    mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
+    content = f"{username}'s {mode_label} Offers"
+
+    return content, file, filename, None, total_pages
 
 
 async def build_goldenfries_embed_payload(target_user: discord.User, access_token: str):

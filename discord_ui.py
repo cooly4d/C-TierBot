@@ -212,31 +212,56 @@ class InventoryPaginationView(discord.ui.View):
 
 
 class ShopPaginationView(discord.ui.View):
-    """Persistent view for paginating through shop offers."""
-    def __init__(self, total_pages: int):
+    """Persistent view for toggling Daily/Weekly/All shop offers and paginating through them."""
+    def __init__(self, total_pages: int, mode: str = "all"):
         super().__init__(timeout=None)
         self.total_pages = total_pages
+        self.mode = mode if mode in ("daily", "weekly", "all") else "all"
+        self._update_mode_button_styles(self.mode)
 
-    def update_button_states(self, current_page: int):
+    def _update_mode_button_styles(self, mode: str):
+        self.daily_button.style = discord.ButtonStyle.primary if mode == "daily" else discord.ButtonStyle.secondary
+        self.weekly_button.style = discord.ButtonStyle.primary if mode == "weekly" else discord.ButtonStyle.secondary
+        self.all_button.style = discord.ButtonStyle.primary if mode == "all" else discord.ButtonStyle.secondary
+
+    def update_button_states(self, current_page: int, mode: str | None = None):
+        if mode in ("daily", "weekly", "all"):
+            self.mode = mode
+        self._update_mode_button_styles(self.mode)
         self.prev_button.disabled = current_page <= 0
         self.next_button.disabled = current_page >= self.total_pages - 1
 
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="market_prev")
+    @discord.ui.button(label="Daily", style=discord.ButtonStyle.secondary, custom_id="market_mode_daily", row=0)
+    async def daily_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
+
+    @discord.ui.button(label="Weekly", style=discord.ButtonStyle.secondary, custom_id="market_mode_weekly", row=0)
+    async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
+
+    @discord.ui.button(label="All", style=discord.ButtonStyle.primary, custom_id="market_mode_all", row=0)
+    async def all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
+
+    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="market_prev", row=1)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Handled by log_interaction
         pass
 
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="market_next")
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="market_next", row=1)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Handled by log_interaction
         pass
 
 
 async def refresh_market_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, mode: str, page: int, msg_id: int):
-    """Refresh the market message with a new page."""
+    """Refresh the market message with a new mode or page using cached market data when available."""
     await interaction.response.defer()
     content, file, filename, error_text, total_pages = await build_shop_image_payload(
-        target_user, access_token, mode=mode, page=page
+        target_user, access_token, mode=mode, page=page, use_cache=True
     )
     if error_text or not file:
         await interaction.followup.send("Failed to reload shop offers.")
@@ -249,18 +274,18 @@ async def refresh_market_message(interaction: discord.Interaction, target_user: 
     embed.set_image(url=f"attachment://{filename}")
     embed.set_footer(text=f"Page {clamped_page + 1} of {total_pages}")
 
-    view = ShopPaginationView(total_pages)
-    view.update_button_states(clamped_page)
+    view = ShopPaginationView(total_pages, mode=mode)
+    view.update_button_states(clamped_page, mode=mode)
 
     await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
 async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, rarity_filter: str, page: int, msg_id: int):
-    """Refresh the inventory message with a new page."""
+    """Refresh the inventory message with a new rarity or page using cached inventory data when available."""
     await interaction.response.defer()
     rarity_key = normalize_inventory_rarity_filter(rarity_filter)
     content, file, error_text, total_pages, filename, rarity_counts = await build_inventory_image_payload(
-        target_user, access_token, page=page, rarity_filter=rarity_key
+        target_user, access_token, page=page, rarity_filter=rarity_key, use_cache=True
     )
     if error_text or not file:
         await interaction.followup.send("Failed to reload inventory.")

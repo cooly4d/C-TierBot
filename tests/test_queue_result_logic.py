@@ -116,6 +116,46 @@ class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<@202>", embed.fields[0].value)
         self.assertEqual(mock_fetch.await_count, 2)
 
+    async def test_shop_pagination_view_highlights_active_mode(self):
+        import discord
+        from discord_ui import ShopPaginationView
+
+        view = ShopPaginationView(2, "weekly")
+        view.update_button_states(0, "weekly")
+        self.assertEqual(view.daily_button.style, discord.ButtonStyle.secondary)
+        self.assertEqual(view.weekly_button.style, discord.ButtonStyle.primary)
+        self.assertEqual(view.all_button.style, discord.ButtonStyle.secondary)
+        self.assertTrue(view.prev_button.disabled)
+        self.assertFalse(view.next_button.disabled)
+
+    @patch("leaderboard_service.generate_shop_image")
+    @patch("leaderboard_service.fetch_user_market", new_callable=AsyncMock)
+    async def test_build_shop_image_payload_uses_cache_when_requested(self, mock_fetch, mock_image):
+        import io
+        from types import SimpleNamespace
+        from leaderboard_service import _market_cache, build_shop_image_payload
+
+        _market_cache.clear()
+        mock_fetch.return_value = (
+            {
+                "market": {
+                    "daily_items": ["outfit_1"],
+                    "weekly_items": ["outfit_2"],
+                    "user_market_items": [{"item": "outfit_1", "price": 100, "bought": False}],
+                    "next_daily_reset": None,
+                    "next_weekly_reset": None,
+                }
+            },
+            None,
+        )
+        mock_image.side_effect = lambda *args, **kwargs: io.BytesIO(b"png")
+        user = SimpleNamespace(id=777, display_name="Tester", display_avatar=SimpleNamespace(url=None))
+
+        await build_shop_image_payload(user, "tok-abc", mode="daily", page=0, use_cache=False)
+        await build_shop_image_payload(user, "tok-abc", mode="weekly", page=0, use_cache=True)
+
+        self.assertEqual(mock_fetch.await_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

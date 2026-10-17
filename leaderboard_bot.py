@@ -166,6 +166,13 @@ async def log_interaction(interaction: discord.Interaction):
             else:
                 current_page = min(total_pages - 1, current_page + 1)
             await refresh_market_message(interaction, target_user, access_token, mode, current_page, msg_id)
+    elif custom_id in ("market_mode_daily", "market_mode_weekly", "market_mode_all"):
+        print(f"DEBUG - handling market mode switch {custom_id} for {interaction.user}")
+        msg_id = interaction.message.id
+        if msg_id in market_pagination_state:
+            target_user, access_token, _, _, _ = market_pagination_state[msg_id]
+            new_mode = custom_id.removeprefix("market_mode_")
+            await refresh_market_message(interaction, target_user, access_token, new_mode, 0, msg_id)
 
 
 bot.add_listener(log_interaction, "on_interaction")
@@ -372,45 +379,31 @@ async def compare(
     await interaction.followup.send(content=content, file=file)
 
 
-class MarketGroup(discord.app_commands.Group):
-    def __init__(self):
-        super().__init__(name="market", description="View a user's survev.de shop offers.")
+@bot.tree.command(name="market", description="View a user's survev.de shop offers.")
+@discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
+async def market(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
 
-    async def _send_market_offers(self, interaction: discord.Interaction, member: discord.User | None, mode: str):
-        target = member or interaction.user
-        await interaction.response.defer()
+    access_token = await _require_user_token(interaction, target)
+    if not access_token:
+        return
 
-        access_token = await _require_user_token(interaction, target)
-        if not access_token:
-            return
+    mode = "all"
+    content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode=mode, page=0)
+    if error_text:
+        await interaction.followup.send(error_text)
+        return
 
-        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode=mode, page=0)
-        if error_text:
-            await interaction.followup.send(error_text)
-            return
+    embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
+    embed.set_image(url=f"attachment://{filename}")
+    embed.set_footer(text=f"Page 1 of {total_pages}")
 
-        embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
-        embed.set_image(url=f"attachment://{filename}")
-        embed.set_footer(text=f"Page 1 of {total_pages}")
+    view = ShopPaginationView(total_pages, mode=mode)
+    view.update_button_states(0, mode=mode)
 
-        view = ShopPaginationView(total_pages)
-        view.update_button_states(0)
-
-        msg = await interaction.followup.send(embed=embed, file=file, view=view)
-        store_pagination_state(market_pagination_state, msg.id, (target, access_token, mode, 0, total_pages))
-
-    @discord.app_commands.command(name="daily", description="View only daily shop offers.")
-    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
-    async def daily(self, interaction: discord.Interaction, member: discord.User | None = None):
-        await self._send_market_offers(interaction, member, "daily")
-
-    @discord.app_commands.command(name="weekly", description="View only weekly shop offers.")
-    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
-    async def weekly(self, interaction: discord.Interaction, member: discord.User | None = None):
-        await self._send_market_offers(interaction, member, "weekly")
-
-
-bot.tree.add_command(MarketGroup())
+    msg = await interaction.followup.send(embed=embed, file=file, view=view)
+    store_pagination_state(market_pagination_state, msg.id, (target, access_token, mode, 0, total_pages))
 
 
 # ------------------------------------------------------------------

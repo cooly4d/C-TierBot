@@ -49,8 +49,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players. Leave out `member_b` to compare against yourself. |
 | `/inventory [member]` | Paged inventory image with a rarity filter. |
 | `/goldenfries [member]` | Golden Fries balance. |
-| `/market daily [member]` | Daily shop offers. |
-| `/market weekly [member]` | Weekly shop offers. |
+| `/market [member]` | Shop offers image with buttons to switch between Daily, Weekly, and All. |
 
 ### Queues
 
