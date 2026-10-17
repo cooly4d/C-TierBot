@@ -4,7 +4,7 @@ Kept self-contained (no db/discord-client/network imports) so images can be
 generated and unit-tested independently of the rest of the bot.
 """
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
@@ -219,7 +219,7 @@ def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.Free
     return f"{text}…" if text else "…"
 
 
-def _format_compare_duration_ms(duration_ms: int) -> str:
+def format_duration_ms(duration_ms: int) -> str:
     total_seconds = max(0, int(duration_ms)) // 1000
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -382,7 +382,7 @@ def generate_queue_result_image(
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
     if duration_ms is not None and duration_ms > 0:
-        duration_label = f"Match Duration: {_format_compare_duration_ms(duration_ms)}"
+        duration_label = f"Match Duration: {format_duration_ms(duration_ms)}"
     else:
         total_games = len(match_history) if match_history else 0
         duration_label = f"{total_games} {'Game' if total_games == 1 else 'Games'} Played" if total_games else ""
@@ -664,7 +664,7 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
         fill=QUEUE_IMG_MUTED
     )
 
-    balance_text = f"Balance: {balance:,} <:goldenfries:1535978920481136700>"
+    balance_text = f"Balance: {balance:,} Golden Fries 💰"
     draw.text((QUEUE_IMG_PADDING, 130), balance_text, font=status_font, fill=QUEUE_IMG_ACCENT)
 
     # Render cards
@@ -713,50 +713,6 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
     page_x = (QUEUE_IMG_WIDTH - page_width) / 2
     draw.text((page_x, height - 52), page_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
-
-
-def generate_goldenfries_image(username: str, balance: int) -> BytesIO:
-    header_height = QUEUE_IMG_HEADER_HEIGHT
-    height = header_height + QUEUE_IMG_PADDING * 3 + 220
-    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
-    draw = ImageDraw.Draw(image)
-
-    title_font = load_font(44, "bold")
-    subtitle_font = load_font(24, "bold")
-    counter_font = load_font(96, "bold")
-    body_font = load_font(20)
-    footer_font = load_font(15)
-
-    _draw_header_gradient(draw, header_height)
-
-    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Golden Fries", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 86), f"{username}'s balance", font=subtitle_font, fill=QUEUE_IMG_MUTED)
-
-    balance_text = f"{balance:,}"
-    balance_width = draw.textbbox((0, 0), balance_text, font=counter_font)[2]
-    balance_x = (QUEUE_IMG_WIDTH - balance_width) / 2
-    balance_y = header_height + QUEUE_IMG_PADDING
-    draw.text((balance_x, balance_y), balance_text, font=counter_font, fill=QUEUE_IMG_ACCENT)
-
-    label_text = "Golden Fries"
-    label_width = draw.textbbox((0, 0), label_text, font=body_font)[2]
-    label_x = (QUEUE_IMG_WIDTH - label_width) / 2
-    draw.text((label_x, balance_y + 110), label_text, font=body_font, fill=QUEUE_IMG_TEXT)
-
-    description = "idk what to put here but this is a placeholder for now"
-    desc_width = draw.textbbox((0, 0), description, font=body_font)[2]
-    desc_x = (QUEUE_IMG_WIDTH - desc_width) / 2
-    draw.text((desc_x, balance_y + 150), description, font=body_font, fill=QUEUE_IMG_MUTED)
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
@@ -837,8 +793,8 @@ def generate_compare_image(
         ),
         (
             "4v4 Play Time",
-            _format_compare_duration_ms(left_playtime_ms) if left_playtime_ms is not None else "-",
-            _format_compare_duration_ms(right_playtime_ms) if right_playtime_ms is not None else "-",
+            format_duration_ms(left_playtime_ms) if left_playtime_ms is not None else "-",
+            format_duration_ms(right_playtime_ms) if right_playtime_ms is not None else "-",
             left_playtime_ms,
             right_playtime_ms,
         ),
@@ -850,7 +806,7 @@ def generate_compare_image(
             right_all_avg,
         ),
         (
-            f"{datetime.now().strftime('%B')} Avg Damage",
+            f"{datetime.now(timezone.utc).strftime('%B')} Avg Damage",
             fmt(left_monthly_avg, decimals=",.0f", none_text="No data"),
             fmt(right_monthly_avg, decimals=",.0f", none_text="No data"),
             left_monthly_avg,
@@ -930,168 +886,6 @@ def generate_compare_image(
 
         if idx < len(rows) - 1:
             draw.line([(card_left, y_top + row_height), (card_right, y_top + row_height)], fill=card_outline, width=1)
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
-
-
-def generate_leaderboard_fries_image(leaderboard_rows: list[dict]) -> BytesIO:
-    header_height = QUEUE_IMG_HEADER_HEIGHT
-    row_height = QUEUE_IMG_ROW_HEIGHT
-    table_top = header_height + QUEUE_IMG_PADDING
-    height = table_top + max(len(leaderboard_rows), 1) * row_height + QUEUE_IMG_PADDING
-    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
-    draw = ImageDraw.Draw(image)
-
-    title_font = load_font(46, "bold")
-    subtitle_font = load_font(24, "bold")
-    header_font = load_font(18, "bold")
-    body_font = load_font(20)
-    footer_font = load_font(15)
-
-    _draw_header_gradient(draw, header_height)
-
-    draw.text((QUEUE_IMG_PADDING, 26), "Server Golden Fries Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 84), "Top verified users by their survev.de Golden Fries balance.", font=subtitle_font, fill=QUEUE_IMG_MUTED)
-
-    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
-    table_x = QUEUE_IMG_PADDING
-    columns = [
-        table_x,
-        table_x + round(table_width * 0.10),
-        table_x + round(table_width * 0.55),
-        table_x + round(table_width * 0.80)
-    ]
-    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
-
-    header_y = table_top
-    labels = ["#", "Player", "Balance", "Status"]
-    for col_idx, label in enumerate(labels):
-        label_x = columns[col_idx]
-        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-        if col_idx == 0:
-            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-        elif col_idx == 1:
-            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-        else:
-            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-
-    row_y = header_y + row_height
-    for row_index, entry in enumerate(leaderboard_rows):
-        if row_index % 2 == 0:
-            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
-
-        balance = entry["balance"]
-        display_name = entry.get("display_name") or f"Player {entry['discord_id']}"
-        row_values = [
-            str(entry["rank"]),
-            display_name,
-            f"{balance:,}",
-            "Verified"
-        ]
-
-        for col_idx, value in enumerate(row_values):
-            font = body_font
-            fill = QUEUE_IMG_ACCENT if col_idx == 2 else QUEUE_IMG_TEXT
-            cell_x = columns[col_idx]
-            if col_idx == 0:
-                draw.text((cell_x, row_y + 18), value, font=font, fill=fill)
-            elif col_idx == 1:
-                draw.text((cell_x, row_y + 18), value, font=font, fill=fill)
-            else:
-                value_width = draw.textbbox((0, 0), value, font=font)[2]
-                centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
-                draw.text((centered_x, row_y + 18), value, font=font, fill=fill)
-
-        row_y += row_height
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
-
-
-def generate_leaderboard_image(period: str, days: int, leaderboard_rows: list[dict]) -> BytesIO:
-    header_height = QUEUE_IMG_HEADER_HEIGHT
-    row_height = QUEUE_IMG_ROW_HEIGHT
-    table_top = header_height + QUEUE_IMG_PADDING
-    height = table_top + max(len(leaderboard_rows), 1) * row_height + QUEUE_IMG_PADDING
-    image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
-    draw = ImageDraw.Draw(image)
-
-    title_font = load_font(46, "bold")
-    subtitle_font = load_font(24, "bold")
-    header_font = load_font(18, "bold")
-    body_font = load_font(20)
-    footer_font = load_font(15)
-
-    _draw_header_gradient(draw, header_height)
-
-    draw.text((QUEUE_IMG_PADDING, 26), f"Server {period} Leaderboard", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 84), f"Performance over the past {days} days (Sorted by Kills)", font=subtitle_font, fill=QUEUE_IMG_MUTED)
-
-    table_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
-    table_x = QUEUE_IMG_PADDING
-    columns = [
-        table_x,
-        table_x + round(table_width * 0.10),
-        table_x + round(table_width * 0.42),
-        table_x + round(table_width * 0.60),
-        table_x + round(table_width * 0.78)
-    ]
-    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [table_x + table_width - columns[-1]]
-
-    header_y = table_top
-    labels = ["#", "Player", "Kills", "Wins", "Damage"]
-    for col_idx, label in enumerate(labels):
-        label_x = columns[col_idx]
-        label_width = draw.textbbox((0, 0), label, font=header_font)[2]
-        if col_idx == 0:
-            draw.text((label_x, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-        else:
-            draw.text((label_x + (col_widths[col_idx] - label_width) / 2, header_y), label, font=header_font, fill=QUEUE_IMG_TEXT)
-
-    row_y = header_y + row_height
-    for row_index, entry in enumerate(leaderboard_rows):
-        if row_index % 2 == 0:
-            draw.rectangle([table_x, row_y, table_x + table_width, row_y + row_height], fill=QUEUE_IMG_ROW_ALT)
-
-        stats = entry["stats"]
-        display_name = entry.get("display_name") or f"Player {entry['discord_id']}"
-        row_values = [
-            str(entry["rank"]),
-            display_name,
-            str(stats["kills"]),
-            str(stats["wins"]),
-            f"{stats['damage']:,}"
-        ]
-
-        for col_idx, value in enumerate(row_values):
-            font = body_font
-            fill = QUEUE_IMG_TEXT if col_idx != 2 else QUEUE_IMG_ACCENT
-            cell_x = columns[col_idx]
-            if col_idx == 0:
-                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
-            elif col_idx == 1:
-                draw.text((cell_x, row_y + 14), value, font=font, fill=fill)
-            else:
-                value_width = draw.textbbox((0, 0), value, font=font)[2]
-                centered_x = cell_x + (col_widths[col_idx] - value_width) / 2
-                draw.text((centered_x, row_y + 14), value, font=font, fill=fill)
-
-        row_y += row_height
 
     footer_text = "Data courtesy of survev.de API :)"
     footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]

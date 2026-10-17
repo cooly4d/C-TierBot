@@ -42,6 +42,7 @@ from discord_ui import (
     refresh_leaderboard_message,
     refresh_market_message,
     refresh_seasonal_leaderboard_message,
+    store_pagination_state,
 )
 from leaderboard_service import (
     build_compare_payload,
@@ -67,35 +68,11 @@ _console_listener_started = False
 @bot.event
 async def on_ready():
     global _console_listener_started
-    try:
-        view = get_queue_result_view()
-        bot.add_view(view)
-        print(f"DEBUG - add_view succeeded: is_persistent={view.is_persistent()} children={view.children}")
-    except Exception as exc:
-        print(f"DEBUG - add_view FAILED: {exc!r}")
-
-    try:
-        # Add a persistent inventory view template (buttons will be updated per message)
-        template_inventory_view = InventoryPaginationView(1)
-        bot.add_view(template_inventory_view)
-        print(f"DEBUG - inventory view added: is_persistent={template_inventory_view.is_persistent()}")
-    except Exception as exc:
-        print(f"DEBUG - inventory view add_view FAILED: {exc!r}")
-
-    try:
-        # Add a persistent shop view template (buttons will be updated per message)
-        template_shop_view = ShopPaginationView(1)
-        bot.add_view(template_shop_view)
-        print(f"DEBUG - shop view added: is_persistent={template_shop_view.is_persistent()}")
-    except Exception as exc:
-        print(f"DEBUG - shop view add_view FAILED: {exc!r}")
-
-    try:
-        store = bot._connection._view_store
-        print(f"DEBUG - view_store synced custom_ids: {list(store._synced_message_views.keys()) if hasattr(store, '_synced_message_views') else 'n/a'}")
-        print(f"DEBUG - view_store persistent listeners: {list(getattr(store, '_views', {}).keys())}")
-    except Exception as exc:
-        print(f"DEBUG - view_store introspection failed: {exc!r}")
+    for persistent_view in (get_queue_result_view(), InventoryPaginationView(1), ShopPaginationView(1)):
+        try:
+            bot.add_view(persistent_view)
+        except Exception as exc:
+            print(f"[Startup Warning] add_view failed for {type(persistent_view).__name__}: {exc!r}")
 
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
@@ -192,6 +169,18 @@ async def log_interaction(interaction: discord.Interaction):
 
 
 bot.add_listener(log_interaction, "on_interaction")
+
+
+async def _require_user_token(interaction: discord.Interaction, target: discord.User) -> str | None:
+    """Returns target's survev.de access token, or sends an unlinked-account message and returns None."""
+    access_token = get_user_token(target.id)
+    if access_token:
+        return access_token
+    if target.id == interaction.user.id:
+        await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
+    else:
+        await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
+    return None
 
 
 @bot.tree.command(name="verify", description="Link your survev.de account to join the server leaderboards!")
@@ -317,12 +306,8 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
     target = member or interaction.user
     await interaction.response.defer()
 
-    access_token = get_user_token(target.id)
+    access_token = await _require_user_token(interaction, target)
     if not access_token:
-        if target.id == interaction.user.id:
-            await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` first.")
-        else:
-            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
     content, file, error_text, total_pages, filename, rarity_counts = await build_inventory_image_payload(target, access_token, 0, "all")
@@ -330,17 +315,16 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
         await interaction.followup.send(error_text)
         return
 
-    # Create embed with image attached
+    total_pages = total_pages or 1
     embed = discord.Embed(title=f"{content} (All Rarities)", color=discord.Color.blurple())
     embed.set_image(url=f"attachment://{filename}")
-    embed.set_footer(text=f"Page 1 of {total_pages or 1}")
-    
-    view = InventoryPaginationView(total_pages or 1, "all", rarity_counts)
+    embed.set_footer(text=f"Page 1 of {total_pages}")
+
+    view = InventoryPaginationView(total_pages, "all", rarity_counts)
     view.update_button_states(0)
     msg = await interaction.followup.send(embed=embed, file=file, view=view)
-    
-    # Store pagination state
-    inventory_pagination_state[msg.id] = (target, access_token, "all", 0, total_pages or 1)
+
+    store_pagination_state(inventory_pagination_state, msg.id, (target, access_token, "all", 0, total_pages))
 
 
 @bot.tree.command(name="goldenfries", description="View a user's survev.de Golden Fries balance.")
@@ -349,12 +333,8 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
     target = member or interaction.user
     await interaction.response.defer()
 
-    access_token = get_user_token(target.id)
+    access_token = await _require_user_token(interaction, target)
     if not access_token:
-        if target.id == interaction.user.id:
-            await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
-        else:
-            await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
         return
 
     username, balance, error_text = await build_goldenfries_embed_payload(target, access_token)
@@ -396,71 +376,38 @@ class MarketGroup(discord.app_commands.Group):
     def __init__(self):
         super().__init__(name="market", description="View a user's survev.de shop offers.")
 
-    @discord.app_commands.command(name="daily", description="View only daily shop offers.")
-    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
-    async def daily(self, interaction: discord.Interaction, member: discord.User | None = None):
+    async def _send_market_offers(self, interaction: discord.Interaction, member: discord.User | None, mode: str):
         target = member or interaction.user
         await interaction.response.defer()
 
-        access_token = get_user_token(target.id)
+        access_token = await _require_user_token(interaction, target)
         if not access_token:
-            if target.id == interaction.user.id:
-                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
-            else:
-                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
             return
 
-        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode="daily", page=0)
+        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode=mode, page=0)
         if error_text:
             await interaction.followup.send(error_text)
             return
 
-        # Create embed with image
         embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
         embed.set_image(url=f"attachment://{filename}")
         embed.set_footer(text=f"Page 1 of {total_pages}")
 
-        # Create pagination view
         view = ShopPaginationView(total_pages)
         view.update_button_states(0)
 
         msg = await interaction.followup.send(embed=embed, file=file, view=view)
-        
-        # Store pagination state
-        market_pagination_state[msg.id] = (target, access_token, "daily", 0, total_pages)
+        store_pagination_state(market_pagination_state, msg.id, (target, access_token, mode, 0, total_pages))
+
+    @discord.app_commands.command(name="daily", description="View only daily shop offers.")
+    @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
+    async def daily(self, interaction: discord.Interaction, member: discord.User | None = None):
+        await self._send_market_offers(interaction, member, "daily")
 
     @discord.app_commands.command(name="weekly", description="View only weekly shop offers.")
     @discord.app_commands.describe(member="Discord member whose shop to display. Omit to use yourself.")
     async def weekly(self, interaction: discord.Interaction, member: discord.User | None = None):
-        target = member or interaction.user
-        await interaction.response.defer()
-
-        access_token = get_user_token(target.id)
-        if not access_token:
-            if target.id == interaction.user.id:
-                await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
-            else:
-                await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
-            return
-
-        content, file, filename, error_text, total_pages = await build_shop_image_payload(target, access_token, mode="weekly", page=0)
-        if error_text:
-            await interaction.followup.send(error_text)
-            return
-
-        # Create embed with image
-        embed = discord.Embed(title=f"{content}", color=discord.Color.blurple())
-        embed.set_image(url=f"attachment://{filename}")
-        embed.set_footer(text=f"Page 1 of {total_pages}")
-
-        # Create pagination view
-        view = ShopPaginationView(total_pages)
-        view.update_button_states(0)
-
-        msg = await interaction.followup.send(embed=embed, file=file, view=view)
-        
-        # Store pagination state
-        market_pagination_state[msg.id] = (target, access_token, "weekly", 0, total_pages)
+        await self._send_market_offers(interaction, member, "weekly")
 
 
 bot.tree.add_command(MarketGroup())

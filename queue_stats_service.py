@@ -1,6 +1,7 @@
 """Ties NeatQueue match calculation to hall-of-fame record tracking, the /queue_stats
 result image, and per-command JSON logging.
 """
+import asyncio
 import json
 import os
 import re
@@ -10,19 +11,8 @@ import discord
 
 from bot_config import HALL_OF_FAME_RECORDS, MIN_GAMES_FOR_HALL_OF_FAME_UPDATE, QUEUE_STATS_LOG_DIR, bot
 from db import cache_player_queue_stats, get_hall_of_fame_record, try_set_hall_of_fame_record
-from image_utils import generate_queue_result_image
+from image_utils import format_duration_ms, generate_queue_result_image
 from neatqueue_client import calculate_queue_match_stats, resolve_queue_user_display_names
-
-
-def format_duration_ms(duration_ms: int) -> str:
-    total_seconds = max(0, int(duration_ms)) // 1000
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours}h {minutes:02d}m {seconds:02d}s"
-    if minutes > 0:
-        return f"{minutes}m {seconds:02d}s"
-    return f"{seconds}s"
 
 
 def write_queue_stats_command_log(
@@ -145,7 +135,8 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         return None, None, "This NeatQueue match has no player roster to show stats for.", None
 
     await resolve_queue_user_display_names(teams, bot)
-    image_buffer = generate_queue_result_image(
+    image_buffer = await asyncio.to_thread(
+        generate_queue_result_image,
         match_id,
         teams,
         match_result["winning_team_index"],

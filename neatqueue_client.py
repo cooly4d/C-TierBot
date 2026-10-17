@@ -1,6 +1,7 @@
 """NeatQueue API access, response parsing, and the core cross-referencing logic that
 turns a NeatQueue match number + survev.de match data into one finalized result.
 """
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -8,7 +9,14 @@ from datetime import datetime, timezone
 import aiohttp
 import discord
 
-from bot_config import bot, NEATQUEUE_API_BASE, NEATQUEUE_API_TOKEN, NEATQUEUE_BOT_ID, QUEUE_MATCH_FALLBACK_DURATION_MS
+from bot_config import (
+    API_CONCURRENCY_LIMIT,
+    NEATQUEUE_API_BASE,
+    NEATQUEUE_API_TOKEN,
+    NEATQUEUE_BOT_ID,
+    QUEUE_MATCH_FALLBACK_DURATION_MS,
+    bot,
+)
 from db import get_guild_queue_channels, get_discord_id_by_slug, get_user_token
 from survev_client import fetch_player_matches_in_window, fetch_public_match_data, get_match_history_timestamp
 
@@ -34,28 +42,33 @@ async def fetch_neatqueue_history(session: aiohttp.ClientSession, guild_id: int,
         "Content-Type": "application/json"
     }
 
-    async with session.get(url, headers=headers, params=params) as resp:
-        text = await resp.text()
-        if resp.status != 200:
-            error_detail = text
-            try:
-                error_detail_json = json.loads(text)
-                error_detail = error_detail_json
-            except Exception:
-                pass
-            if resp.status == 404:
-                return None, (
-                    f"NeatQueue endpoint returned 404 for URL {url}. "
-                    f"Verify this server has NeatQueue set up and the match number is correct; response detail: {error_detail}"
-                )
-            return None, f"NeatQueue API returned {resp.status} for URL {url}: {error_detail}"
+    try:
+        async with session.get(url, headers=headers, params=params) as resp:
+            text = await resp.text()
+            status = resp.status
+    except aiohttp.ClientError as exc:
+        return None, f"NeatQueue API request failed for {url}: {exc}"
 
+    if status != 200:
+        error_detail = text
         try:
-            data = json.loads(text)
-        except Exception as exc:
-            return None, f"NeatQueue returned invalid JSON from {url}: {exc}"
+            error_detail_json = json.loads(text)
+            error_detail = error_detail_json
+        except Exception:
+            pass
+        if status == 404:
+            return None, (
+                f"NeatQueue endpoint returned 404 for URL {url}. "
+                f"Verify this server has NeatQueue set up and the match number is correct; response detail: {error_detail}"
+            )
+        return None, f"NeatQueue API returned {status} for URL {url}: {error_detail}"
 
-        return data, None
+    try:
+        data = json.loads(text)
+    except Exception as exc:
+        return None, f"NeatQueue returned invalid JSON from {url}: {exc}"
+
+    return data, None
 
 
 async def fetch_neatqueue_matches_since(session: aiohttp.ClientSession, guild_id: int, start_date_iso: str):
@@ -276,35 +289,10 @@ def parse_teams_from_panel_embed(embed: discord.Embed) -> list[list[dict]]:
     return teams
 
 
-async def resolve_queue_user_display_names(teams: list[list[dict]], client: discord.Client):
-    for team in teams:
-        for entry in team:
-            discord_id = entry.get("discord_id")
-            if discord_id is None:
-                # No /verify'd Discord user owns this slug — show their real survev.de name instead.
-                entry["display_name"] = entry.get("username") or "Unknown"
-                continue
-
-            member = next((m for m in client.get_all_members() if m.id == discord_id), None)
-            if member is not None:
-                entry["display_name"] = member.display_name
-                continue
-
-            user = client.get_user(discord_id)
-            if user is None:
-                try:
-                    user = await client.fetch_user(discord_id)
-                except Exception:
-                    user = None
-
-            if user is not None:
-                entry["display_name"] = user.name
-            else:
-                entry["display_name"] = f"Player {discord_id}"
-
-
 async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
-    member = next((m for m in client.get_all_members() if m.id == discord_id), None)
+    member = next((g.get_member(discord_id) for g in getattr(client, "guilds", ()) if g.get_member(discord_id) is not None), None)
+    if member is None:
+        member = next((m for m in client.get_all_members() if m.id == discord_id), None)
     if member is not None:
         return member.display_name
 
@@ -318,6 +306,17 @@ async def get_user_display_name(client: discord.Client, discord_id: int) -> str:
     if user is not None:
         return user.name
     return f"Player {discord_id}"
+
+
+async def resolve_queue_user_display_names(teams: list[list[dict]], client: discord.Client):
+    for team in teams:
+        for entry in team:
+            discord_id = entry.get("discord_id")
+            if discord_id is None:
+                # No /verify'd Discord user owns this slug — show their real survev.de name instead.
+                entry["display_name"] = entry.get("username") or "Unknown"
+                continue
+            entry["display_name"] = await get_user_display_name(client, discord_id)
 
 
 async def calculate_queue_match_stats(match_id: str, guild_id: int):
@@ -381,8 +380,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # Step 1: at least one verified player is needed as an "anchor" — pull their own scoped match
         # history and use its guids to pin down exactly which survev.de match(es) this queue played.
         # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
-        anchor_guid_sets = []
-        anchor_matches_by_discord: dict[int, list[dict]] = {}
+        sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
+        anchor_candidates: list[tuple[int, str]] = []
         for team_players in teams:
             for player in team_players:
                 try:
@@ -390,14 +389,22 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 except (TypeError, ValueError):
                     continue
                 token = get_user_token(discord_id)
-                if not token:
-                    continue
+                if token:
+                    anchor_candidates.append((discord_id, token))
 
+        async def _fetch_anchor(discord_id: int, token: str):
+            async with sem:
                 own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
-                guids = {m.get("guid") for m in own_matches if m.get("guid")}
-                if guids:
-                    anchor_guid_sets.append(guids)
-                    anchor_matches_by_discord[discord_id] = own_matches
+                return discord_id, own_matches
+
+        anchor_results = await asyncio.gather(*(_fetch_anchor(did, tok) for did, tok in anchor_candidates))
+        anchor_guid_sets = []
+        anchor_matches_by_discord: dict[int, list[dict]] = {}
+        for discord_id, own_matches in anchor_results:
+            guids = {m.get("guid") for m in own_matches if m.get("guid")}
+            if guids:
+                anchor_guid_sets.append(guids)
+                anchor_matches_by_discord[discord_id] = own_matches
 
         if not anchor_guid_sets:
             return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
@@ -433,13 +440,19 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
+        async def _fetch_board(guid: str):
+            async with sem:
+                return guid, await fetch_public_match_data(session, guid)
+
+        boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_queue_guids)))
+
         players: dict[str, dict] = {}
         # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
         # round winners must be tracked per identity here and resolved via that identity later.
         round_player_rank_by_guid: dict[str, dict[str, int]] = {}
         game_details_by_guid: dict[str, dict] = {}
         for guid in ordered_queue_guids:
-            board = await fetch_public_match_data(session, guid)
+            board = boards_by_guid.get(guid)
             if not board:
                 continue
 

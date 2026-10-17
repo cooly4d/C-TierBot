@@ -10,11 +10,11 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-LEADERBOARD_BANNER_URL = os.getenv("LEADERBOARD_BANNER_URL", "https://media.giphy.com/media/3o6ZtpxSZbQ2zYpH0A/giphy.gif")
-
 # --- CONFIGURATION ---
 
 load_dotenv()
+
+LEADERBOARD_BANNER_URL = os.getenv("LEADERBOARD_BANNER_URL", "https://media.giphy.com/media/3o6ZtpxSZbQ2zYpH0A/giphy.gif")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 SURVEV_CLIENT_ID = os.getenv("SURVEV_CLIENT_ID")
@@ -28,8 +28,9 @@ QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECON
 QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS = int(os.getenv("QUEUE_RESULT_MAX_MESSAGE_AGE_HOURS", "24")) * 3600
 # Last-resort window length when NeatQueue gives us no usable end-of-match signal at all.
 QUEUE_MATCH_FALLBACK_DURATION_MS = int(os.getenv("QUEUE_MATCH_FALLBACK_DURATION_MINUTES", "10")) * 60 * 1000
+API_CONCURRENCY_LIMIT = int(os.getenv("API_CONCURRENCY_LIMIT", "5"))
+VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "300"))
 QUEUE_STATS_LOG_DIR = "log"
-#all supposed to be environment variables by cba
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
 QUEUE_WINNER_TITLE_PATTERN = re.compile(r"Winner For Queue#(\d+)", re.IGNORECASE)

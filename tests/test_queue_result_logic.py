@@ -91,6 +91,32 @@ class QueueStatsServiceTests(unittest.IsolatedAsyncioTestCase):
         mock_cache.assert_called_once_with("123", 456, match_result)
 
 
+class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):
+    def test_store_pagination_state_evicts_oldest_entries(self):
+        from discord_ui import MAX_PAGINATION_STATE_ENTRIES, store_pagination_state
+
+        state = {}
+        for i in range(MAX_PAGINATION_STATE_ENTRIES + 5):
+            store_pagination_state(state, i, ("user", "tok", "all", 0, 1))
+
+        self.assertEqual(len(state), MAX_PAGINATION_STATE_ENTRIES)
+        self.assertNotIn(0, state)
+        self.assertIn(MAX_PAGINATION_STATE_ENTRIES + 4, state)
+
+    @patch("leaderboard_service.fetch_player_timeframe_stats", new_callable=AsyncMock)
+    @patch("leaderboard_service.get_all_users", return_value=[(101, "tok1"), (202, "tok2")])
+    async def test_generate_leaderboard_embed_concurrent_fetch(self, _mock_users, mock_fetch):
+        from leaderboard_service import generate_leaderboard_embed
+
+        mock_fetch.side_effect = [
+            {"games": 3, "wins": 1, "kills": 12, "damage": 900},
+            {"games": 5, "wins": 2, "kills": 25, "damage": 1800},
+        ]
+        embed = await generate_leaderboard_embed("Weekly", 7, "kills")
+        self.assertIn("<@202>", embed.fields[0].value)
+        self.assertEqual(mock_fetch.await_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 

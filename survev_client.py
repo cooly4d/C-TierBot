@@ -2,12 +2,13 @@
 timeframe stats, inventory, and market/shop data.
 """
 import asyncio
+import time
 from datetime import datetime, timezone
 
 import aiohttp
 import discord
 
-from bot_config import SURVEV_CLIENT_ID, SURVEV_CLIENT_SECRET
+from bot_config import API_CONCURRENCY_LIMIT, SURVEV_CLIENT_ID, SURVEV_CLIENT_SECRET, VERIFICATION_TIMEOUT_SECONDS
 from db import save_token, get_users_missing_slug, update_user_slug
 
 
@@ -31,11 +32,16 @@ async def backfill_missing_slugs():
     if not missing:
         return
 
-    async with aiohttp.ClientSession() as session:
-        for discord_id, access_token in missing:
+    sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
+
+    async def _backfill_one(session: aiohttp.ClientSession, discord_id: int, access_token: str):
+        async with sem:
             slug, username = await fetch_discord_link(session, access_token)
             if slug:
                 update_user_slug(discord_id, slug, username)
+
+    async with aiohttp.ClientSession() as session:
+        await asyncio.gather(*(_backfill_one(session, did, tok) for did, tok in missing))
 
 
 async def run_survev_verification(discord_user_id: int, send_update):
@@ -52,55 +58,67 @@ async def run_survev_verification(discord_user_id: int, send_update):
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(device_url, json=payload) as resp:
-            if resp.status != 200:
-                error_details = await resp.text()
-                print(f"DEBUG - Survev Error Code {resp.status}: {error_details}")
-                await send_update(content=f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`")
-                return
-            data = await resp.json()
+        try:
+            async with session.post(device_url, json=payload) as resp:
+                if resp.status != 200:
+                    error_details = await resp.text()
+                    print(f"DEBUG - Survev Error Code {resp.status}: {error_details}")
+                    await send_update(content=f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`")
+                    return
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            await send_update(content=f"Failed to contact survev.de for authorization: `{exc}`")
+            return
 
-            device_code = data["deviceCode"]
-            user_code = data["userCode"]
-            verification_uri = data["verificationUriComplete"]
-            interval = data.get("interval", 5)
+        device_code = data["deviceCode"]
+        user_code = data["userCode"]
+        verification_uri = data["verificationUriComplete"]
+        interval = max(1, int(data.get("interval", 5)))
+        expires_in = min(int(data.get("expiresIn", VERIFICATION_TIMEOUT_SECONDS)), VERIFICATION_TIMEOUT_SECONDS)
 
-            embed = discord.Embed(
-                title="🔗 Link Your survev.de Account",
-                description=f"1. Click the link to verify: [**Authorize survev.de account**]({verification_uri})\n"
-                            f"2. Confirm code: **`{user_code}`**\n\n"
-                            f"*Waiting for authorization...*",
-                color=discord.Color.blue()
-            )
-            await send_update(embed=embed)
+        embed = discord.Embed(
+            title="🔗 Link Your survev.de Account",
+            description=f"1. Click the link to verify: [**Authorize survev.de account**]({verification_uri})\n"
+                        f"2. Confirm code: **`{user_code}`**\n\n"
+                        f"*Waiting for authorization...*",
+            color=discord.Color.blue()
+        )
+        await send_update(embed=embed)
 
-            token_payload = {
-                "grantType": "device_code",
-                "clientId": SURVEV_CLIENT_ID,
-                "clientSecret": SURVEV_CLIENT_SECRET,
-                "deviceCode": device_code
-            }
+        token_payload = {
+            "grantType": "device_code",
+            "clientId": SURVEV_CLIENT_ID,
+            "clientSecret": SURVEV_CLIENT_SECRET,
+            "deviceCode": device_code
+        }
 
-            while True:
-                await asyncio.sleep(interval)
+        deadline = time.monotonic() + expires_in
+        while time.monotonic() < deadline:
+            await asyncio.sleep(interval)
+            try:
                 async with session.post(token_url, json=token_payload) as t_resp:
                     t_data = await t_resp.json()
+                    status = t_resp.status
+            except (aiohttp.ClientError, ValueError):
+                continue
 
-                    if t_resp.status == 200:
-                        access_token = t_data["accessToken"]
-                        slug, username = await fetch_discord_link(session, access_token)
-                        save_token(discord_user_id, access_token, slug, username)
-                        await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
-                        break
+            if status == 200:
+                access_token = t_data["accessToken"]
+                slug, username = await fetch_discord_link(session, access_token)
+                save_token(discord_user_id, access_token, slug, username)
+                await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
+                return
 
-                    error = t_data.get("error")
-                    if error == "authorization_pending":
-                        continue
-                    elif error == "slow_down":
-                        await asyncio.sleep(2)
-                    else:
-                        await send_update(content=f"❌ Authorization failed: `{error}`")
-                        break
+            error = t_data.get("error")
+            if error == "authorization_pending":
+                continue
+            elif error == "slow_down":
+                await asyncio.sleep(2)
+            else:
+                await send_update(content=f"❌ Authorization failed: `{error}`")
+                return
+
+        await send_update(content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
 
 
 async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int) -> list[dict]:
@@ -113,17 +131,20 @@ async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_
 
     while True:
         payload = {
-            "teamModeFilter": 7, # All modes
+            "teamModeFilter": 7,  # All modes
             "from": from_ms,
             "to": to_ms,
             "count": limit,
             "offset": offset
         }
 
-        async with session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
-            if resp.status != 200:
-                break
-            matches = await resp.json()
+        try:
+            async with session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    break
+                matches = await resp.json()
+        except (aiohttp.ClientError, ValueError):
+            break
 
         # Stop if no matches are returned
         if not matches or not isinstance(matches, list):
