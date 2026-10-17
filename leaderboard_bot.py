@@ -240,7 +240,9 @@ async def leaderboard_fries(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-async def run_queue_results(interaction: discord.Interaction, match_id: str):
+@bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
+@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
+async def queue_stats(interaction: discord.Interaction, match_id: str):
     await interaction.response.defer()
 
     if interaction.guild_id is None:
@@ -254,18 +256,6 @@ async def run_queue_results(interaction: discord.Interaction, match_id: str):
         return
 
     await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
-
-
-@bot.tree.command(name="queue_stats", description="Calculate player damage and stats for a specific NeatQueue match number.")
-@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
-async def queue_stats(interaction: discord.Interaction, match_id: str):
-    await run_queue_results(interaction, match_id)
-
-
-@bot.tree.command(name="queueresults", description="Calculate player damage and stats for a specific NeatQueue match number.")
-@discord.app_commands.describe(match_id="The NeatQueue game number to pull stats for")
-async def queueresults(interaction: discord.Interaction, match_id: str):
-    await run_queue_results(interaction, match_id)
 
 
 @bot.tree.command(name="profile", description="View a user's cached NeatQueue stats.")

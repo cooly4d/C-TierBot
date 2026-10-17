@@ -57,7 +57,6 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | Command | What it does |
 | :--- | :--- |
 | `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Also works while the queue is still in progress. |
-| `/queueresults <match_id>` | Alias of `/queue_stats`. |
 | `/hall_of_fame` | Best single-queue records: most kills, most average damage, longest queue. |
 
 ### Admin
