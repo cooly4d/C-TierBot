@@ -191,11 +191,20 @@ class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Page 3 of 3", embed.footer.text)
 
     async def test_first_page_keeps_top_players_layout_with_next_enabled(self):
+        from image_utils import QUEUE_IMG_ACCENT
+
         with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
             embed, view = await build_seasonal_leaderboard_message(10, "2026-09")
 
+        self.assertEqual(embed.color, discord.Color.from_rgb(*QUEUE_IMG_ACCENT))
+        self.assertEqual(embed.description, "Ranked by average damage per game in 4v4 queues only.")
         self.assertEqual(embed.fields[0].name, "Top Players")
         self.assertEqual(embed.fields[0].value.count("<@"), 10)
+        self.assertIn("🥇 **#1** <@1000>\n┗ 💥 **`1,000` Avg Dmg** • `2` games", embed.fields[0].value)
+        self.assertIn("────────────────────────", embed.fields[0].value)
+        self.assertIn("`#4` <@1003>\n┗ **`997` Avg Dmg** • `2` games", embed.fields[0].value)
+        self.assertNotIn("Total Dmg", embed.description)
+        self.assertNotIn("2,000", embed.fields[0].value)
         self.assertEqual([c.custom_id for c in view.children], ["season_prev:2026-09:0", "season_next:2026-09:1"])
         self.assertEqual([c.disabled for c in view.children], [True, False])
 

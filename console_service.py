@@ -131,6 +131,47 @@ async def _handle_reply(bot: commands.Bot, raw_args: str):
         print(f"[Console Error] Failed to fetch target message or send reply: {exc}")
 
 
+async def _handle_delete(bot: commands.Bot, raw_args: str):
+    """Usage: delete <channel_id> <message_id>"""
+    parts = raw_args.split()
+    if len(parts) != 2:
+        print("[Console Error] Usage: delete <channel_id> <message_id>")
+        return
+
+    channel_id_str, message_id_str = parts[0], parts[1]
+    if not channel_id_str.isdigit() or not message_id_str.isdigit():
+        print("[Console Error] Both channel_id and message_id must be numeric IDs.")
+        return
+
+    channel_id = int(channel_id_str)
+    message_id = int(message_id_str)
+
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception as exc:
+            print(f"[Console Error] Could not fetch channel {channel_id}: {exc}")
+            return
+
+    try:
+        target_message = await channel.fetch_message(message_id)
+    except Exception as exc:
+        print(f"[Console Error] Failed to fetch message {message_id}: {exc}")
+        return
+
+    if bot.user is not None and target_message.author.id != bot.user.id:
+        print(f"[Console Error] Message {message_id} was not sent by the bot.")
+        return
+
+    try:
+        await target_message.delete()
+        channel_label = f"#{channel.name}" if hasattr(channel, "name") else f"channel {channel_id}"
+        print(f"[Console] ✅ Deleted bot message {message_id} in {channel_label}")
+    except Exception as exc:
+        print(f"[Console Error] Failed to delete message {message_id}: {exc}")
+
+
 def _handle_servers(bot: commands.Bot):
     """Lists all servers/guilds the bot is currently in."""
     guilds = bot.guilds
@@ -248,6 +289,7 @@ def _handle_help():
   send <channel_id> <message>          - Send a message to a channel
   dm <user_id> <message>               - Send a private direct message to a user
   reply <channel_id> <msg_id> <text>   - Reply to a specific message in a channel
+  delete <channel_id> <msg_id>         - Delete a message sent by the bot
   servers                              - List all servers the bot is in
   channels <guild_id>                  - List all text channels in a server
   status                               - View bot uptime, ping, and DB metrics
@@ -279,6 +321,8 @@ async def execute_console_command(bot: commands.Bot, line: str):
         await _handle_dm(bot, raw_args)
     elif command_name == "reply":
         await _handle_reply(bot, raw_args)
+    elif command_name == "delete":
+        await _handle_delete(bot, raw_args)
     elif command_name in ("servers", "guilds"):
         _handle_servers(bot)
     elif command_name == "channels":

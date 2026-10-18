@@ -25,6 +25,7 @@ class ConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             output = mock_stdout.getvalue()
             self.assertIn("send <channel_id> <message>", output)
             self.assertIn("dm <user_id> <message>", output)
+            self.assertIn("delete <channel_id> <msg_id>", output)
             self.assertIn("status", output)
 
     async def test_execute_send_invalid_id(self):
@@ -48,6 +49,50 @@ class ConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Sent message", output)
             self.assertIn("#general", output)
             mock_channel.send.assert_awaited_once_with("Hello World")
+
+    async def test_execute_delete_valid(self):
+        bot = MagicMock()
+        bot.user.id = 999
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_channel.name = "general"
+        mock_msg = MagicMock()
+        mock_msg.author.id = 999
+        mock_msg.delete = AsyncMock()
+        mock_channel.fetch_message = AsyncMock(return_value=mock_msg)
+        bot.get_channel.return_value = mock_channel
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            await execute_console_command(bot, "delete 112233 445566")
+            output = mock_stdout.getvalue()
+            self.assertIn("Deleted bot message 445566 in #general", output)
+            mock_channel.fetch_message.assert_awaited_once_with(445566)
+            mock_msg.delete.assert_awaited_once()
+
+    async def test_execute_delete_rejects_other_author(self):
+        bot = MagicMock()
+        bot.user.id = 999
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_msg = MagicMock()
+        mock_msg.author.id = 123
+        mock_msg.delete = AsyncMock()
+        mock_channel.fetch_message = AsyncMock(return_value=mock_msg)
+        bot.get_channel.return_value = mock_channel
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            await execute_console_command(bot, "delete 112233 445566")
+            output = mock_stdout.getvalue()
+            self.assertIn("was not sent by the bot", output)
+            mock_msg.delete.assert_not_awaited()
+
+    async def test_execute_delete_invalid_args(self):
+        bot = MagicMock()
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            await execute_console_command(bot, "delete 112233")
+            self.assertIn("Usage: delete <channel_id> <message_id>", mock_stdout.getvalue())
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            await execute_console_command(bot, "delete 112233 abc")
+            self.assertIn("Both channel_id and message_id must be numeric IDs", mock_stdout.getvalue())
 
     async def test_execute_dm(self):
         bot = MagicMock()
