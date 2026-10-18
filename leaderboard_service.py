@@ -13,7 +13,6 @@ from db import get_all_users, get_player_queue_stats_summary, get_seasonal_queue
 from survev_client import fetch_player_timeframe_stats, fetch_user_inventory, fetch_user_market
 from image_utils import (
     INVENTORY_ITEMS_PER_PAGE,
-    QUEUE_IMG_ACCENT,
     SHOP_ITEMS_PER_PAGE,
     build_inventory_rarity_counts,
     compute_inventory_worth,
@@ -261,7 +260,7 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
     embed = discord.Embed(
         title=f"🏆 {month_label} 4v4 Avg Damage Leaderboard",
         description="Ranked by average damage per game in 4v4 queues only.",
-        color=discord.Color.from_rgb(*QUEUE_IMG_ACCENT),
+        color=discord.Color.gold(),
     )
     if not stats:
         embed.description = f"No eligible cached queue stats found for {month_label}."
@@ -270,28 +269,14 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
     first_index = page * SEASON_PAGE_SIZE
     page_stats = stats[first_index:first_index + SEASON_PAGE_SIZE]
     rank_emojis = ["🥇", "🥈", "🥉"]
-    podium_lines: list[str] = []
-    table_lines: list[str] = []
+    leaderboard_text = ""
     for index, entry in enumerate(page_stats, start=first_index):
-        games_count = entry["games"]
-        games_label = "game" if games_count == 1 else "games"
-        if index < len(rank_emojis):
-            podium_lines.append(
-                f"{rank_emojis[index]} **#{index + 1}** <@{entry['discord_id']}>\n"
-                f"┗ 💥 **`{entry['avg_damage']:,.0f}` Avg Dmg** • `{games_count:,}` {games_label}"
-            )
-        else:
-            table_lines.append(
-                f"`#{index + 1}` <@{entry['discord_id']}>\n"
-                f"┗ **`{entry['avg_damage']:,.0f}` Avg Dmg** • `{games_count:,}` {games_label}"
-            )
-
-    sections: list[str] = []
-    if podium_lines:
-        sections.append("\n".join(podium_lines))
-    if table_lines:
-        sections.append("\n".join(table_lines))
-    leaderboard_text = "\n────────────────────────\n".join(sections)
+        rank = rank_emojis[index] if index < len(rank_emojis) else f"`#{index + 1}`"
+        leaderboard_text += (
+            f"{rank} <@{entry['discord_id']}>\n"
+            f"💥 Avg Damage: **{entry['avg_damage']:,.0f}** "
+            f"({entry['games']:,} games)\n\n"
+        )
 
     field_name = "Top Players" if page == 0 else f"Ranks {first_index + 1}-{first_index + len(page_stats)}"
     embed.add_field(name=field_name, value=leaderboard_text[:1024], inline=False)

@@ -77,9 +77,8 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 
 | Discord Color | Hex | Applied Commands / Views |
 |---|---|---|
-| `discord.Color.from_rgb(*QUEUE_IMG_ACCENT)` | `#FFA532` | `/leaderboard_season` (matches the locked `Avg` damage highlight token) |
 | `discord.Color.blurple()` | `#5865F2` | `/profile`, `/inventory`, `/market` |
-| `discord.Color.gold()` | `#F1C40F` | `/leaderboard_weekly`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
+| `discord.Color.gold()` | `#F1C40F` | `/leaderboard_weekly`, `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
 | `discord.Color.purple()` | `#9B59B6` | `/leaderboard_monthly` |
 
 ---
@@ -247,9 +246,5 @@ Rendered in a strict 5-layer painter's order per team panel so corners and borde
   - Pagination controls (`◀ Previous`, `Next ▶`) use `discord.ButtonStyle.primary` and disable automatically at boundary pages (`current_page <= 0` or `current_page >= total_pages - 1`).
   - Self-service verification CTA on queue results (`QueueResultView`) uses a single persistent `discord.ButtonStyle.secondary` button (`label="Account unlinked?  Verify here for a gf."`, `custom_id="queue_result_verify"`).
 - **Rank Formatting in Embeds:** Top 3 positions use medal emojis (`🥇`, `🥈`, `🥉`); rank 4+ uses inline code backticks (`` `#4` `` .. `` `#10` ``).
-- **Seasonal Leaderboard Embed Layout (`build_seasonal_leaderboard_payload`):**
-  - **Accent Bar:** Uses `discord.Color.from_rgb(*QUEUE_IMG_ACCENT)` (`#FFA532`) to match the `Avg` damage highlight token.
-  - **Top 3 Podium Rows (`index < 3` on Page 1):** Two-line layout with medal emoji, bold rank (`**#1**`), and player mention on line 1, and an indented `┗ 💥` stat branch on line 2 (`🥇 **#1** <@id>\n┗ 💥 **\`1,000\` Avg Dmg** • \`2\` games`), separated from `#4+` by a horizontal rule (`────────────────────────`).
-  - **Standard Table Rows (`index >= 3`):** Two-line layout with inline-code rank badge (`` `#4` ``) and player mention on line 1, and an indented `┗` stat branch on line 2 (`` `#4` <@id>\n┗ **`997` Avg Dmg** • `2` games ``).
 
 
