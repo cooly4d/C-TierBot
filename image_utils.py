@@ -186,7 +186,7 @@ QUEUE_IMG_NEUTRAL_BANNER_BG = (30, 41, 62)
 QUEUE_IMG_ROW_DIVIDER = (38, 50, 74)
 
 # Column offsets as a fraction of a team panel's inner width: Player, Kills, Damage, Avg Damage
-QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.48, 0.66, 0.84]
+QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.60, 0.80]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg"]
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
 QUEUE_IMG_UNLINKED_ICON_SIZE = 24
@@ -314,10 +314,10 @@ def generate_queue_result_image(
 
     title_font = load_font(66 * S, "bold")
     subtitle_font = load_font(38 * S, "bold")
-    team_header_font = load_font(36 * S, "bold")
-    header_font = load_font(28 * S, "bold")
-    body_font = load_font(31 * S)
-    body_font_bold = load_font(31 * S, "bold")
+    team_header_font = load_font(38 * S, "bold")
+    header_font = load_font(30 * S, "bold")
+    body_font = load_font(35 * S)
+    body_font_bold = load_font(35 * S, "bold")
     duration_font = load_font(22 * S, "bold")
     footer_font = load_font(22 * S)
 

@@ -110,10 +110,10 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 | `score_font` | `72px` | `144px` | `bold` | `QUEUE_IMG_WIN` / `QUEUE_IMG_LOSE` / `QUEUE_IMG_TEXT` | Center top round score (`4 - 2`) |
 | `title_font` | `66px` | `132px` | `bold` | `QUEUE_IMG_TEXT` | Match ID header (`#3674`) |
 | `subtitle_font` | `38px` | `76px` | `bold` | `QUEUE_IMG_WIN` / `QUEUE_IMG_MUTED` | Winner announcement (`Team 1 Wins` / `Result unknown`) |
-| `team_header_font` | `36px` | `72px` | `bold` | `team_color` (`WIN`/`LOSE`/`MUTED`) | Centered team card banner title (`Team 1`, `Team 2`) |
-| `body_font_bold` | `31px` | `62px` | `bold` | `QUEUE_IMG_TEXT` (cols 0, 2), `QUEUE_IMG_ACCENT` (col 3) | Player name (`col 0`), Total Damage (`col 2`), Avg Damage (`col 3`) |
-| `body_font` | `31px` | `62px` | `regular` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Kills (`col 1`), timeline node labels (`G1`, `G2`), `"No players"` empty state |
-| `header_font` | `28px` | `56px` | `bold` | `QUEUE_IMG_TEXT` | `MATCH TIMELINE` header & table column headers (`Player`, `Kills`, `Dmg`, `Avg`) |
+| `team_header_font` | `38px` | `76px` | `bold` | `team_color` (`WIN`/`LOSE`/`MUTED`) | Centered team card banner title (`Team 1`, `Team 2`) |
+| `body_font_bold` | `35px` | `70px` | `bold` | `QUEUE_IMG_TEXT` (cols 0, 2), `QUEUE_IMG_ACCENT` (col 3) | Player name (`col 0`), Total Damage (`col 2`), Avg Damage (`col 3`) |
+| `body_font` | `35px` | `70px` | `regular` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Kills (`col 1`), timeline node labels (`G1`, `G2`), `"No players"` empty state |
+| `header_font` | `30px` | `60px` | `bold` | `QUEUE_IMG_TEXT` | `MATCH TIMELINE` header & table column headers (`Player`, `Kills`, `Dmg`, `Avg`) |
 | `duration_font` | `22px` | `44px` | `bold` | `QUEUE_IMG_MUTED` | Header duration (`Match Duration: 18m 42s`) / Games Played label |
 | `footer_font` | `22px` | `44px` | `regular` | `QUEUE_IMG_MUTED` | Bottom verification CTA footer |
 
@@ -180,11 +180,11 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
   - Bottom footer area height = `QUEUE_IMG_PADDING + 14` (`58px` below `panel_bottom`)
 - **Horizontal Table Columns (`QUEUE_IMG_COLUMN_RATIOS`):**
   - Card inner width: `inner_width = panel_width - 2 * QUEUE_IMG_CARD_INNER_PAD_X` (`QUEUE_IMG_CARD_INNER_PAD_X = 20px`, so `inner_width = 694px` for 2 teams).
-  - Column start ratios: `[0.0, 0.48, 0.66, 0.84]` for `["Player", "Kills", "Dmg", "Avg"]`:
-    - `Player` (`0.00–0.48`, `48%` width): Left-aligned at `inner_x0`, right-padded by `QUEUE_IMG_NAME_PADDING_RIGHT = 16px`.
-    - `Kills` (`0.48–0.66`, `18%` width): Center-aligned within column width; regular weight (`body_font`).
-    - `Dmg` (`0.66–0.84`, `18%` width): Center-aligned within column width; bold weight (`body_font_bold`).
-    - `Avg` (`0.84–1.00`, `16%` width): Center-aligned within column width; bold weight (`body_font_bold`) in `QUEUE_IMG_ACCENT` (`#FFA532`).
+  - Column start ratios: `[0.0, 0.40, 0.60, 0.80]` for `["Player", "Kills", "Dmg", "Avg"]`:
+    - `Player` (`0.00–0.40`, `40%` width / `278px`): Left-aligned at `inner_x0`, right-padded by `QUEUE_IMG_NAME_PADDING_RIGHT = 16px`. Comfortably fits usernames up to 14 characters plus the 24px unlinked badge without premature ellipsis.
+    - `Kills` (`0.40–0.60`, `20%` width / `139px`): Center-aligned within column width; regular weight (`body_font`).
+    - `Dmg` (`0.60–0.80`, `20%` width / `139px`): Center-aligned within column width; bold weight (`body_font_bold`).
+    - `Avg` (`0.80–1.00`, `20%` width / `139px`): Center-aligned within column width; bold weight (`body_font_bold`) in `QUEUE_IMG_ACCENT` (`#FFA532`).
 - **Inset Alternating Row Highlight:**
   - Drawn on even rows (`row_index % 2 == 0`) with a `12px` horizontal inset from the outer card edges (`x0 + 12` to `x0 + panel_width - 12`) and `4px` top/bottom vertical inset (`84px` pill height inside the `92px` row slot).
 
