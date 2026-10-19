@@ -114,7 +114,8 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 | `body_font_bold` | `31px` | `62px` | `bold` | `QUEUE_IMG_TEXT` (cols 0, 2), `QUEUE_IMG_ACCENT` (col 3) | Player name (`col 0`), Total Damage (`col 2`), Avg Damage (`col 3`) |
 | `body_font` | `31px` | `62px` | `regular` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Kills (`col 1`), timeline node labels (`G1`, `G2`), `"No players"` empty state |
 | `header_font` | `28px` | `56px` | `bold` | `QUEUE_IMG_TEXT` | `MATCH TIMELINE` header & table column headers (`Player`, `Kills`, `Dmg`, `Avg`) |
-| `footer_font` | `22px` | `44px` | `regular` | `QUEUE_IMG_MUTED` | Header duration (`Match Duration: 18m 42s`) & bottom verification CTA footer |
+| `duration_font` | `22px` | `44px` | `bold` | `QUEUE_IMG_MUTED` | Header duration (`Match Duration: 18m 42s`) / Games Played label |
+| `footer_font` | `22px` | `44px` | `regular` | `QUEUE_IMG_MUTED` | Bottom verification CTA footer |
 
 #### Compare Image (`generate_compare_image`)
 

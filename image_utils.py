@@ -312,6 +312,7 @@ def generate_queue_result_image(
     header_font = load_font(28 * S, "bold")
     body_font = load_font(31 * S)
     body_font_bold = load_font(31 * S, "bold")
+    duration_font = load_font(22 * S, "bold")
     footer_font = load_font(22 * S)
 
     # Top banner with subtle gradient
@@ -419,7 +420,7 @@ def generate_queue_result_image(
         total_games = len(match_history) if match_history else 0
         duration_label = f"{total_games} {'Game' if total_games == 1 else 'Games'} Played" if total_games else ""
     if duration_label:
-        draw.text((QUEUE_IMG_PADDING * S, 152 * S), duration_label, font=footer_font, fill=QUEUE_IMG_MUTED)
+        draw.text((QUEUE_IMG_PADDING * S, 152 * S), duration_label, font=duration_font, fill=QUEUE_IMG_MUTED)
 
     card_radius = QUEUE_IMG_CARD_RADIUS * S
     col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [inner_width - columns[-1]]
