@@ -9,8 +9,12 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
+_CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 QUEUE_FONT_PATHS = [
     os.getenv("QUEUE_FONT_PATH"),
+    os.path.join(_CURRENT_DIR, "fonts", "QuattrocentoSans-Regular.ttf"),
+    os.path.join(_CURRENT_DIR, "QuattrocentoSans-Regular.ttf"),
     "fonts/QuattrocentoSans-Regular.ttf",
     "QuattrocentoSans-Regular.ttf",
     "/usr/share/fonts/truetype/quattrocento/QuattrocentoSans-Regular.ttf",
@@ -20,6 +24,8 @@ QUEUE_FONT_PATHS = [
 ]
 QUEUE_FONT_BOLD_PATHS = [
     os.getenv("QUEUE_FONT_BOLD_PATH"),
+    os.path.join(_CURRENT_DIR, "fonts", "QuattrocentoSans-Bold.ttf"),
+    os.path.join(_CURRENT_DIR, "QuattrocentoSans-Bold.ttf"),
     "fonts/QuattrocentoSans-Bold.ttf",
     "QuattrocentoSans-Bold.ttf",
     "/usr/share/fonts/truetype/quattrocento/QuattrocentoSans-Bold.ttf",
