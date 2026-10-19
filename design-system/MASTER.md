@@ -145,7 +145,7 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 
 - **Consistent Row Baseline (`_vcenter_y`):** Always compute vertical centering inside a row or banner box using `"Ay0"` as the reference glyph bounding box (`box_top + (box_bottom - box_top - (bbox[3] - bbox[1])) / 2 - bbox[1]`) so that text with and without descenders/ascenders shares an identical baseline across columns.
 - **Pixel-Width Ellipsis (`truncate_to_width`):** Never allow player names or item labels to overflow into adjacent columns or card borders. Trim character-by-character until `text + "…"` fits within `max_width`.
-- **Unlinked Player Suffix:** Guests without a linked Discord account are suffixed with `" (unlinked)"` prior to width truncation.
+- **Unlinked Player Vector Icon (`_build_unlinked_icon`):** Guests without a linked Discord account (`guest == True`) display a `24x24` (`QUEUE_IMG_UNLINKED_ICON_SIZE = 24`) 45°-rotated broken chain-link vector icon (`QUEUE_IMG_MUTED` link cuffs + `QUEUE_IMG_LOSE` slash) placed `10px` (`QUEUE_IMG_UNLINKED_ICON_GAP = 10`) to the right of their truncated username, with `(QUEUE_IMG_UNLINKED_ICON_SIZE + QUEUE_IMG_UNLINKED_ICON_GAP)` reserved from `max_name_width`. A matching `18x18` icon prefixes the bottom footer legend (`"Unlinked — link your survev.de account with /verify to appear in future leaderboards!"`).
 - **Number Formatting:**
   - Integers (damage, worth, prices, balances): comma-separated (`f"{value:,}"`)
   - Averages (`avg_damage`): rounded integer with commas (`f"{avg_damage:,.0f}"`)

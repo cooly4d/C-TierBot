@@ -183,6 +183,8 @@ QUEUE_IMG_ROW_DIVIDER = (38, 50, 74)
 QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.48, 0.66, 0.84]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg"]
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
+QUEUE_IMG_UNLINKED_ICON_SIZE = 24
+QUEUE_IMG_UNLINKED_ICON_GAP = 10
 
 # Grid card outline colors, keyed by the same rarity ints as rarity_label.
 RARITY_COLORS: dict[int, tuple[int, int, int]] = {
@@ -246,6 +248,36 @@ def _vcenter_y(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, box_top:
     so all columns in the same row share an identical typographic baseline."""
     bbox = draw.textbbox((0, 0), "Ay0", font=font)
     return box_top + (box_bottom - box_top - (bbox[3] - bbox[1])) / 2 - bbox[1]
+
+
+def _build_unlinked_icon(
+    size_px: int,
+    link_color: tuple[int, int, int] = QUEUE_IMG_MUTED,
+    slash_color: tuple[int, int, int] = QUEUE_IMG_LOSE,
+) -> Image.Image:
+    """Renders an anti-aliased vector 'broken/slashed chain link' RGBA icon of `size_px` x `size_px`."""
+    ss = 4
+    n = max(16, size_px * ss)
+    layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    ldraw = ImageDraw.Draw(layer)
+    cy = n / 2
+    stroke = max(2, round(n * 0.105))
+    r = round(n * 0.185)
+
+    # Left and right link cuffs
+    ly0, ly1 = round(cy - r), round(cy + r)
+    ldraw.rounded_rectangle([round(n * 0.04), ly0, round(n * 0.52), ly1], radius=r, outline=(*link_color, 255), width=stroke)
+    ldraw.rounded_rectangle([round(n * 0.48), ly0, round(n * 0.96), ly1], radius=r, outline=(*link_color, 255), width=stroke)
+
+    # Clear center break channel and draw the slash pill before rotating 45 degrees
+    gap_half = round(n * 0.14)
+    ldraw.rectangle([round(n / 2 - gap_half), 0, round(n / 2 + gap_half), n], fill=(0, 0, 0, 0))
+    sx0 = round(n / 2 - stroke / 2)
+    sx1 = round(n / 2 + stroke / 2)
+    ldraw.rounded_rectangle([sx0, round(n * 0.08), sx1, round(n * 0.92)], radius=max(1, stroke // 2), fill=(*slash_color, 255))
+
+    rotated = layer.rotate(45, resample=Image.Resampling.BICUBIC)
+    return rotated.resize((size_px, size_px), resample=Image.Resampling.LANCZOS)
 
 
 def generate_queue_result_image(
@@ -457,6 +489,7 @@ def generate_queue_result_image(
             draw.text((inner_x0 * S, empty_y), "No players", font=body_font, fill=QUEUE_IMG_MUTED)
 
         # 4. Player rows with inset rounded alternating row highlight
+        unlinked_row_icon = _build_unlinked_icon(QUEUE_IMG_UNLINKED_ICON_SIZE * S)
         for row_index, entry in enumerate(team_players):
             row_top = rows_top + row_index * QUEUE_IMG_ROW_HEIGHT
             row_box_top = (row_top + 4) * S
@@ -471,11 +504,6 @@ def generate_queue_result_image(
             stats = entry["stats"]
             player_label = entry.get("display_name") or entry.get("username") or "Unknown"
             is_guest = entry.get("guest", False)
-
-            if is_guest:
-                # No /verify'd Discord user owns this survev.de account — the name shown is already
-                # their real in-game username, just flag that they're not linked.
-                player_label = f"{player_label} (unlinked)"
 
             games = stats["games"]
             avg_damage = stats["damage"] / games if games else 0
@@ -493,8 +521,17 @@ def generate_queue_result_image(
                 cell_y = _vcenter_y(draw, font, row_box_top, row_box_bottom)
                 if col_idx == 0:
                     max_name_width = (columns[1] - columns[0] - QUEUE_IMG_NAME_PADDING_RIGHT) * S
+                    if is_guest:
+                        icon_reserve = (QUEUE_IMG_UNLINKED_ICON_SIZE + QUEUE_IMG_UNLINKED_ICON_GAP) * S
+                        max_name_width = max(0, max_name_width - icon_reserve)
                     value = truncate_to_width(draw, value, font, max_name_width)
                     draw.text((cell_x, cell_y), value, font=font, fill=fill)
+                    if is_guest:
+                        name_bbox = draw.textbbox((0, 0), value, font=font)
+                        name_width = name_bbox[2] - name_bbox[0]
+                        icon_x = round(cell_x + name_width + QUEUE_IMG_UNLINKED_ICON_GAP * S)
+                        icon_y = round((row_box_top + row_box_bottom - unlinked_row_icon.height) / 2)
+                        image.paste(unlinked_row_icon, (icon_x, icon_y), unlinked_row_icon)
                 else:
                     value_bbox = draw.textbbox((0, 0), value, font=font)
                     value_width = value_bbox[2] - value_bbox[0]
@@ -509,12 +546,22 @@ def generate_queue_result_image(
             width=2 * S,
         )
 
-    footer_text = "Link your survev.de account with /verify to appear in future leaderboards!"
+    footer_icon = _build_unlinked_icon(18 * S)
+    footer_icon_gap = 8 * S
+    footer_text = "Unlinked — link your survev.de account with /verify to appear in future leaderboards!"
     footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
-    footer_width = footer_bbox[2] - footer_bbox[0]
-    footer_x = (QUEUE_IMG_WIDTH * S - footer_width) / 2
+    footer_text_width = footer_bbox[2] - footer_bbox[0]
+    total_footer_width = footer_icon.width + footer_icon_gap + footer_text_width
+    footer_start_x = (QUEUE_IMG_WIDTH * S - total_footer_width) / 2
     footer_y = _vcenter_y(draw, footer_font, panel_bottom * S, height * S)
-    draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+    footer_icon_y = round((panel_bottom * S + height * S - footer_icon.height) / 2)
+    image.paste(footer_icon, (round(footer_start_x), footer_icon_y), footer_icon)
+    draw.text(
+        (footer_start_x + footer_icon.width + footer_icon_gap, footer_y),
+        footer_text,
+        font=footer_font,
+        fill=QUEUE_IMG_MUTED,
+    )
 
     image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
 
