@@ -24,7 +24,6 @@ from db import (
     clear_hall_of_fame_records,
     get_all_guild_settings,
     get_guild_queue_channels,
-    get_player_queue_stats_summary,
     get_user_token,
     remove_guild_queue_channel,
     try_mark_match_processed,
@@ -38,10 +37,13 @@ from discord_ui import (
     get_queue_result_view,
     inventory_pagination_state,
     market_pagination_state,
+    parse_game_page_id,
     refresh_inventory_message,
     refresh_leaderboard_message,
     refresh_market_message,
+    refresh_queue_game_message,
     refresh_seasonal_leaderboard_message,
+    show_queue_game_breakdown,
     store_pagination_state,
 )
 from leaderboard_service import (
@@ -49,6 +51,7 @@ from leaderboard_service import (
     build_goldenfries_embed_payload,
     build_inventory_image_payload,
     build_leaderboard_fries_embed,
+    build_profile_payload,
     build_shop_image_payload,
     generate_leaderboard_embed,
 )
@@ -56,7 +59,6 @@ from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_numbe
 from queue_stats_service import (
     build_hall_of_fame_embed,
     build_queue_stats_payload,
-    format_duration_ms,
     write_queue_stats_command_log,
 )
 from console_service import start_console_listener
@@ -68,7 +70,7 @@ _console_listener_started = False
 @bot.event
 async def on_ready():
     global _console_listener_started
-    for persistent_view in (get_queue_result_view(), InventoryPaginationView(1), ShopPaginationView(1)):
+    for persistent_view in (get_queue_result_view(include_breakdown=True), InventoryPaginationView(1), ShopPaginationView(1)):
         try:
             bot.add_view(persistent_view)
         except Exception as exc:
@@ -120,6 +122,13 @@ async def log_interaction(interaction: discord.Interaction):
         print(f"DEBUG - handling queue_result_verify click for {interaction.user}")
         await interaction.response.defer(ephemeral=True)
         await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
+    elif custom_id == "queue_result_games":
+        print(f"DEBUG - handling queue_result_games click for {interaction.user}")
+        await show_queue_game_breakdown(interaction)
+    elif custom_id and custom_id.startswith(("qgame_prev:", "qgame_next:")):
+        print(f"DEBUG - handling game breakdown paging {custom_id} for {interaction.user}")
+        match_id, page = parse_game_page_id(custom_id)
+        await refresh_queue_game_message(interaction, match_id, page)
     elif custom_id == "leaderboard_weekly":
         print(f"DEBUG - handling leaderboard_weekly click for {interaction.user}")
         selected_sort = get_selected_sort_from_message(interaction.message)
@@ -251,40 +260,21 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         await interaction.followup.send(error_text)
         return
 
-    await interaction.followup.send(content=content, file=file, view=get_queue_result_view())
+    await interaction.followup.send(
+        content=content, file=file, view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
+    )
 
 
-@bot.tree.command(name="profile", description="View a user's cached NeatQueue stats.")
+@bot.tree.command(name="profile", description="View a user's cached NeatQueue stats and survev.de Squad tier.")
 @discord.app_commands.describe(member="Discord member whose NeatQueue stats to display. Omit to use yourself.")
 async def profile(interaction: discord.Interaction, member: discord.User | None = None):
     target = member or interaction.user
     await interaction.response.defer()
 
-    summary = get_player_queue_stats_summary(target.id)
-    if summary["matches"] == 0:
-        await interaction.followup.send(f"No cached NeatQueue results found for {target.display_name} yet.")
+    embed, message = await build_profile_payload(target, get_user_token(target.id))
+    if message:
+        await interaction.followup.send(message)
         return
-
-    all_time_avg = summary["all_time_avg_damage"]
-    monthly_avg = summary["monthly_avg_damage"]
-
-    embed = discord.Embed(
-        title=f"{target.display_name}'s NeatQueue stats",
-        color=discord.Color.blurple(),
-        description="Cached queue results that matched the current-month cache rules.",
-    )
-    embed.add_field(name="4v4 Play Time", value=format_duration_ms(summary["total_duration_ms"]), inline=True)
-    embed.add_field(
-        name="All-Time Avg Damage",
-        value=f"{all_time_avg:,.0f}" if all_time_avg is not None else "N/A",
-        inline=True,
-    )
-    embed.add_field(
-        name=f"{datetime.now(timezone.utc).strftime('%B')} Avg Damage",
-        value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
-        inline=True,
-    )
-    embed.set_footer(text="Stats from NeatQueue 4v4s only.")
     await interaction.followup.send(embed=embed)
 
 
@@ -473,11 +463,12 @@ async def post_queue_result(message: discord.Message, match_id: str):
     # Give the game server a moment to finish writing this match's results before querying survev.de.
     await asyncio.sleep(QUEUE_RESULT_FETCH_DELAY_SECONDS)
 
-    content, file, error_text, _ = await build_queue_stats_payload(match_id, message.guild.id)
+    content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
     if error_text:
         await message.reply(error_text)
     else:
-        await message.reply(content=content, file=file, view=get_queue_result_view())
+        view = get_queue_result_view(include_breakdown=bool(match_result.get("is_final")))
+        await message.reply(content=content, file=file, view=view)
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
@@ -563,10 +554,11 @@ async def backfill_missed_queue_results():
                 if not try_mark_match_processed(guild_id, match_id):
                     continue  # already posted live before the bot went down
 
-                content, file, error_text, _ = await build_queue_stats_payload(match_id, guild_id)
+                content, file, error_text, match_result = await build_queue_stats_payload(match_id, guild_id)
                 if error_text:
                     continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
-                await channel.send(content=f"*(Catching up)* {content}", file=file, view=get_queue_result_view())
+                view = get_queue_result_view(include_breakdown=bool(match_result.get("is_final")))
+                await channel.send(content=f"*(Catching up)* {content}", file=file, view=view)
 
             update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 

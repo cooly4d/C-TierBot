@@ -240,6 +240,50 @@ async def fetch_user_market(session: aiohttp.ClientSession, access_token: str):
         return None, f"survev.de market request failed: {exc}"
 
 
+SQUAD_TEAM_MODE = 4  # survev.de TeamMode.Squad, the mode 4v4 queues are played in
+
+
+async def fetch_user_stats(session: aiohttp.ClientSession, access_token: str):
+    """Fetches a verified player's all-time survev.de stats (per-mode games, rating and tier)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    payload = {"interval": "alltime", "mapIdFilter": "-1"}  # "-1" = every map
+    try:
+        async with session.post("https://survev.de/api/external/stats", headers=headers, json=payload) as resp:
+            if resp.status == 200:
+                return await resp.json(), None
+
+            if resp.status == 401:
+                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
+            if resp.status == 403:
+                return None, "Your survev.de token does not have stats access. Please re-run /verify to grant read:stats."
+            if resp.status == 429:
+                return None, "survev.de is rate limiting the bot right now. Try again in a minute."
+
+            return None, f"survev.de stats request failed ({resp.status})."
+    except (aiohttp.ClientError, ValueError) as exc:
+        return None, f"survev.de stats request failed: {exc}"
+
+
+def extract_squad_tier(stats: dict | None) -> dict | None:
+    """Pulls the Squad tier out of a /api/external/stats response as {"tier", "rating", "region"}.
+    Returns None when the player is unranked (no Squad games with an impact score yet)."""
+    if not isinstance(stats, dict):
+        return None
+
+    for mode in stats.get("modes") or []:
+        if not isinstance(mode, dict) or mode.get("teamMode") != SQUAD_TEAM_MODE:
+            continue
+        tier, rating = mode.get("tier"), mode.get("rating")
+        if not tier or rating is None:
+            return None
+        try:
+            rating = int(round(float(rating)))
+        except (TypeError, ValueError):
+            return None
+        return {"tier": str(tier), "rating": rating, "region": stats.get("primaryRegion") or None}
+    return None
+
+
 async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
     with no survev.de account at all (they still show up with a username, just slug=None)."""

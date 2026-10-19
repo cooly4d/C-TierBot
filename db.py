@@ -4,10 +4,23 @@ Every function opens its own short-lived connection (`with sqlite3.connect(...)`
 rather than sharing a module-level connection, matching the original bot's
 behavior so nothing about transaction/commit timing changes.
 """
+import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 DB_PATH = "leaderboard.db"
+
+# Per-game snapshots of finished queues, kept for the Game breakdown button on queue results.
+QUEUE_RESULT_RETENTION_DAYS = 90
+QUEUE_RESULTS_SCHEMA = '''
+    CREATE TABLE IF NOT EXISTS queue_results (
+        guild_id INTEGER NOT NULL,
+        match_id TEXT NOT NULL,
+        snapshot TEXT NOT NULL,
+        saved_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, match_id)
+    )
+'''
 
 # --- Schema setup (runs once at import time) ---
 conn = sqlite3.connect(DB_PATH)
@@ -82,6 +95,7 @@ cursor.execute('''
         PRIMARY KEY (guild_id, match_id, player_key)
     )
 ''')
+cursor.execute(QUEUE_RESULTS_SCHEMA)
 # Older databases retain their cached rows; their game counts can be inferred
 # for positive-damage rows when the seasonal leaderboard reads them.
 try:
@@ -405,3 +419,32 @@ def get_player_queue_stats_summary(discord_id: int) -> dict:
         "all_time_avg_damage": all_time_damage / all_time_games if all_time_games > 0 else None,
         "monthly_avg_damage": monthly_damage / monthly_games if monthly_games > 0 else None,
     }
+
+
+def save_queue_result(guild_id: int, match_id: str, snapshot: dict, retention_days: int = QUEUE_RESULT_RETENTION_DAYS):
+    """Stores a finished queue's per-game snapshot (replacing any earlier one for that queue) and drops
+    snapshots older than the retention window so the table can't grow without bound."""
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute(
+            "INSERT OR REPLACE INTO queue_results (guild_id, match_id, snapshot, saved_at) VALUES (?, ?, ?, ?)",
+            (guild_id, str(match_id), json.dumps(snapshot, separators=(",", ":")), now.isoformat()),
+        )
+        c.execute("DELETE FROM queue_results WHERE saved_at < ?", (cutoff,))
+
+
+def get_queue_result(guild_id: int, match_id: str) -> dict | None:
+    """The stored per-game snapshot for a queue, or None if it was never saved, expired, or is unreadable."""
+    with sqlite3.connect(DB_PATH) as c:
+        row = c.execute(
+            "SELECT snapshot FROM queue_results WHERE guild_id = ? AND match_id = ?",
+            (guild_id, str(match_id)),
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        snapshot = json.loads(row[0])
+    except ValueError:
+        return None
+    return snapshot if isinstance(snapshot, dict) else None

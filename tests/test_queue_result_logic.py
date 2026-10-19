@@ -10,7 +10,8 @@ SPEC.loader.exec_module(neatqueue_client)
 
 
 import io
-import unittest
+import sqlite3
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from queue_stats_service import build_queue_stats_payload, check_queue_hall_of_fame_records
@@ -89,6 +90,117 @@ class QueueStatsServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(error)
         self.assertIsNotNone(match_result)
         mock_cache.assert_called_once_with("123", 456, match_result)
+
+
+async def build_payload(teams=None, record_lines=(), **result_overrides):
+    """Runs build_queue_stats_payload with the NeatQueue/survev.de lookups and image rendering faked out.
+    Returns (content, the Hall of Fame check mock)."""
+    match_result = {
+        "teams": teams or [[{"discord_id": 1, "username": "Awang", "stats": {"games": 5, "kills": 30, "damage": 9000}}]],
+        "winning_team_index": 0,
+        "match_history": [True] * 5,
+        "team_round_wins": [5, 0],
+        "total_games_played": 5,
+        "duration_ms": 3_600_000,
+    }
+    match_result.update(result_overrides)
+    with patch("queue_stats_service.calculate_queue_match_stats", new=AsyncMock(return_value=(match_result, None))), \
+            patch("queue_stats_service.resolve_queue_user_display_names", new=AsyncMock()), \
+            patch("queue_stats_service.generate_queue_result_image", return_value=io.BytesIO(b"png")), \
+            patch("queue_stats_service.cache_player_queue_stats"), \
+            patch("queue_stats_service.save_queue_result") as save, \
+            patch("queue_stats_service.check_queue_hall_of_fame_records", return_value=list(record_lines)) as hof:
+        content, _file, error, _result = await build_queue_stats_payload("3674", 999)
+    assert error is None, error
+    return SimpleNamespace(content=content, hof=hof, save=save)
+
+
+class HallOfFameFinalityTests(unittest.IsolatedAsyncioTestCase):
+    """Only a finished queue may set Hall of Fame records: an unfinished one has partial stats and a duration
+    that runs up to "now" (an abandoned panel would otherwise set an absurd Longest Queue)."""
+
+    RECORD_LINE = "🏆 New Hall of Fame record! **Most Kills in a Queue**: 30 by Awang"
+
+    async def _build(self, **result_overrides):
+        return await build_payload(record_lines=[self.RECORD_LINE], **result_overrides)
+
+    async def test_finished_queue_checks_records_and_announces_them(self):
+        built = await self._build(is_final=True)
+
+        built.hof.assert_called_once()
+        self.assertEqual(built.hof.call_args.kwargs["duration_ms"], 3_600_000)
+        self.assertIn(self.RECORD_LINE, built.content)
+
+    async def test_unfinished_queue_never_touches_records(self):
+        built = await self._build(is_final=False)
+
+        built.hof.assert_not_called()
+        self.assertNotIn("Hall of Fame", built.content)
+
+    async def test_result_without_a_finality_flag_is_treated_as_unfinished(self):
+        built = await self._build()
+
+        built.hof.assert_not_called()
+        self.assertNotIn("Hall of Fame", built.content)
+
+
+class SnapshotSavingTests(unittest.IsolatedAsyncioTestCase):
+    """A finished queue's per-game snapshot is stored for the Game breakdown button; an unfinished one never is."""
+
+    async def test_finished_queue_saves_its_snapshot_for_that_guild_and_match(self):
+        built = await build_payload(is_final=True)
+
+        built.save.assert_called_once()
+        guild_id, match_id, snapshot = built.save.call_args.args
+        self.assertEqual((guild_id, match_id), (999, "3674"))
+        self.assertEqual(snapshot["match_id"], "3674")
+        self.assertEqual(snapshot["team_round_wins"], [5, 0])
+
+    async def test_unfinished_queue_saves_nothing(self):
+        built = await build_payload(is_final=False)
+
+        built.save.assert_not_called()
+
+    async def test_a_storage_failure_never_blocks_the_post(self):
+        with patch("queue_stats_service.save_queue_result", side_effect=sqlite3.OperationalError("disk full")):
+            with patch("queue_stats_service.calculate_queue_match_stats", new=AsyncMock(return_value=({
+                "teams": [[{"discord_id": 1, "username": "Awang", "stats": {"games": 5, "kills": 30, "damage": 9000}}]],
+                "winning_team_index": 0, "match_history": [True], "team_round_wins": [1, 0],
+                "total_games_played": 1, "duration_ms": 1000, "is_final": True,
+            }, None))), \
+                    patch("queue_stats_service.resolve_queue_user_display_names", new=AsyncMock()), \
+                    patch("queue_stats_service.generate_queue_result_image", return_value=io.BytesIO(b"png")), \
+                    patch("queue_stats_service.cache_player_queue_stats"), \
+                    patch("queue_stats_service.check_queue_hall_of_fame_records", return_value=[]):
+                content, file, error, _ = await build_queue_stats_payload("3674", 999)
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(file)
+        self.assertIn("NeatQueue#3674", content)
+
+
+class ImpactLegendTests(unittest.IsolatedAsyncioTestCase):
+    """The message explains the Impact column, but only when the image actually has one."""
+
+    @staticmethod
+    def player(impact):
+        return {"discord_id": 1, "username": "Awang", "stats": {"games": 5, "kills": 30, "damage": 9000, "impact": impact}}
+
+    async def test_a_scored_series_explains_the_impact_column(self):
+        built = await build_payload(teams=[[self.player(78.4)], [self.player(55.0)]], is_final=True)
+
+        self.assertIn("\n-# Impact is survev.de's per-game impact score", built.content)
+
+    async def test_an_unscored_series_has_no_legend(self):
+        built = await build_payload(teams=[[self.player(None)], [self.player(None)]], is_final=True)
+
+        self.assertNotIn("Impact", built.content)
+
+    async def test_three_team_results_have_no_legend_because_the_column_is_hidden(self):
+        teams = [[self.player(78.4)], [self.player(55.0)], [self.player(10.0)]]
+        built = await build_payload(teams=teams, is_final=True)
+
+        self.assertNotIn("Impact", built.content)
 
 
 class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):

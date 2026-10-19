@@ -7,11 +7,9 @@ relying on Discord interactions.
 """
 import asyncio
 import os
-import shlex
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands

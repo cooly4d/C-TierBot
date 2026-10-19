@@ -188,18 +188,6 @@ async def get_match_end_ms(match, default_start_ms: int):
 NEATQUEUE_MATCH_ID_KEYS = ("match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
 
 
-def find_neatqueue_match(entries, match_id):
-    match_id_str = str(match_id).lower()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        for key in NEATQUEUE_MATCH_ID_KEYS:
-            value = get_nested_value(entry, key)
-            if value is not None and str(value).lower() == match_id_str:
-                return entry
-    return None
-
-
 def derive_team_round_wins_from_round_winners(round_winner_display_indices: list[int | None], num_teams: int) -> list[int]:
     """Count how many rounds each displayed team actually won from the per-round winner indices."""
     team_round_wins = [0] * max(num_teams, 0)
@@ -319,6 +307,20 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
             entry["display_name"] = await get_user_display_name(client, discord_id)
 
 
+def player_identity(slug: str | None, username: str) -> str:
+    """Key that identifies one survev.de player across a series' games: their account slug, else their
+    lowercased name (accounts without a public slug)."""
+    return slug or username.lower()
+
+
+def parse_impact_score(raw) -> int | float | None:
+    """survev.de's per-game impact score (0-100), or None when the game wasn't rated for that player
+    (they never really fought, or the map doesn't score impact)."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    return raw
+
+
 async def calculate_queue_match_stats(match_id: str, guild_id: int):
     """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
     and which team_id they were on), then overlays a Discord display name wherever the player's slug
@@ -414,29 +416,20 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
             queue_guids = set.union(*anchor_guid_sets)
 
-        ordered_queue_guids: list[str] = []
-        seen_guids: set[str] = set()
-        if anchor_matches_by_discord:
-            guid_timestamps: dict[str, int] = {}
-            for matches in anchor_matches_by_discord.values():
-                for match in matches:
-                    guid = match.get("guid")
-                    if guid not in queue_guids or guid is None:
-                        continue
-                    timestamp = get_match_history_timestamp(match) or 0
-                    if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
-                        guid_timestamps[guid] = timestamp
+        guid_timestamps: dict[str, int] = {}
+        for own_matches in anchor_matches_by_discord.values():
+            for own_match in own_matches:
+                guid = own_match.get("guid")
+                if guid is None or guid not in queue_guids:
+                    continue
+                timestamp = get_match_history_timestamp(own_match) or 0
+                if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
+                    guid_timestamps[guid] = timestamp
 
-            ordered_queue_guids = sorted(
-                queue_guids,
-                key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
-            )
-            seen_guids.update(ordered_queue_guids)
-
-        for guid in queue_guids:
-            if guid not in seen_guids:
-                ordered_queue_guids.append(guid)
-                seen_guids.add(guid)
+        ordered_queue_guids: list[str] = sorted(
+            queue_guids,
+            key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
+        )
 
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
@@ -461,7 +454,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             for p in board:
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
-                key = slug or username.lower()
+                key = player_identity(slug, username)
                 if not key:
                     continue
 
@@ -473,24 +466,31 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     except (TypeError, ValueError):
                         parsed_rank = None
 
+                impact = parse_impact_score(p.get("impact_score"))
                 game_entry["players"].append({
+                    "identity": key,
                     "username": username,
                     "slug": slug,
                     "team_id": p.get("team_id"),
                     "rank": parsed_rank,
                     "kills": p.get("kills", 0),
                     "damage_dealt": p.get("damage_dealt", 0),
+                    "impact_score": impact,
                 })
 
                 agg = players.setdefault(key, {
                     "username": username, "slug": slug, "team_id": p.get("team_id"),
-                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None
+                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None,
+                    "impact_total": 0, "impact_games": 0,
                 })
                 agg["games"] += 1
 
                 agg["wins"] += 1 if parsed_rank == 1 else 0
                 agg["kills"] += p.get("kills", 0)
                 agg["damage"] += p.get("damage_dealt", 0)
+                if impact is not None:
+                    agg["impact_total"] += impact
+                    agg["impact_games"] += 1
                 if parsed_rank is not None and (agg["best_rank"] is None or parsed_rank < agg["best_rank"]):
                     agg["best_rank"] = parsed_rank
                 if parsed_rank is not None and (key not in round_ranks or parsed_rank < round_ranks[key]):
@@ -513,7 +513,11 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 "username": p["username"],
                 "slug": p["slug"],
                 "guest": discord_id is None,
-                "stats": {"games": p["games"], "wins": p["wins"], "kills": p["kills"], "damage": p["damage"]}
+                "stats": {
+                    "games": p["games"], "wins": p["wins"], "kills": p["kills"], "damage": p["damage"],
+                    # Mean over the games survev.de actually scored (None when it scored none of them).
+                    "impact": round(p["impact_total"] / p["impact_games"], 1) if p["impact_games"] else None,
+                },
             })
 
         for team in result_teams:
@@ -521,8 +525,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         # A game can involve more teams than just the queue's own (e.g. public matchmaking lobbies with
         # random other squads) — only show the top 2 places so unrelated teams never clutter the image.
-        result_team_ids = [team_ids[i] for i in range(len(result_teams))]
-        top_two_indices = set(range(len(result_teams)))
         if len(result_teams) > 2:
             team_best_rank = {}
             for tid in team_ids:
@@ -533,28 +535,19 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 for tid in sorted(team_ids, key=lambda tid: team_best_rank[tid])[:2]
             }
             result_teams = [team for i, team in enumerate(result_teams) if i in top_two_indices]
-            result_team_ids = [team_id for i, team_id in enumerate(result_team_ids) if i in top_two_indices]
 
         # Reorder to match NeatQueue's own Team 1/Team 2 display order, using known discord_ids as votes.
-        def neatqueue_order_key(pair):
-            team, _ = pair
+        def neatqueue_order_key(team):
             votes = [neatqueue_team_index_by_discord_id[e["discord_id"]] for e in team if e["discord_id"] in neatqueue_team_index_by_discord_id]
             if not votes:
                 return len(teams)  # no known players on this team — push to the end
             return max(set(votes), key=votes.count)
 
-        ordered_pairs = sorted(zip(result_teams, result_team_ids), key=neatqueue_order_key)
-        if ordered_pairs:
-            result_teams, result_team_ids = zip(*ordered_pairs)
-            result_teams = [list(team) for team in result_teams]
-            result_team_ids = list(result_team_ids)
-        else:
-            result_teams = []
-            result_team_ids = []
+        result_teams = sorted(result_teams, key=neatqueue_order_key)
 
         # Identity, not team_id, is what stays stable across a series' separate games.
         identity_to_display_index: dict[str, int] = {
-            (entry["slug"] or entry["username"].lower()): idx
+            player_identity(entry["slug"], entry["username"]): idx
             for idx, team in enumerate(result_teams) for entry in team
         }
         round_winner_display_indices: list[int | None] = []
@@ -590,6 +583,9 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             winner_idx = round_winner_display_indices[game_index - 1] if game_index - 1 < len(round_winner_display_indices) else None
             game_entry = game_details_by_guid.get(guid, {"guid": guid, "players": []})
             players_for_game = game_entry.get("players", [])
+            for game_player in players_for_game:
+                # None for lobby strangers outside the two teams that were kept for display.
+                game_player["display_team_index"] = identity_to_display_index.get(game_player["identity"])
             players_for_game.sort(
                 key=lambda player: (
                     player.get("rank") is None,

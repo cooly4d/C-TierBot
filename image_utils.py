@@ -75,23 +75,6 @@ def load_font(size: int, weight: str = "regular"):
     return ImageFont.load_default()
 
 
-def truncate_text(value: str, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 1].rstrip() + "…"
-
-
-def rarity_label(rarity: int) -> str:
-    return {
-        0: "Stock",
-        1: "Common",
-        2: "Uncommon",
-        3: "Rare",
-        4: "Epic",
-        5: "Mythic"
-    }.get(rarity, f"Rarity {rarity}")
-
-
 def prettify_shop_item_type(item_type: str | None) -> str:
     if not item_type:
         return "Unknown"
@@ -158,7 +141,6 @@ def build_inventory_rarity_counts(grouped_items: list[dict]) -> dict[str, int]:
 QUEUE_IMG_WIDTH = 1600
 QUEUE_IMG_PADDING = 44
 QUEUE_IMG_HEADER_HEIGHT = 210
-QUEUE_IMG_TEAM_HEADER_HEIGHT = 84
 QUEUE_IMG_ROW_HEIGHT = 92
 
 QUEUE_IMG_BG = (18, 24, 37)
@@ -170,9 +152,6 @@ QUEUE_IMG_MUTED = (168, 183, 207)
 QUEUE_IMG_ACCENT = (255, 165, 50)
 QUEUE_IMG_WIN = (108, 199, 128)
 QUEUE_IMG_LOSE = (214, 96, 96)
-QUEUE_IMG_WIN_BADGE = (34, 106, 72)
-QUEUE_IMG_TEAM_SCORE_BADGE_BG = (18, 84, 54)
-QUEUE_IMG_TEAM_SCORE_BADGE_TEXT = (235, 237, 240)
 
 QUEUE_IMG_CARD_BG = (22, 30, 46)
 QUEUE_IMG_CARD_RADIUS = 18
@@ -188,11 +167,19 @@ QUEUE_IMG_ROW_DIVIDER = (38, 50, 74)
 # Column offsets as a fraction of a team panel's inner width: Player, Kills, Damage, Avg Damage
 QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.60, 0.80]
 QUEUE_IMG_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Avg"]
+# The same table with survev.de's impact score as a fifth column, used when at least one player has a score.
+QUEUE_IMG_COLUMN_RATIOS_IMPACT = [0.0, 0.36, 0.47, 0.64, 0.80]
+QUEUE_IMG_COLUMN_LABELS_IMPACT = ["Player", "Kills", "Dmg", "Avg", "Impact"]
+# Single-game card: no Avg column, because one game's damage already is its average.
+QUEUE_IMG_GAME_COLUMN_RATIOS = [0.0, 0.40, 0.60, 0.80]
+QUEUE_IMG_GAME_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Impact"]
+QUEUE_IMG_GAME_COLUMN_RATIOS_NO_IMPACT = [0.0, 0.50, 0.75]
+QUEUE_IMG_GAME_COLUMN_LABELS_NO_IMPACT = ["Player", "Kills", "Dmg"]
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
 QUEUE_IMG_UNLINKED_ICON_SIZE = 24
 QUEUE_IMG_UNLINKED_ICON_GAP = 10
 
-# Grid card outline colors, keyed by the same rarity ints as rarity_label.
+# Grid card outline colors, keyed by rarity int (0 Stock ... 5 Mythic, see INVENTORY_RARITY_FILTERS).
 RARITY_COLORS: dict[int, tuple[int, int, int]] = {
     0: (140, 140, 140),   # Stock - grey
     1: (85, 190, 90),     # Common - green
@@ -286,14 +273,52 @@ def _build_unlinked_icon(
     return rotated.resize((size_px, size_px), resample=Image.Resampling.LANCZOS)
 
 
-def generate_queue_result_image(
-    match_id: str,
+def has_impact_scores(teams: list[list[dict]]) -> bool:
+    """True when survev.de scored at least one player (not every map is rated, so the Impact column is optional)."""
+    return any((entry.get("stats") or {}).get("impact") is not None for team in teams for entry in team)
+
+
+def shows_impact_column(teams: list[list[dict]]) -> bool:
+    """Whether the queue image gets an Impact column: someone was scored, and it is the standard two-team
+    layout (a third panel is too narrow for five columns)."""
+    return len(teams) <= 2 and has_impact_scores(teams)
+
+
+def _queue_cell(label: str, entry: dict, player_label: str) -> tuple[str, bool, tuple[int, int, int]]:
+    """Text, weight (bold?) and color of one player-row cell for the column with this header label."""
+    stats = entry["stats"]
+    if label == "Kills":
+        return str(stats["kills"]), False, QUEUE_IMG_TEXT
+    if label == "Dmg":
+        return f"{stats['damage']:,}", True, QUEUE_IMG_TEXT
+    if label == "Avg":
+        games = stats["games"]
+        avg_damage = stats["damage"] / games if games else 0
+        return f"{avg_damage:,.0f}", True, QUEUE_IMG_ACCENT
+    if label == "Impact":
+        impact = stats.get("impact")
+        if impact is None:
+            return "-", True, QUEUE_IMG_MUTED
+        return str(int(impact + 0.5)), True, QUEUE_IMG_TEXT
+    return player_label, True, QUEUE_IMG_TEXT
+
+
+def _render_queue_card(
     teams: list[list[dict]],
-    winning_team_index: int | None,
-    match_history: list[bool | None] | None = None,
-    team_round_wins: list[int] | None = None,
-    duration_ms: int | None = None,
+    labels: list[str],
+    ratios: list[float],
+    title: str,
+    subtitle: str,
+    subtitle_color: tuple[int, int, int],
+    meta_text: str,
+    team_scores: list[int],
+    leader_index: int | None,
+    panel_winner_index: int | None,
+    match_history: list[bool | None] | None,
+    highlight_index: int | None,
 ) -> BytesIO:
+    """Draws one queue card: a header (title, result line, score, game timeline) above one table panel per team.
+    The series result image and the single-game card share this and differ only in what they pass in."""
     S = 2  # 2x supersampling factor for smooth anti-aliased circles, borders, and text
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
@@ -301,7 +326,7 @@ def generate_queue_result_image(
     panel_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * (num_teams + 1)) // num_teams
     panel_x_positions = [QUEUE_IMG_PADDING + i * (panel_width + QUEUE_IMG_PADDING) for i in range(num_teams)]
     inner_width = panel_width - 2 * QUEUE_IMG_CARD_INNER_PAD_X
-    columns = [round(ratio * inner_width) for ratio in QUEUE_IMG_COLUMN_RATIOS]
+    columns = [round(ratio * inner_width) for ratio in ratios]
 
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
     col_header_top = panel_top + QUEUE_IMG_TEAM_BANNER_HEIGHT
@@ -324,21 +349,11 @@ def generate_queue_result_image(
     # Top banner with subtle gradient
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
 
-    draw.text((QUEUE_IMG_PADDING * S, 28 * S), f"#{match_id}", font=title_font, fill=QUEUE_IMG_TEXT)
-
-    if winning_team_index is not None and 0 <= winning_team_index < num_teams:
-        winner_text = f"Team {winning_team_index + 1} Wins"
-        winner_color = QUEUE_IMG_WIN
-    else:
-        winner_text = "Result unknown"
-        winner_color = QUEUE_IMG_MUTED
-
-    draw.text((QUEUE_IMG_PADDING * S, 96 * S), winner_text, font=subtitle_font, fill=winner_color)
+    draw.text((QUEUE_IMG_PADDING * S, 28 * S), title, font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING * S, 96 * S), subtitle, font=subtitle_font, fill=subtitle_color)
 
     if match_history:
         history_count = len(match_history)
-        slice_start = 0
-        history_slice = match_history
 
         timeline_box_width = 560 * S
         timeline_box_height = 146 * S
@@ -365,28 +380,23 @@ def generate_queue_result_image(
 
         spacing = 0 if history_count <= 1 else (axis_x1 - axis_x0) / (history_count - 1)
 
-        for idx, result in enumerate(history_slice):
+        for idx, result in enumerate(match_history):
             x = axis_x0 + spacing * idx
             dot_color = QUEUE_IMG_MUTED if result is None else (QUEUE_IMG_WIN if result else QUEUE_IMG_LOSE)
-            dot_radius = (12 if idx < history_count - 1 else 14) * S
+            dot_radius = (14 if idx == highlight_index else 12) * S
             dot_bbox = [x - dot_radius, axis_y - dot_radius, x + dot_radius, axis_y + dot_radius]
             draw.ellipse(dot_bbox, fill=dot_color)
 
-            if idx == history_count - 1:
+            if idx == highlight_index:
                 highlight_bbox = [x - dot_radius - 4 * S, axis_y - dot_radius - 4 * S, x + dot_radius + 4 * S, axis_y + dot_radius + 4 * S]
                 draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4 * S)
 
-            label = f"G{slice_start + idx + 1}"
+            label = f"G{idx + 1}"
             label_bbox = draw.textbbox((0, 0), label, font=body_font)
             label_x = x - (label_bbox[2] - label_bbox[0]) / 2
             draw.text((label_x, axis_y + dot_radius + 10 * S), label, font=body_font, fill=QUEUE_IMG_TEXT)
 
     score_font = load_font(72 * S, "bold")
-    if team_round_wins is not None and len(team_round_wins) == num_teams:
-        team_scores = team_round_wins
-    else:
-        # Fallback for compatibility if explicit round totals are unavailable.
-        team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
     if num_teams == 2:
         left_text = str(team_scores[0])
         right_text = str(team_scores[1])
@@ -394,11 +404,11 @@ def generate_queue_result_image(
         left_color = QUEUE_IMG_TEXT
         right_color = QUEUE_IMG_TEXT
 
-        if winning_team_index is not None:
-            if winning_team_index == 0:
+        if leader_index is not None:
+            if leader_index == 0:
                 left_color = QUEUE_IMG_WIN
                 right_color = QUEUE_IMG_LOSE
-            elif winning_team_index == 1:
+            elif leader_index == 1:
                 left_color = QUEUE_IMG_LOSE
                 right_color = QUEUE_IMG_WIN
 
@@ -420,13 +430,8 @@ def generate_queue_result_image(
         y_pos = 88 * S
         draw.text((x_pos, y_pos), score_text, font=score_font, fill=QUEUE_IMG_TEXT)
 
-    if duration_ms is not None and duration_ms > 0:
-        duration_label = f"Match Duration: {format_duration_ms(duration_ms)}"
-    else:
-        total_games = len(match_history) if match_history else 0
-        duration_label = f"{total_games} {'Game' if total_games == 1 else 'Games'} Played" if total_games else ""
-    if duration_label:
-        draw.text((QUEUE_IMG_PADDING * S, 152 * S), duration_label, font=duration_font, fill=QUEUE_IMG_MUTED)
+    if meta_text:
+        draw.text((QUEUE_IMG_PADDING * S, 152 * S), meta_text, font=duration_font, fill=QUEUE_IMG_MUTED)
 
     card_radius = QUEUE_IMG_CARD_RADIUS * S
     col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [inner_width - columns[-1]]
@@ -434,11 +439,11 @@ def generate_queue_result_image(
     for team_index in range(num_teams):
         team_players = teams[team_index] if team_index < len(teams) else []
         x0 = panel_x_positions[team_index]
-        is_winner = winning_team_index == team_index
+        is_winner = panel_winner_index == team_index
         if is_winner:
             team_color = QUEUE_IMG_WIN
             banner_bg = QUEUE_IMG_WIN_BANNER_BG
-        elif winning_team_index is not None:
+        elif panel_winner_index is not None:
             team_color = QUEUE_IMG_LOSE
             banner_bg = QUEUE_IMG_LOSE_BANNER_BG
         else:
@@ -477,7 +482,7 @@ def generate_queue_result_image(
         # 3. Column header strip + subtle bottom divider
         inner_x0 = x0 + QUEUE_IMG_CARD_INNER_PAD_X
         header_y = _vcenter_y(draw, header_font, col_header_top * S, rows_top * S)
-        for col_idx, label in enumerate(QUEUE_IMG_COLUMN_LABELS):
+        for col_idx, label in enumerate(labels):
             label_x = (inner_x0 + columns[col_idx]) * S
             label_bbox = draw.textbbox((0, 0), label, font=header_font)
             label_width = label_bbox[2] - label_bbox[0]
@@ -508,22 +513,12 @@ def generate_queue_result_image(
                     fill=QUEUE_IMG_ROW_ALT,
                 )
 
-            stats = entry["stats"]
             player_label = entry.get("display_name") or entry.get("username") or "Unknown"
             is_guest = entry.get("guest", False)
 
-            games = stats["games"]
-            avg_damage = stats["damage"] / games if games else 0
-
-            row_values = [
-                player_label,
-                str(stats["kills"]),
-                f"{stats['damage']:,}",
-                f"{avg_damage:,.0f}"
-            ]
-            for col_idx, value in enumerate(row_values):
-                fill = QUEUE_IMG_ACCENT if col_idx == 3 else QUEUE_IMG_TEXT
-                font = body_font_bold if col_idx in (0, 2, 3) else body_font
+            for col_idx, label in enumerate(labels):
+                value, bold, fill = _queue_cell(label, entry, player_label)
+                font = body_font_bold if bold else body_font
                 cell_x = (inner_x0 + columns[col_idx]) * S
                 cell_y = _vcenter_y(draw, font, row_box_top, row_box_bottom)
                 if col_idx == 0:
@@ -576,6 +571,101 @@ def generate_queue_result_image(
     image.save(buffer, format="PNG")
     buffer.seek(0)
     return buffer
+
+
+def generate_queue_result_image(
+    match_id: str,
+    teams: list[list[dict]],
+    winning_team_index: int | None,
+    match_history: list[bool | None] | None = None,
+    team_round_wins: list[int] | None = None,
+    duration_ms: int | None = None,
+) -> BytesIO:
+    num_teams = max(len(teams), 1)
+    if winning_team_index is not None and 0 <= winning_team_index < num_teams:
+        subtitle, subtitle_color = f"Team {winning_team_index + 1} Wins", QUEUE_IMG_WIN
+    else:
+        subtitle, subtitle_color = "Result unknown", QUEUE_IMG_MUTED
+
+    if team_round_wins is not None and len(team_round_wins) == num_teams:
+        team_scores = team_round_wins
+    else:
+        # Fallback for compatibility if explicit round totals are unavailable.
+        team_scores = [max((entry["stats"].get("wins", 0) for entry in team if entry["stats"]), default=0) for team in teams]
+
+    if duration_ms is not None and duration_ms > 0:
+        meta_text = f"Match Duration: {format_duration_ms(duration_ms)}"
+    else:
+        total_games = len(match_history) if match_history else 0
+        meta_text = f"{total_games} {'Game' if total_games == 1 else 'Games'} Played" if total_games else ""
+
+    # The Impact column only appears when survev.de scored at least one player (not every map is rated).
+    if shows_impact_column(teams):
+        ratios, labels = QUEUE_IMG_COLUMN_RATIOS_IMPACT, QUEUE_IMG_COLUMN_LABELS_IMPACT
+    else:
+        ratios, labels = QUEUE_IMG_COLUMN_RATIOS, QUEUE_IMG_COLUMN_LABELS
+
+    return _render_queue_card(
+        teams=teams,
+        labels=labels,
+        ratios=ratios,
+        title=f"#{match_id}",
+        subtitle=subtitle,
+        subtitle_color=subtitle_color,
+        meta_text=meta_text,
+        team_scores=team_scores,
+        leader_index=winning_team_index,
+        panel_winner_index=winning_team_index,
+        match_history=match_history,
+        highlight_index=len(match_history) - 1 if match_history else None,
+    )
+
+
+def generate_queue_game_image(
+    match_id: str,
+    game_number: int,
+    total_games: int,
+    teams: list[list[dict]],
+    winner_index: int | None,
+    match_history: list[bool | None] | None,
+    series_score: list[int],
+) -> BytesIO:
+    """Card for one game of a queue's series: that game's winner and per-player kills, damage and impact, with the
+    series score through this game and the timeline ringing this game. `teams` holds the same entries as the result
+    image, with `stats` set to this single game's numbers."""
+    num_teams = max(len(teams), 1)
+    if winner_index is not None and 0 <= winner_index < num_teams:
+        subtitle, subtitle_color = f"Team {winner_index + 1} won Game {game_number}", QUEUE_IMG_WIN
+    else:
+        subtitle, subtitle_color = "Winner unknown", QUEUE_IMG_MUTED
+
+    scores = (list(series_score) + [0] * num_teams)[:num_teams]
+    meta_text = f"Game {game_number} of {total_games}"
+    if num_teams == 2:
+        meta_text += f" · Series {scores[0]} - {scores[1]}"
+    leaders = [index for index, score in enumerate(scores) if score == max(scores)]
+    leader_index = leaders[0] if len(leaders) == 1 else None
+
+    if has_impact_scores(teams):
+        ratios, labels = QUEUE_IMG_GAME_COLUMN_RATIOS, QUEUE_IMG_GAME_COLUMN_LABELS
+    else:
+        ratios, labels = QUEUE_IMG_GAME_COLUMN_RATIOS_NO_IMPACT, QUEUE_IMG_GAME_COLUMN_LABELS_NO_IMPACT
+
+    in_timeline = bool(match_history) and 0 <= game_number - 1 < len(match_history)
+    return _render_queue_card(
+        teams=teams,
+        labels=labels,
+        ratios=ratios,
+        title=f"#{match_id}",
+        subtitle=subtitle,
+        subtitle_color=subtitle_color,
+        meta_text=meta_text,
+        team_scores=scores,
+        leader_index=leader_index,
+        panel_winner_index=winner_index,
+        match_history=match_history,
+        highlight_index=game_number - 1 if in_timeline else None,
+    )
 
 
 def generate_inventory_image(username: str, items: list[dict], page: int = 0, rarity_filter: str = "all") -> BytesIO:
@@ -791,6 +881,18 @@ def _pick_compare_row_colors(left_num: float | None, right_num: float | None) ->
     return (QUEUE_IMG_WIN, QUEUE_IMG_LOSE) if left_num > right_num else (QUEUE_IMG_LOSE, QUEUE_IMG_WIN)
 
 
+def format_squad_tier(tier: dict | None, verified: bool) -> tuple[str, int | None]:
+    """Text for a /compare tier cell plus the numeric rating used to color the better side.
+    `tier` is {"tier", "rating", "region"}, None when unranked, or {"unavailable": True} when the lookup failed."""
+    if not verified:
+        return "-", None
+    if tier is None:
+        return "Unranked", None
+    if tier.get("unavailable"):
+        return "N/A", None
+    return f"{tier['tier']} · {tier['rating']}", tier["rating"]
+
+
 def generate_compare_image(
     left_name: str,
     left_stats: dict | None,
@@ -800,6 +902,8 @@ def generate_compare_image(
     right_stats: dict | None,
     right_worth: int | None,
     right_queue_summary: dict | None,
+    left_tier: dict | None = None,
+    right_tier: dict | None = None,
 ) -> BytesIO:
     title_font = load_font(48, "bold")
     subtitle_font = load_font(24, "bold")
@@ -809,14 +913,14 @@ def generate_compare_image(
     value_font = load_font(36, "bold")
     footer_font = load_font(16)
 
-    def stat_fields(stats, worth):
+    def stat_fields(stats):
         if stats is None:
             return None, None, None
         games = max(1, stats["games"])
         return stats["wins"], stats["kills"] / games, stats["damage"]
 
-    left_wins, left_kd, left_damage = stat_fields(left_stats, left_worth)
-    right_wins, right_kd, right_damage = stat_fields(right_stats, right_worth)
+    left_wins, left_kd, left_damage = stat_fields(left_stats)
+    right_wins, right_kd, right_damage = stat_fields(right_stats)
 
     def queue_fields(summary):
         summary = summary or {}
@@ -826,6 +930,9 @@ def generate_compare_image(
 
     left_playtime_ms, left_all_avg, left_monthly_avg = queue_fields(left_queue_summary)
     right_playtime_ms, right_all_avg, right_monthly_avg = queue_fields(right_queue_summary)
+
+    left_tier_text, left_tier_rating = format_squad_tier(left_tier, verified=left_stats is not None)
+    right_tier_text, right_tier_rating = format_squad_tier(right_tier, verified=right_stats is not None)
 
     def fmt(value, suffix="", none_text="-", decimals=None):
         if value is None:
@@ -838,6 +945,7 @@ def generate_compare_image(
         ("All-Time Wins", fmt(left_wins), fmt(right_wins), left_wins, right_wins),
         ("K/D Ratio", fmt(left_kd, decimals=".2f"), fmt(right_kd, decimals=".2f"), left_kd, right_kd),
         ("Total Damage", fmt(left_damage), fmt(right_damage), left_damage, right_damage),
+        ("Squad Tier", left_tier_text, right_tier_text, left_tier_rating, right_tier_rating),
         (
             "Inventory Worth",
             fmt(left_worth, suffix=" GF"),

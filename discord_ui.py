@@ -1,5 +1,5 @@
 """Discord UI components: persistent Views/Selects for the leaderboard, queue-result
-verify button, and inventory/shop pagination, plus the message-refresh handlers they trigger.
+verify and Game breakdown buttons, and inventory/shop pagination, plus the message-refresh handlers they trigger.
 
 Note: the actual click/select dispatch lives in `log_interaction` (leaderboard_bot.py) —
 these views' own callbacks are mostly no-ops (see the comment on QueueResultView).
@@ -17,6 +17,7 @@ from leaderboard_service import (
     build_shop_image_payload,
     generate_leaderboard_embed,
 )
+from queue_stats_service import build_queue_game_payload, parse_queue_match_id, queue_games_unavailable
 from survev_client import run_survev_verification
 
 MAX_PAGINATION_STATE_ENTRIES = 200
@@ -68,7 +69,6 @@ class LeaderboardSortSelect(discord.ui.Select):
 class LeaderboardView(discord.ui.View):
     def __init__(self, initial_period: str = "Weekly", initial_sort: str = "kills"):
         super().__init__(timeout=None)
-        self.initial_period = initial_period
         self.initial_sort = initial_sort if initial_sort in LEADERBOARD_SORT_CONFIG else "kills"
 
         if initial_period == "Weekly":
@@ -129,9 +129,17 @@ async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction,
 
 class QueueResultView(discord.ui.View):
     """Persistent view attached to queue-result messages, so anyone missing from the roster can self-serve
-    a verification link (visible only to them, in the same channel) instead of having to know /verify exists."""
-    def __init__(self):
+    a verification link (visible only to them, in the same channel) instead of having to know /verify exists.
+    Finished queues also get a Game breakdown button (handled in log_interaction, like the other buttons)."""
+    def __init__(self, include_breakdown: bool = False):
         super().__init__(timeout=None)
+        if not include_breakdown:
+            self.remove_item(self.breakdown_button)
+
+    @discord.ui.button(label="Game breakdown", style=discord.ButtonStyle.primary, custom_id="queue_result_games")
+    async def breakdown_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Handled by log_interaction
+        pass
 
     @discord.ui.button(label="Account unlinked?  Verify here for a gf.", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -152,14 +160,78 @@ class QueueResultView(discord.ui.View):
             pass
 
 
-queue_result_view = None
+_queue_result_views: dict[bool, QueueResultView] = {}
 
 
-def get_queue_result_view():
-    global queue_result_view
-    if queue_result_view is None:
-        queue_result_view = QueueResultView()
-    return queue_result_view
+def get_queue_result_view(include_breakdown: bool = False):
+    """One shared view per variant (with or without the Game breakdown button), reused for every result message."""
+    if include_breakdown not in _queue_result_views:
+        _queue_result_views[include_breakdown] = QueueResultView(include_breakdown)
+    return _queue_result_views[include_breakdown]
+
+
+class QueueGamesPagerView(discord.ui.View):
+    """Previous/Next buttons under a Game breakdown card; clicks are handled in log_interaction. The queue and the
+    target page live in each custom_id (like the seasonal leaderboard), so nothing has to be kept in memory."""
+    def __init__(self, match_id: str, page: int, total_pages: int):
+        super().__init__(timeout=900)  # finite: these live in ephemeral messages, so don't hold them forever
+        self.add_item(discord.ui.Button(
+            label="◀ Previous",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"qgame_prev:{match_id}:{max(0, page - 1)}",
+            disabled=page <= 0,
+        ))
+        self.add_item(discord.ui.Button(
+            label="Next ▶",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"qgame_next:{match_id}:{min(total_pages - 1, page + 1)}",
+            disabled=page >= total_pages - 1,
+        ))
+
+
+def parse_game_page_id(custom_id: str) -> tuple[str, int]:
+    """Splits "qgame_prev:{match_id}:{page}" / "qgame_next:..." into (match_id, page). The queue number is whatever
+    sits between the first and last colon, so an unusual one can't break the page lookup."""
+    _, rest = custom_id.split(":", 1)
+    match_id, page = rest.rsplit(":", 1)
+    return match_id, int(page)
+
+
+async def build_queue_game_message(guild_id: int | None, match_id: str, page: int):
+    """Returns (embed, file, view, None) for one game of a queue's breakdown, or (None, None, None, error_text).
+    The view is None when the queue only has a single game."""
+    embed, file, page, total_pages, error_text = await build_queue_game_payload(guild_id, match_id, page)
+    if error_text:
+        return None, None, None, error_text
+    view = QueueGamesPagerView(match_id, page, total_pages) if total_pages > 1 else None
+    return embed, file, view, None
+
+
+async def show_queue_game_breakdown(interaction: discord.Interaction):
+    """Game breakdown button: opens the first game as an ephemeral message only the clicker sees."""
+    await interaction.response.defer(ephemeral=True)
+    match_id = parse_queue_match_id(interaction.message)
+    if match_id is None:
+        await interaction.followup.send(queue_games_unavailable(None), ephemeral=True)
+        return
+
+    embed, file, view, error_text = await build_queue_game_message(interaction.guild_id, match_id, 0)
+    if error_text:
+        await interaction.followup.send(error_text, ephemeral=True)
+        return
+    options = {"view": view} if view is not None else {}  # followup.send rejects view=None
+    await interaction.followup.send(embed=embed, file=file, ephemeral=True, **options)
+
+
+async def refresh_queue_game_message(interaction: discord.Interaction, match_id: str, page: int):
+    """Previous/Next buttons: swaps the ephemeral breakdown message over to another game."""
+    await interaction.response.defer()
+    embed, file, view, error_text = await build_queue_game_message(interaction.guild_id, match_id, page)
+    if error_text:
+        await interaction.followup.send(error_text, ephemeral=True)
+        return
+    # Ephemeral messages can only be edited through the interaction itself, not interaction.message.edit.
+    await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
 
 
 class InventoryRaritySelect(discord.ui.Select):

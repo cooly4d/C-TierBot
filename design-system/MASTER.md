@@ -36,9 +36,6 @@
 | `QUEUE_IMG_ACCENT` | `(255, 165, 50)` | `#FFA532` | Primary highlight accent: `Avg` damage column values, latest game outer ring on `MATCH TIMELINE`, Golden Fries balances, item worth/prices |
 | `QUEUE_IMG_WIN` | `(108, 199, 128)` | `#6CC780` | Semantic Win / Positive state: `"Team X Wins"` subtitle, winning score, winning team title & `2px` card border, timeline win dot, available shop offer border/status, higher stat in `/compare` |
 | `QUEUE_IMG_LOSE` | `(214, 96, 96)` | `#D66060` | Semantic Loss / Negative state: losing score, losing team title & `2px` card border, timeline loss dot, purchased shop offer border/status, lower stat in `/compare` |
-| `QUEUE_IMG_WIN_BADGE` | `(34, 106, 72)` | `#226A48` | Module-level win badge fill token |
-| `QUEUE_IMG_TEAM_SCORE_BADGE_BG` | `(18, 84, 54)` | `#125436` | Module-level team score badge background token |
-| `QUEUE_IMG_TEAM_SCORE_BADGE_TEXT` | `(235, 237, 240)` | `#EBEDF0` | Module-level team score badge foreground token |
 
 ### 1.3 Team Header Banner Tints (`generate_queue_result_image`)
 
@@ -52,7 +49,7 @@
 
 Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_image()`:
 
-| Rarity Key | Label (`rarity_label`) | RGB Tuple | Hex | Visual |
+| Rarity Key | Label (`INVENTORY_RARITY_FILTERS`) | RGB Tuple | Hex | Visual |
 |---|---|---|---|---|
 | `0` | `Stock` | `(140, 140, 140)` | `#8C8C8C` | Grey |
 | `1` | `Common` | `(85, 190, 90)` | `#55BE5A` | Green |
@@ -60,7 +57,7 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 | `3` | `Rare` | `(110, 190, 245)` | `#6EBEF5` | Light Blue |
 | `4` | `Epic` | `(176, 90, 220)` | `#B05ADC` | Purple |
 | `5` | `Mythic` | `(191, 87, 0)` | `#BF5700` | Burnt Orange |
-| Fallback | `Rarity {n}` | `QUEUE_IMG_MUTED` `(168, 183, 207)` | `#A8B7CF` | Muted Slate |
+| Fallback (unknown key) | — | `QUEUE_IMG_MUTED` `(168, 183, 207)` | `#A8B7CF` | Muted Slate |
 
 ### 1.5 Renderer-Specific Surface Overrides
 
@@ -77,7 +74,7 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 
 | Discord Color | Hex | Applied Commands / Views |
 |---|---|---|
-| `discord.Color.blurple()` | `#5865F2` | `/profile`, `/inventory`, `/market` |
+| `discord.Color.blurple()` | `#5865F2` | `/profile` (incl. the `survev.de Squad Tier` field), `/inventory`, `/market`, Game breakdown embeds |
 | `discord.Color.gold()` | `#F1C40F` | `/leaderboard_weekly`, `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
 | `discord.Color.purple()` | `#9B59B6` | `/leaderboard_monthly` |
 
@@ -111,9 +108,9 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 | `title_font` | `66px` | `132px` | `bold` | `QUEUE_IMG_TEXT` | Match ID header (`#3674`) |
 | `subtitle_font` | `38px` | `76px` | `bold` | `QUEUE_IMG_WIN` / `QUEUE_IMG_MUTED` | Winner announcement (`Team 1 Wins` / `Result unknown`) |
 | `team_header_font` | `38px` | `76px` | `bold` | `team_color` (`WIN`/`LOSE`/`MUTED`) | Centered team card banner title (`Team 1`, `Team 2`) |
-| `body_font_bold` | `35px` | `70px` | `bold` | `QUEUE_IMG_TEXT` (cols 0, 2), `QUEUE_IMG_ACCENT` (col 3) | Player name (`col 0`), Total Damage (`col 2`), Avg Damage (`col 3`) |
+| `body_font_bold` | `35px` | `70px` | `bold` | `QUEUE_IMG_TEXT` (cols 0, 2, Impact), `QUEUE_IMG_ACCENT` (Avg) | Player name (`col 0`), Total Damage, Avg Damage, Impact score (`QUEUE_IMG_MUTED` `-` when unscored) |
 | `body_font` | `35px` | `70px` | `regular` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Kills (`col 1`), timeline node labels (`G1`, `G2`), `"No players"` empty state |
-| `header_font` | `30px` | `60px` | `bold` | `QUEUE_IMG_TEXT` | `MATCH TIMELINE` header & table column headers (`Player`, `Kills`, `Dmg`, `Avg`) |
+| `header_font` | `30px` | `60px` | `bold` | `QUEUE_IMG_TEXT` | `MATCH TIMELINE` header & table column headers (`Player`, `Kills`, `Dmg`, `Avg`, `Impact`) |
 | `duration_font` | `22px` | `44px` | `bold` | `QUEUE_IMG_MUTED` | Header duration (`Match Duration: 18m 42s`) / Games Played label |
 | `footer_font` | `22px` | `44px` | `regular` | `QUEUE_IMG_MUTED` | Bottom verification CTA footer |
 
@@ -151,6 +148,8 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
   - Integers (damage, worth, prices, balances): comma-separated (`f"{value:,}"`)
   - Averages (`avg_damage`): rounded integer with commas (`f"{avg_damage:,.0f}"`)
   - Ratios (`K/D Ratio`): 2 decimal places (`f"{kd:.2f}"`)
+  - Impact scores (survev.de, `0`–`100`): whole numbers rounded half-up (`72.5` → `73`); unscored → `-`
+  - Squad tier: survev.de ladder letters as returned (`F E D C B- B A- A S`, up to two characters) followed by ` · ` and the whole-number rating (`A- · 72`)
   - Durations (`format_duration_ms`): `"Xh YYm ZZs"`, `"Ym ZZs"`, or `"Zs"`
 
 ---
@@ -185,6 +184,11 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
     - `Kills` (`0.40–0.60`, `20%` width / `139px`): Center-aligned within column width; regular weight (`body_font`).
     - `Dmg` (`0.60–0.80`, `20%` width / `139px`): Center-aligned within column width; bold weight (`body_font_bold`).
     - `Avg` (`0.80–1.00`, `20%` width / `139px`): Center-aligned within column width; bold weight (`body_font_bold`) in `QUEUE_IMG_ACCENT` (`#FFA532`).
+  - **Impact layout (`QUEUE_IMG_COLUMN_RATIOS_IMPACT`)** — used by `generate_queue_result_image` whenever `shows_impact_column(teams)` is true (at least one player has a survev.de impact score **and** the result has two teams or fewer; three-team results keep the 4-column layout because a third panel is too narrow for five columns). Ratios `[0.0, 0.36, 0.47, 0.64, 0.80]` for `["Player", "Kills", "Dmg", "Avg", "Impact"]` → `250px / 76px / 118px / 111px / 139px`:
+    - `Player` keeps the same ellipsis rule (`234px` usable, about 11–12 characters; the unlinked badge still reserves `34px`).
+    - `Impact`: bold `body_font_bold` in `QUEUE_IMG_TEXT`, centered, header label `"Impact"`. Value = the player's mean per-game impact over the games survev.de scored, rounded half-up to a whole number (`0`–`100`); a real score of `0` prints `0`; no scored game prints `-` in `QUEUE_IMG_MUTED`. No bar or color coding: the number is the whole signal (color is never the only indicator).
+    - Because the Impact column is optional, the Discord message adds a Discord subtext line (`-# Impact is survev.de's per-game impact score (0-100), averaged over the games it was scored.`) only when the column is shown.
+  - **Game card layouts (`QUEUE_IMG_GAME_COLUMN_*`)** — one game's numbers, so no `Avg` column: `["Player", "Kills", "Dmg", "Impact"]` at `[0.0, 0.40, 0.60, 0.80]`, or `["Player", "Kills", "Dmg"]` at `[0.0, 0.50, 0.75]` when nobody was scored.
 - **Inset Alternating Row Highlight:**
   - Drawn on even rows (`row_index % 2 == 0`) with a `12px` horizontal inset from the outer card edges (`x0 + 12` to `x0 + panel_width - 12`) and `4px` top/bottom vertical inset (`84px` pill height inside the `92px` row slot).
 
@@ -201,7 +205,8 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 - **Compare Split Table (`generate_compare_image`):**
   - Full-width card from `x = 44px` to `1556px` (`1512px` wide), `card_top = 254px`
   - Player header block height: `name_block_height = 130px`
-  - Stat row height: `row_height = 92px` (7 rows)
+  - Stat row height: `row_height = 92px` (8 rows: Wins, K/D, Total Damage, **Squad Tier**, Inventory Worth, Play Time, All-Time Avg Damage, Monthly Avg Damage)
+  - **Squad Tier row** (`format_squad_tier`): value `"A- · 72"` (survev.de tier ladder `F E D C B- B A- A S`, `·`, rating `0`–`100`), `"Unranked"` when the player has no rated Squad games, `"N/A"` when the lookup failed, `"-"` when the player isn't verified. The better rating is `QUEUE_IMG_WIN`, the lower `QUEUE_IMG_LOSE`, unranked/unavailable stay `QUEUE_IMG_MUTED`.
   - Center label zone: `label_half_width = 190px` around `center_x = 800px` (`bar_x_left = 610px`, `bar_x_right = 990px`), with `6px`-wide vertical Blurple bars spanning `22%` to `78%` of each row's height and stat values anchored `20px` outside the bars.
 
 ---
@@ -232,20 +237,29 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
   - **Center Scoreboard (`x = centered`, `y = 88`):** Large `72px` bold round score (`left_score - right_score`), where the winning side's digit is colored `QUEUE_IMG_WIN` and the losing side's digit is colored `QUEUE_IMG_LOSE`, separated by `" - "` in `QUEUE_IMG_TEXT`.
   - **Right Column (`MATCH TIMELINE`, `x = 996`, `y = 32`, `560 x 146`):** Displayed when `match_history` is present. Features centered `"MATCH TIMELINE"` header at `y + 14`, horizontal axis at `y + 74` (`28px` horizontal inset), color-coded game outcome dots (`G1`, `G2`, …), and an outer `QUEUE_IMG_ACCENT` ring highlighting the final game.
 
-### 5.2 Team Result Card (`generate_queue_result_image`)
+### 5.2 Team Result Card (`generate_queue_result_image`, `_render_queue_card`)
+`generate_queue_result_image` and `generate_queue_game_image` (5.4) both draw through `_render_queue_card`, so the header, panels and footer below are shared; they only differ in the strings, scores, column layout and highlighted game they pass in.
 Rendered in a strict 5-layer painter's order per team panel so corners and borders stay razor-sharp:
 1. **Card Surface Fill:** `rounded_rectangle` (`radius=18`, fill `QUEUE_IMG_CARD_BG`).
 2. **Tinted Team Header Banner:** `rounded_rectangle` (`radius=17`, fill `banner_bg`) for the top corners, overlaid with a flat `rectangle` covering the bottom `18px` of the banner strip so the bottom edge is square, followed by a `2px` horizontal line at `col_header_top` in `team_color` and centered `Team N` title.
-3. **Column Header Strip:** `48px` tall strip with `Player` (left-aligned) and `Kills`, `Dmg`, `Avg` (centered in their column slices) plus a `1px` inset bottom divider in `QUEUE_IMG_ROW_DIVIDER`.
-4. **Alternating Player Rows:** `92px` tall slots. Even rows (`0, 2, 4...`) draw an inset rounded rectangle (`12px` X-inset, `4px` Y-inset, `radius=10`, fill `QUEUE_IMG_ROW_ALT`). `Player`, `Dmg`, and `Avg` use `body_font_bold`; `Kills` uses regular `body_font`; `Avg` is highlighted in `QUEUE_IMG_ACCENT`.
+3. **Column Header Strip:** `48px` tall strip with `Player` (left-aligned) and the remaining column labels (`Kills`, `Dmg`, `Avg`, plus `Impact` when shown), centered in their column slices, plus a `1px` inset bottom divider in `QUEUE_IMG_ROW_DIVIDER`.
+4. **Alternating Player Rows:** `92px` tall slots. Even rows (`0, 2, 4...`) draw an inset rounded rectangle (`12px` X-inset, `4px` Y-inset, `radius=10`, fill `QUEUE_IMG_ROW_ALT`). `Player`, `Dmg`, `Avg` and `Impact` use `body_font_bold`; `Kills` uses regular `body_font`; `Avg` is highlighted in `QUEUE_IMG_ACCENT`. Cell text comes from `_queue_cell(label, entry, player_label)`.
 5. **Outer Card Border:** Final `rounded_rectangle` (`radius=18`, `outline=team_color`, `width=2`) drawn last on top of the banner and card fill to prevent inner fills from clipping the border stroke.
 
 ### 5.3 Discord Interactive Views (`discord_ui.py`)
-- **Centralized Dispatch Pattern:** All interactive component clicks and select changes are routed through `log_interaction` in [`leaderboard_bot.py`](file:///c:/Users/Awang/local/C-TierBot/leaderboard_bot.py#L87-L178) via `custom_id` matching (`queue_result_verify`, `leaderboard_weekly`, `leaderboard_monthly`, `leaderboard_sort`, `season_prev:*`, `season_next:*`, `inventory_prev`, `inventory_next`, `inventory_rarity`, `market_prev`, `market_next`, `market_mode_*`).
+- **Centralized Dispatch Pattern:** All interactive component clicks and select changes are routed through `log_interaction` in [`leaderboard_bot.py`](file:///c:/Users/Awang/local/C-TierBot/leaderboard_bot.py#L87-L178) via `custom_id` matching (`queue_result_verify`, `queue_result_games`, `qgame_prev:*`, `qgame_next:*`, `leaderboard_weekly`, `leaderboard_monthly`, `leaderboard_sort`, `season_prev:*`, `season_next:*`, `inventory_prev`, `inventory_next`, `inventory_rarity`, `market_prev`, `market_next`, `market_mode_*`).
 - **Button Hierarchy:**
   - Active filter/tab toggle (`Weekly` vs `Monthly`, `Daily` vs `Weekly` vs `All`) uses `discord.ButtonStyle.primary` (Blurple); inactive tabs use `discord.ButtonStyle.secondary` (Grey).
   - Pagination controls (`◀ Previous`, `Next ▶`) use `discord.ButtonStyle.primary` and disable automatically at boundary pages (`current_page <= 0` or `current_page >= total_pages - 1`).
-  - Self-service verification CTA on queue results (`QueueResultView`) uses a single persistent `discord.ButtonStyle.secondary` button (`label="Account unlinked?  Verify here for a gf."`, `custom_id="queue_result_verify"`).
+  - Queue results (`QueueResultView`): finished queues show a primary `Game breakdown` button (`custom_id="queue_result_games"`) **before** the single persistent `discord.ButtonStyle.secondary` verification CTA (`label="Account unlinked?  Verify here for a gf."`, `custom_id="queue_result_verify"`). Unfinished queues only show the verification CTA. Both variants are shared singletons (`get_queue_result_view(include_breakdown)`), not one view per message.
+  - Game breakdown paging (`QueueGamesPagerView`) follows the same pagination rule with the queue number and target page carried in the `custom_id` (`qgame_prev:{match_id}:{page}`, `qgame_next:{match_id}:{page}`), a finite `900s` timeout (these live in ephemeral messages) and clicks handled in `log_interaction`.
 - **Rank Formatting in Embeds:** Top 3 positions use medal emojis (`🥇`, `🥈`, `🥉`); rank 4+ uses inline code backticks (`` `#4` `` .. `` `#10` ``).
+
+### 5.4 Game Card (`generate_queue_game_image`) and Game Breakdown Message
+One game of a finished queue, opened by the `Game breakdown` button as an **ephemeral** message (only the clicker sees it), built from the snapshot saved when the result was posted (`queue_results` table, 90-day retention).
+- **Header (shared `_render_queue_card`):** `#{match_id}` title; subtitle `Team N won Game G` in `QUEUE_IMG_WIN` (`Winner unknown` in `QUEUE_IMG_MUTED`); meta line `Game G of N · Series A - B`; centered `72px` series score *through this game* (leader `QUEUE_IMG_WIN`, trailer `QUEUE_IMG_LOSE`, tie `QUEUE_IMG_TEXT`); `MATCH TIMELINE` with the `QUEUE_IMG_ACCENT` ring on the selected game (the series result image rings the last game).
+- **Panels:** the winner of *this game* gets the win banner and border, the other team the lose styling, an unknown winner the neutral styling. Columns per 3.2 (`Player`, `Kills`, `Dmg`, `Impact`, or without `Impact` when nobody was scored). Same unlinked-player icon and footer legend as the series image.
+- **Embed (`build_queue_game_payload`):** Blurple (`discord.Color.blurple()`), title `Game G of N · Queue #id`, description with the winner/series line plus `Top damage` and `Top impact` (names in bold), footer explaining Impact only when it is shown. The image carries Discord alt text (`discord.File(description=...)`) listing every player's kills, damage and impact (capped at 1000 characters), so the card is never image-only.
+- **Empty state:** a missing, expired or unreadable snapshot answers privately with what happened and the exact `/queue_stats {match_id}` command that rebuilds it.
 
 
