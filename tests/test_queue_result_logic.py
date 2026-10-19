@@ -179,30 +179,6 @@ class SnapshotSavingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("NeatQueue#3674", content)
 
 
-class ImpactLegendTests(unittest.IsolatedAsyncioTestCase):
-    """The message explains the Impact column, but only when the image actually has one."""
-
-    @staticmethod
-    def player(impact):
-        return {"discord_id": 1, "username": "Awang", "stats": {"games": 5, "kills": 30, "damage": 9000, "impact": impact}}
-
-    async def test_a_scored_series_explains_the_impact_column(self):
-        built = await build_payload(teams=[[self.player(78.4)], [self.player(55.0)]], is_final=True)
-
-        self.assertIn("\n-# Impact is survev.de's per-game impact score", built.content)
-
-    async def test_an_unscored_series_has_no_legend(self):
-        built = await build_payload(teams=[[self.player(None)], [self.player(None)]], is_final=True)
-
-        self.assertNotIn("Impact", built.content)
-
-    async def test_three_team_results_have_no_legend_because_the_column_is_hidden(self):
-        teams = [[self.player(78.4)], [self.player(55.0)], [self.player(10.0)]]
-        built = await build_payload(teams=teams, is_final=True)
-
-        self.assertNotIn("Impact", built.content)
-
-
 class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):
     def test_store_pagination_state_evicts_oldest_entries(self):
         from discord_ui import MAX_PAGINATION_STATE_ENTRIES, store_pagination_state

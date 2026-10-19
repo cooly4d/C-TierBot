@@ -24,7 +24,6 @@ from image_utils import (
     generate_queue_game_image,
     generate_queue_result_image,
     has_impact_scores,
-    shows_impact_column,
 )
 from neatqueue_client import calculate_queue_match_stats, player_identity, resolve_queue_user_display_names
 
@@ -234,8 +233,6 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         )
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
-    if shows_impact_column(teams):
-        content += "\n-# Impact is survev.de's per-game impact score (0-100), averaged over the games it was scored."
 
     cache_player_queue_stats(match_id, guild_id, match_result)
 
