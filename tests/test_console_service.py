@@ -25,6 +25,7 @@ class ConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("dm <user_id> <message>", output)
             self.assertIn("delete <channel_id> <msg_id>", output)
             self.assertIn("status", output)
+            self.assertIn("winrate [guild_id]", output)
 
     async def test_execute_send_invalid_id(self):
         bot = MagicMock()
@@ -138,6 +139,23 @@ class ConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
             output = mock_stdout.getvalue()
             self.assertIn("test_col", output)
             self.assertIn("1 rows", output)
+
+
+    async def test_execute_winrate(self):
+        bot = MagicMock()
+        bot.guilds = [MagicMock(id=123456)]
+        fake_data = {
+            "data": [{"winner": 0}, {"winner": 0}, {"winner": 1}],
+            "pagination": {"total_pages": 1}
+        }
+        with patch("neatqueue_client.fetch_neatqueue_history", AsyncMock(return_value=(fake_data, None))):
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                await execute_console_command(bot, "winrate")
+                output = mock_stdout.getvalue()
+                self.assertIn("Team 1:", output)
+                self.assertIn("Team 2:", output)
+                self.assertIn("66.7%", output)
+                self.assertIn("33.3%", output)
 
 
 if __name__ == "__main__":

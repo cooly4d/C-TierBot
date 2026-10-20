@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 import aiohttp
 import discord
+from discord.ext import tasks
 
 from bot_config import (
     DISCORD_BOT_TOKEN,
@@ -65,6 +66,20 @@ from console_service import start_console_listener
 from survev_client import backfill_missing_slugs, run_survev_verification
 
 _console_listener_started = False
+SLUG_BACKFILL_INTERVAL_MINUTES = 30
+
+
+@tasks.loop(minutes=SLUG_BACKFILL_INTERVAL_MINUTES)
+async def slug_backfill_loop():
+    """Periodically fills in survev.de slugs for linked players whose lookup failed at /verify time, so they
+    stop showing up as guests on match cards without waiting for the next bot restart."""
+    if slug_backfill_loop.current_loop == 0:
+        return  # on_ready already ran a backfill just now
+    try:
+        await backfill_missing_slugs()
+    except Exception as exc:
+        # An unhandled error would stop the loop for good; log and try again next interval instead.
+        print(f"[Slug Backfill] failed: {exc!r}")
 
 
 @bot.event
@@ -79,6 +94,8 @@ async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await backfill_missing_slugs()
+    if not slug_backfill_loop.is_running():
+        slug_backfill_loop.start()
     await backfill_missed_queue_results()
 
     if not _console_listener_started:

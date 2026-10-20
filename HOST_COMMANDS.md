@@ -17,6 +17,7 @@ When running the bot locally in your terminal (`python leaderboard_bot.py`), you
 | **`channels`** | `channels <guild_id>` | Lists all text channels in a specified server with their IDs. | `channels 123456789012345678` |
 | **`status`** | `status` | Displays bot latency, uptime, and database metrics. | `status` |
 | **`sql`** | `sql <query>` | Runs a query directly on `leaderboard.db` and renders results. | `sql SELECT discord_id, username FROM users LIMIT 5;` |
+| **`winrate`** | `winrate [guild_id]` | Shows NeatQueue Team 1 vs Team 2 winrate across match history. | `winrate` |
 | **`sync`** | `sync` | Manually triggers slash command synchronization with Discord. | `sync` |
 | **`clear`** | `clear` | Clears the terminal screen. | `clear` |
 | **`exit`** | `exit` *(or `quit` / `stop`)* | Gracefully disconnects the bot and exits the process. | `exit` |

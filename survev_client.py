@@ -9,7 +9,7 @@ import aiohttp
 import discord
 
 from bot_config import API_CONCURRENCY_LIMIT, SURVEV_CLIENT_ID, SURVEV_CLIENT_SECRET, VERIFICATION_TIMEOUT_SECONDS
-from db import save_token, get_users_missing_slug, update_user_slug
+from db import save_token, get_user_token, get_users_missing_slug, update_user_slug
 
 
 async def fetch_discord_link(session: aiohttp.ClientSession, access_token: str):
@@ -44,12 +44,92 @@ async def backfill_missing_slugs():
         await asyncio.gather(*(_backfill_one(session, did, tok) for did, tok in missing))
 
 
+# Statuses that mean "survev.de is busy/hiccuping", not "the user did something wrong" — retried instead of
+# ending the verification. The external API rate limit is shared by the whole bot, so a leaderboard refresh
+# or queue lookup running at the same moment can briefly push verification requests into a 429.
+TRANSIENT_HTTP_STATUSES = {429, 500, 502, 503, 504}
+DEVICE_CODE_ATTEMPTS = 3
+SLUG_LOOKUP_ATTEMPTS = 3
+MAX_POLL_INTERVAL_SECONDS = 30
+
+# Verifications currently waiting on the user, keyed by Discord ID. A repeat /verify (or button click) joins
+# the pending one instead of starting a second flow that would later post a misleading "timed out" message.
+_active_verifications: dict[int, dict] = {}
+
+
+def _retry_after_seconds(resp: aiohttp.ClientResponse, default: float) -> float:
+    """Honors a Retry-After header when survev.de sends one, capped so a user is never left hanging."""
+    try:
+        delay = float(resp.headers.get("Retry-After", default))
+    except (TypeError, ValueError):
+        delay = default
+    return min(max(delay, default), MAX_POLL_INTERVAL_SECONDS)
+
+
+def _verification_embed(verification_uri: str, user_code: str, deadline: float) -> discord.Embed:
+    expires_at = int(time.time() + max(0.0, deadline - time.monotonic()))
+    return discord.Embed(
+        title="🔗 Link Your survev.de Account",
+        description=f"1. Click the link to verify: [**Authorize survev.de account**]({verification_uri})\n"
+                    f"2. Confirm code: **`{user_code}`**\n\n"
+                    f"*Waiting for authorization... (expires <t:{expires_at}:R>)*",
+        color=discord.Color.blue()
+    )
+
+
+async def _notify_all(senders: list, **kwargs):
+    """Delivers an update to every interaction waiting on this verification; one expired interaction
+    shouldn't stop the others from hearing back."""
+    for send_update in list(senders):
+        try:
+            await send_update(**kwargs)
+        except discord.HTTPException as exc:
+            print(f"DEBUG - verification update could not be delivered: {exc!r}")
+
+
+async def _fetch_discord_link_with_retry(session: aiohttp.ClientSession, access_token: str):
+    """fetch_discord_link, retried a few times — without a slug the player keeps showing up as a guest."""
+    slug, username = None, None
+    for attempt in range(SLUG_LOOKUP_ATTEMPTS):
+        slug, username = await fetch_discord_link(session, access_token)
+        if slug:
+            return slug, username
+        if attempt < SLUG_LOOKUP_ATTEMPTS - 1:
+            await asyncio.sleep(2 * (attempt + 1))
+    return slug, username
+
+
 async def run_survev_verification(discord_user_id: int, send_update):
     """Runs the survev.de OAuth device-code flow, calling `send_update(**kwargs)` (a discord.py-style
     send with `content=`/`embed=`) for each step. Shared by /verify and the "not showing up?" button so
-    both paths (in-channel vs DM) stay in sync."""
+    both paths (in-channel vs DM) stay in sync.
+
+    If the user already has a verification pending, this re-sends that same link and subscribes to its
+    result rather than starting a second, competing flow."""
+    active = _active_verifications.get(discord_user_id)
+    if active is not None:
+        active["senders"].append(send_update)
+        if active["uri"] is not None:
+            embed = _verification_embed(active["uri"], active["code"], active["deadline"])
+            embed.set_footer(text="You already had a link pending — this is the same one, no need to start over.")
+            await _notify_all([send_update], embed=embed)
+        # Otherwise the link is still being requested; it will be sent to every waiting sender once ready.
+        return
+
+    # Registered before the first await so a quick double-click can't slip past the check above.
+    state = {"senders": [send_update], "uri": None, "code": None, "deadline": None}
+    _active_verifications[discord_user_id] = state
+    try:
+        await _run_verification_flow(discord_user_id, state)
+    finally:
+        if _active_verifications.get(discord_user_id) is state:
+            _active_verifications.pop(discord_user_id, None)
+
+
+async def _run_verification_flow(discord_user_id: int, state: dict):
     device_url = "https://survev.de/api/oauth/device/code"
     token_url = "https://survev.de/api/oauth/token"
+    senders = state["senders"]
 
     payload = {
         "clientId": SURVEV_CLIENT_ID,
@@ -58,16 +138,33 @@ async def run_survev_verification(discord_user_id: int, send_update):
     }
 
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(device_url, json=payload) as resp:
-                if resp.status != 200:
-                    error_details = await resp.text()
+        data = None
+        for attempt in range(DEVICE_CODE_ATTEMPTS):
+            is_last_attempt = attempt == DEVICE_CODE_ATTEMPTS - 1
+            delay = 2 * (attempt + 1)
+            try:
+                async with session.post(device_url, json=payload) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        break
+                    error_details = (await resp.text())[:500]
                     print(f"DEBUG - Survev Error Code {resp.status}: {error_details}")
-                    await send_update(content=f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`")
+                    if resp.status not in TRANSIENT_HTTP_STATUSES or is_last_attempt:
+                        if resp.status == 429:
+                            message = "survev.de is rate limiting the bot right now. Please try `/verify` again in a minute."
+                        else:
+                            message = f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`"
+                        await _notify_all(senders, content=message)
+                        return
+                    delay = _retry_after_seconds(resp, delay)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+                if is_last_attempt:
+                    await _notify_all(senders, content=f"Failed to contact survev.de for authorization: `{exc}`")
                     return
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            await send_update(content=f"Failed to contact survev.de for authorization: `{exc}`")
+            await asyncio.sleep(delay)
+
+        if not isinstance(data, dict):
+            await _notify_all(senders, content="Failed to start authorization: survev.de sent an unexpected response.")
             return
 
         device_code = data["deviceCode"]
@@ -75,15 +172,10 @@ async def run_survev_verification(discord_user_id: int, send_update):
         verification_uri = data["verificationUriComplete"]
         interval = max(1, int(data.get("interval", 5)))
         expires_in = min(int(data.get("expiresIn", VERIFICATION_TIMEOUT_SECONDS)), VERIFICATION_TIMEOUT_SECONDS)
+        deadline = time.monotonic() + expires_in
 
-        embed = discord.Embed(
-            title="🔗 Link Your survev.de Account",
-            description=f"1. Click the link to verify: [**Authorize survev.de account**]({verification_uri})\n"
-                        f"2. Confirm code: **`{user_code}`**\n\n"
-                        f"*Waiting for authorization...*",
-            color=discord.Color.blue()
-        )
-        await send_update(embed=embed)
+        state["uri"], state["code"], state["deadline"] = verification_uri, user_code, deadline
+        await _notify_all(senders, embed=_verification_embed(verification_uri, user_code, deadline))
 
         token_payload = {
             "grantType": "device_code",
@@ -92,33 +184,65 @@ async def run_survev_verification(discord_user_id: int, send_update):
             "deviceCode": device_code
         }
 
-        deadline = time.monotonic() + expires_in
+        extra_delay = 0.0
         while time.monotonic() < deadline:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(interval + extra_delay)
+            extra_delay = 0.0
             try:
                 async with session.post(token_url, json=token_payload) as t_resp:
-                    t_data = await t_resp.json()
                     status = t_resp.status
-            except (aiohttp.ClientError, ValueError):
+                    if status in TRANSIENT_HTTP_STATUSES:
+                        # Rate limited / server hiccup — not the user's fault, so keep waiting for them.
+                        print(f"DEBUG - verification poll for {discord_user_id} got HTTP {status}, retrying")
+                        extra_delay = _retry_after_seconds(t_resp, 5)
+                        continue
+                    t_data = await t_resp.json(content_type=None)
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+                continue
+            if not isinstance(t_data, dict):
                 continue
 
             if status == 200:
                 access_token = t_data["accessToken"]
-                slug, username = await fetch_discord_link(session, access_token)
+                slug, username = await _fetch_discord_link_with_retry(session, access_token)
                 save_token(discord_user_id, access_token, slug, username)
-                await send_update(content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
+                if slug:
+                    await _notify_all(senders, content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
+                else:
+                    # Saved without a slug: backfill_missing_slugs fills it in on its next periodic run.
+                    await _notify_all(
+                        senders,
+                        content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.\n"
+                                "-# survev.de didn't return your profile just now, so match cards may show you as a "
+                                "guest for a little while. The bot will fill it in automatically."
+                    )
                 return
 
             error = t_data.get("error")
             if error == "authorization_pending":
                 continue
             elif error == "slow_down":
-                await asyncio.sleep(2)
+                # RFC 8628: on slow_down, permanently increase the polling interval by 5 seconds.
+                interval = min(interval + 5, MAX_POLL_INTERVAL_SECONDS)
+            elif error == "access_denied":
+                await _notify_all(senders, content="❌ Authorization was declined on survev.de. Run `/verify` again if that was a mistake.")
+                return
+            elif error == "expired_token":
+                await _notify_all(senders, content="⌛ That code expired. Please run `/verify` again when you are ready.")
+                return
             else:
-                await send_update(content=f"❌ Authorization failed: `{error}`")
+                await _notify_all(senders, content=f"❌ Authorization failed: `{error or f'HTTP {status}'}`")
                 return
 
-        await send_update(content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
+        if get_user_token(discord_user_id):
+            # e.g. an already-linked player re-ran /verify and didn't finish — their existing link still stands.
+            await _notify_all(
+                senders,
+                content="⌛ Verification timed out, but your survev.de account is already linked, so nothing changed. "
+                        "Run `/verify` again only if you want to link a different account."
+            )
+        else:
+            await _notify_all(senders, content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
 
 
 async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int) -> list[dict]:

@@ -280,6 +280,82 @@ async def _handle_sync(bot: commands.Bot):
         print(f"[Console Error] Failed to sync slash commands: {exc}")
 
 
+async def _handle_winrate(bot: commands.Bot, raw_args: str):
+    """Calculates and displays Team 1 vs Team 2 winrate across NeatQueue match history.
+    Usage: winrate [guild_id]
+    """
+    guild_id = None
+    target_str = raw_args.strip()
+    if target_str.isdigit():
+        guild_id = int(target_str)
+    elif bot.guilds:
+        guild_id = bot.guilds[0].id
+    else:
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.execute("SELECT guild_id FROM guild_settings LIMIT 1").fetchone()
+                if row:
+                    guild_id = row[0]
+        except Exception:
+            pass
+
+    if not guild_id:
+        print("[Console Error] No guild ID found. Usage: winrate <guild_id>")
+        return
+
+    print(f"[Console] Fetching NeatQueue history for guild {guild_id}...")
+    import aiohttp
+    from neatqueue_client import fetch_neatqueue_history
+
+    t1, t2, other, total = 0, 0, 0, 0
+    page = 1
+    async with aiohttp.ClientSession() as session:
+        while True:
+            data, error = await fetch_neatqueue_history(session, guild_id, extra_params={"page_size": "1000", "page": str(page)})
+            if error or not data:
+                if page == 1 and error:
+                    print(f"[Console Error] Failed to fetch NeatQueue data: {error}")
+                    return
+                break
+            matches = data.get("data", [])
+            if not matches:
+                break
+            for m in matches:
+                w = m.get("winner")
+                if w == 0:
+                    t1 += 1
+                elif w == 1:
+                    t2 += 1
+                else:
+                    other += 1
+                total += 1
+            pagination = data.get("pagination") or {}
+            total_pages = pagination.get("total_pages", 1)
+            if page >= total_pages:
+                break
+            page += 1
+
+    decided = t1 + t2
+    print(f"\n[Console] === NeatQueue Team Winrates (Guild: {guild_id}) ===")
+    print(f"  Total Matches:    {total}")
+    if decided > 0:
+        p1 = (t1 / decided) * 100
+        p2 = (t2 / decided) * 100
+        print(f"  Team 1:           {t1} wins ({p1:.1f}%)")
+        print(f"  Team 2:           {t2} wins ({p2:.1f}%)")
+        if p1 > p2:
+            print(f"  -> Team 1 has the higher winrate (+{t1 - t2} wins)")
+        elif p2 > p1:
+            print(f"  -> Team 2 has the higher winrate (+{t2 - t1} wins)")
+        else:
+            print("  -> Teams are tied (50.0% - 50.0%)")
+    else:
+        print("  No decided matches found.")
+    if other > 0:
+        print(f"  Tied / Other:     {other}")
+    print("====================================================\n")
+
+
 def _handle_help():
     """Prints command list and syntax."""
     help_text = """
@@ -292,6 +368,7 @@ def _handle_help():
   channels <guild_id>                  - List all text channels in a server
   status                               - View bot uptime, ping, and DB metrics
   sql <query>                          - Execute an SQL query on leaderboard.db
+  winrate [guild_id]                   - Show NeatQueue Team 1 vs Team 2 winrate
   sync                                 - Force sync application slash commands
   clear                                - Clear the terminal screen
   help                                 - Show this help menu
@@ -329,6 +406,8 @@ async def execute_console_command(bot: commands.Bot, line: str):
         _handle_status(bot)
     elif command_name == "sql":
         _handle_sql(raw_args)
+    elif command_name in ("winrate", "winrates"):
+        await _handle_winrate(bot, raw_args)
     elif command_name == "sync":
         await _handle_sync(bot)
     elif command_name == "clear":
