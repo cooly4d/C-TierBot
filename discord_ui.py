@@ -18,7 +18,6 @@ from leaderboard_service import (
     generate_leaderboard_embed,
 )
 from queue_stats_service import build_queue_game_payload, parse_queue_match_id, queue_games_unavailable
-from survev_client import run_survev_verification
 
 MAX_PAGINATION_STATE_ENTRIES = 200
 
@@ -143,8 +142,8 @@ class QueueResultView(discord.ui.View):
 
     @discord.ui.button(label="Account unlinked?  Verify here for a gf.", style=discord.ButtonStyle.secondary, custom_id="queue_result_verify")
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
+        # Handled by log_interaction (deferring here too would race it on the same interaction)
+        pass
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
         # discord.py's default View.on_error just logs to stderr, which is easy to miss — surface it
