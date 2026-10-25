@@ -229,7 +229,7 @@ async def build_profile_payload(target: discord.abc.User, access_token: str | No
         title=f"{target.display_name}'s NeatQueue stats",
         color=discord.Color.blurple(),
         description=(
-            "Cached queue results that matched the current-month cache rules."
+            ""
             if has_queues else "No cached NeatQueue results yet."
         ),
     )
