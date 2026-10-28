@@ -406,6 +406,8 @@ class HistoryPayloadAndRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Average Damage", embed.description)
         self.assertEqual(file.filename, "history_10_101_damage.png")
         self.assertIn("Queue #3674 (Won)", file.description)
+        self.assertEqual(embed.footer.text, "Toggle the trend chart above with the buttons below.")
+        self.assertNotIn("Impact is survev.de", embed.footer.text)
 
     @patch("leaderboard_service.get_player_queue_history", return_value=[])
     async def test_build_history_payload_empty_results(self, _mock_history):

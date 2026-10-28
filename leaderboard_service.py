@@ -330,8 +330,6 @@ async def build_history_payload(guild_id: int | None, target: discord.abc.User, 
     )
     embed.set_image(url=f"attachment://{filename}")
     footer_text = "Toggle the trend chart above with the buttons below."
-    if any(r.get("impact") is not None for r in rows):
-        footer_text += " • Impact is survev.de's per-game score (0–100)."
     embed.set_footer(text=footer_text)
 
     return embed, file, metric, None

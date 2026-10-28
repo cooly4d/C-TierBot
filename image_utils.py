@@ -1455,7 +1455,7 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
             draw.text((cell_x, cell_y), text_val, font=cell_font, fill=fill_color)
 
     # 4. Footer attribution
-    footer_text = "Impact is survev.de's per-game impact score (0–100) · Data courtesy of NeatQueue & survev.de APIs :)"
+    footer_text = "Data courtesy of NeatQueue & survev.de APIs :)"
     footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
     footer_w = footer_bbox[2] - footer_bbox[0]
     footer_x = (QUEUE_IMG_WIDTH * S - footer_w) / 2

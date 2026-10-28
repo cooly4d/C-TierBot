@@ -207,12 +207,12 @@ async def _run_verification_flow(discord_user_id: int, state: dict):
                 slug, username = await _fetch_discord_link_with_retry(session, access_token)
                 save_token(discord_user_id, access_token, slug, username)
                 if slug:
-                    await _notify_all(senders, content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.")
+                    await _notify_all(senders, content="✅ **Account Linked!**")
                 else:
                     # Saved without a slug: backfill_missing_slugs fills it in on its next periodic run.
                     await _notify_all(
                         senders,
-                        content="✅ **Account Linked!** You are now entered into weekly & monthly leaderboards.\n"
+                        content="✅ **Account Linked!**\n"
                                 "-# survev.de didn't return your profile just now, so match cards may show you as a "
                                 "guest for a little while. The bot will fill it in automatically."
                     )
