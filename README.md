@@ -45,7 +45,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/profile [member]` | Cached NeatQueue stats: 4v4 play time and average damage (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). The tier needs a linked account. |
+| `/profile [member]` | Cached NeatQueue stats: 4v4 play time, average damage, and average impact (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). The tier needs a linked account. |
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
 | `/inventory [member]` | Paged inventory image with a rarity filter. |
 | `/goldenfries [member]` | Golden Fries balance. |

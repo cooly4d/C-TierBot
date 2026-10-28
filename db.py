@@ -92,16 +92,27 @@ cursor.execute('''
         match_start_ms INTEGER,
         match_end_ms INTEGER,
         cached_at TEXT NOT NULL,
+        kills INTEGER,
+        impact REAL,
+        winning_team_index INTEGER,
+        team_round_wins TEXT,
         PRIMARY KEY (guild_id, match_id, player_key)
     )
 ''')
 cursor.execute(QUEUE_RESULTS_SCHEMA)
 # Older databases retain their cached rows; their game counts can be inferred
 # for positive-damage rows when the seasonal leaderboard reads them.
-try:
-    cursor.execute("ALTER TABLE player_queue_stats ADD COLUMN games INTEGER")
-except sqlite3.OperationalError:
-    pass
+for col_def in (
+    "games INTEGER",
+    "kills INTEGER",
+    "impact REAL",
+    "winning_team_index INTEGER",
+    "team_round_wins TEXT",
+):
+    try:
+        cursor.execute(f"ALTER TABLE player_queue_stats ADD COLUMN {col_def}")
+    except sqlite3.OperationalError:
+        pass
 # Older DBs created before duration tracking existed — add it on if missing.
 try:
     cursor.execute("ALTER TABLE hall_of_fame ADD COLUMN duration_ms INTEGER")
@@ -109,6 +120,10 @@ except sqlite3.OperationalError:
     pass
 try:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_player_queue_stats_discord_id ON player_queue_stats(discord_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_player_queue_stats_guild_discord "
+        "ON player_queue_stats(guild_id, discord_id)"
+    )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_player_queue_stats_guild_match_end "
         "ON player_queue_stats(guild_id, match_end_ms)"
@@ -256,11 +271,8 @@ def is_current_utc_month(timestamp_ms: int | None) -> bool:
 
 
 def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -> int:
-    """Caches finalized per-player queue stats for /profile when the match is eligible."""
+    """Caches finalized per-player queue stats for /profile and /history when the match is eligible."""
     if not match_result.get("is_final"):
-        return 0
-
-    if not is_current_utc_month(match_result.get("match_end_ms")):
         return 0
 
     teams = match_result.get("teams") or []
@@ -273,6 +285,10 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
         return 0
 
     cached_at = datetime.now(timezone.utc).isoformat()
+    winning_team_index = match_result.get("winning_team_index")
+    team_round_wins_list = match_result.get("team_round_wins")
+    team_round_wins = json.dumps(team_round_wins_list) if team_round_wins_list is not None else None
+
     rows = []
     for team_index, team in enumerate(teams):
         for entry in team:
@@ -289,6 +305,9 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
             games = int(stats.get("games") or 0)
             total_damage = int(stats.get("damage") or 0)
             avg_damage = total_damage / games if games > 0 else 0.0
+            kills = int(stats.get("kills") or 0)
+            raw_impact = stats.get("impact")
+            impact = float(raw_impact) if raw_impact is not None else None
 
             rows.append((
                 guild_id,
@@ -306,6 +325,10 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
                 match_result.get("match_start_ms"),
                 match_result.get("match_end_ms"),
                 cached_at,
+                kills,
+                impact,
+                winning_team_index,
+                team_round_wins,
             ))
 
     if not rows:
@@ -316,13 +339,117 @@ def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -
             """
             INSERT OR REPLACE INTO player_queue_stats (
                 guild_id, match_id, player_key, discord_id, display_name, username, slug,
-                team_index, total_damage, avg_damage, games, duration_ms, match_start_ms, match_end_ms, cached_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                team_index, total_damage, avg_damage, games, duration_ms, match_start_ms, match_end_ms, cached_at,
+                kills, impact, winning_team_index, team_round_wins
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
 
     return len(rows)
+
+
+def get_player_queue_history(guild_id: int, discord_id: int, limit: int = 10) -> list[dict]:
+    """Returns a player's most recent finalized queues (newest first) up to `limit`.
+
+    Legacy rows with missing kills or result metadata are automatically enriched
+    from saved queue_results snapshots when available.
+    """
+    with sqlite3.connect(DB_PATH) as c:
+        rows = c.execute(
+            """
+            SELECT match_id, team_index, total_damage, avg_damage, games,
+                   duration_ms, match_start_ms, match_end_ms, display_name, username,
+                   kills, impact, winning_team_index, team_round_wins
+            FROM player_queue_stats
+            WHERE guild_id = ? AND discord_id = ?
+            ORDER BY COALESCE(match_end_ms, match_start_ms, 0) DESC,
+                     CAST(match_id AS INTEGER) DESC,
+                     match_id DESC
+            LIMIT ?
+            """,
+            (guild_id, discord_id, limit),
+        ).fetchall()
+
+    history = []
+    for row in rows:
+        match_id = str(row[0])
+        team_index = int(row[1])
+        total_damage = int(row[2])
+        avg_damage = float(row[3])
+        games = row[4]
+        duration_ms = row[5]
+        match_start_ms = row[6]
+        match_end_ms = row[7]
+        display_name = row[8]
+        username = row[9]
+        kills = row[10]
+        impact = row[11]
+        winning_team_index = row[12]
+        team_round_wins_raw = row[13]
+
+        team_round_wins = None
+        if team_round_wins_raw:
+            try:
+                parsed_wins = json.loads(team_round_wins_raw)
+                if isinstance(parsed_wins, list):
+                    team_round_wins = [int(w) for w in parsed_wins]
+            except (ValueError, TypeError):
+                team_round_wins = None
+
+        # Backfill from queue_results if legacy row is missing kills, winning_team_index, etc.
+        if kills is None or winning_team_index is None or team_round_wins is None or impact is None:
+            snapshot = get_queue_result(guild_id, match_id)
+            if snapshot:
+                if winning_team_index is None:
+                    winning_team_index = snapshot.get("winning_team_index")
+                if team_round_wins is None:
+                    parsed_snapshot_wins = snapshot.get("team_round_wins")
+                    if isinstance(parsed_snapshot_wins, list):
+                        team_round_wins = [int(w) for w in parsed_snapshot_wins]
+
+                if kills is None or impact is None:
+                    snap_kills = 0
+                    snap_impact_scores = []
+                    found_player = False
+                    for g in snapshot.get("games") or []:
+                        for p in g.get("players") or []:
+                            if (p.get("discord_id") == discord_id) or (
+                                p.get("name") and p.get("name") in (display_name, username)
+                            ):
+                                found_player = True
+                                snap_kills += int(p.get("kills") or 0)
+                                if p.get("impact") is not None:
+                                    snap_impact_scores.append(float(p["impact"]))
+                    if found_player:
+                        if kills is None:
+                            kills = snap_kills
+                        if impact is None and snap_impact_scores:
+                            impact = sum(snap_impact_scores) / len(snap_impact_scores)
+
+        won = None
+        if winning_team_index is not None and 0 <= winning_team_index:
+            won = (winning_team_index == team_index)
+
+        history.append({
+            "match_id": match_id,
+            "team_index": team_index,
+            "winning_team_index": winning_team_index,
+            "team_round_wins": team_round_wins,
+            "won": won,
+            "games": games,
+            "kills": kills,
+            "total_damage": total_damage,
+            "avg_damage": avg_damage,
+            "impact": impact,
+            "duration_ms": duration_ms,
+            "match_start_ms": match_start_ms,
+            "match_end_ms": match_end_ms,
+            "display_name": display_name,
+            "username": username,
+        })
+
+    return history
 
 
 def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_start_ms: int) -> list[dict]:
@@ -378,20 +505,48 @@ def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_star
 def get_player_queue_stats_summary(discord_id: int) -> dict:
     """All-time and current-month summary of a player's cached queue stats.
 
-    Average damage is per game: rows store per-queue total_damage and the
-    per-game avg_damage, so games played is recovered as total_damage / avg_damage.
+    Average damage and average impact are per game: rows store per-queue total_damage,
+    the per-game avg_damage, and per-game impact. Games played is recovered from games
+    or total_damage / avg_damage.
     """
     now = datetime.now(timezone.utc)
     month_start_ms = int(datetime(now.year, now.month, 1, tzinfo=timezone.utc).timestamp() * 1000)
 
-    # Games per queue = total_damage / avg_damage (skip rows with 0 avg to avoid div-by-zero).
-    games_expr = "CASE WHEN avg_damage > 0 THEN total_damage / avg_damage ELSE 0 END"
+    # Games per queue (fallback to total_damage / avg_damage when explicit games is NULL).
+    games_expr = (
+        "CASE "
+        "WHEN games IS NOT NULL AND games > 0 THEN games "
+        "WHEN avg_damage > 0 THEN total_damage / avg_damage "
+        "ELSE 0 END"
+    )
+    # Scored games for impact: only rows where impact IS NOT NULL contribute.
+    impact_games_expr = (
+        "CASE "
+        "WHEN impact IS NOT NULL THEN ("
+        "  CASE "
+        "  WHEN games IS NOT NULL AND games > 0 THEN games "
+        "  WHEN avg_damage > 0 THEN total_damage / avg_damage "
+        "  ELSE 1 END"
+        ") "
+        "ELSE 0 END"
+    )
+    impact_points_expr = (
+        "CASE "
+        "WHEN impact IS NOT NULL THEN impact * ("
+        "  CASE "
+        "  WHEN games IS NOT NULL AND games > 0 THEN games "
+        "  WHEN avg_damage > 0 THEN total_damage / avg_damage "
+        "  ELSE 1 END"
+        ") "
+        "ELSE 0 END"
+    )
 
     with sqlite3.connect(DB_PATH) as c:
         all_time = c.execute(
             f"""
             SELECT COUNT(*), COALESCE(SUM(duration_ms), 0),
-                   COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0)
+                   COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0),
+                   COALESCE(SUM({impact_points_expr}), 0), COALESCE(SUM({impact_games_expr}), 0)
             FROM player_queue_stats
             WHERE discord_id = ?
             """,
@@ -399,7 +554,8 @@ def get_player_queue_stats_summary(discord_id: int) -> dict:
         ).fetchone()
         monthly = c.execute(
             f"""
-            SELECT COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0)
+            SELECT COALESCE(SUM(total_damage), 0), COALESCE(SUM({games_expr}), 0),
+                   COALESCE(SUM({impact_points_expr}), 0), COALESCE(SUM({impact_games_expr}), 0)
             FROM player_queue_stats
             WHERE discord_id = ? AND match_end_ms >= ?
             """,
@@ -410,14 +566,21 @@ def get_player_queue_stats_summary(discord_id: int) -> dict:
     total_duration_ms = int(all_time[1] or 0)
     all_time_damage = float(all_time[2] or 0)
     all_time_games = float(all_time[3] or 0)
+    all_time_impact_points = float(all_time[4] or 0)
+    all_time_impact_games = float(all_time[5] or 0)
+
     monthly_damage = float(monthly[0] or 0)
     monthly_games = float(monthly[1] or 0)
+    monthly_impact_points = float(monthly[2] or 0)
+    monthly_impact_games = float(monthly[3] or 0)
 
     return {
         "matches": matches,
         "total_duration_ms": total_duration_ms,
         "all_time_avg_damage": all_time_damage / all_time_games if all_time_games > 0 else None,
         "monthly_avg_damage": monthly_damage / monthly_games if monthly_games > 0 else None,
+        "all_time_avg_impact": all_time_impact_points / all_time_impact_games if all_time_impact_games > 0 else None,
+        "monthly_avg_impact": monthly_impact_points / monthly_impact_games if monthly_impact_games > 0 else None,
     }
 
 

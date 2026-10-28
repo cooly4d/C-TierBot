@@ -175,6 +175,14 @@ QUEUE_IMG_GAME_COLUMN_RATIOS = [0.0, 0.40, 0.60, 0.80]
 QUEUE_IMG_GAME_COLUMN_LABELS = ["Player", "Kills", "Dmg", "Impact"]
 QUEUE_IMG_GAME_COLUMN_RATIOS_NO_IMPACT = [0.0, 0.50, 0.75]
 QUEUE_IMG_GAME_COLUMN_LABELS_NO_IMPACT = ["Player", "Kills", "Dmg"]
+QUEUE_IMG_HISTORY_COLUMN_RATIOS = [0.0, 0.22, 0.48, 0.68, 0.84]
+QUEUE_IMG_HISTORY_COLUMN_LABELS = ["Queue", "Result", "Kills", "Avg Dmg", "Impact"]
+HISTORY_METRICS = ("damage", "impact", "kills")
+
+
+def normalize_history_metric(metric: str | None) -> str:
+    key = (metric or "damage").strip().lower()
+    return key if key in HISTORY_METRICS else "damage"
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
 QUEUE_IMG_UNLINKED_ICON_SIZE = 24
 QUEUE_IMG_UNLINKED_ICON_GAP = 10
@@ -1054,6 +1062,407 @@ def generate_compare_image(
     footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
     draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
 
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def generate_history_image(player_name: str, history_rows: list[dict], metric: str = "damage") -> BytesIO:
+    """Generates a 1600px-wide card displaying a player's last 10 queues:
+    a gradient header with a 3-stat summary box, a minimalist sparkline panel for the selected metric,
+    and a newest-first table of queues with result, kills, avg damage, and impact.
+    """
+    metric = normalize_history_metric(metric)
+    S = 2  # Supersampling factor
+    num_rows = max(len(history_rows), 1)
+
+    sparkline_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
+    sparkline_height = 256
+    sparkline_bottom = sparkline_top + sparkline_height
+
+    table_top = sparkline_bottom + 24
+    col_header_top = table_top
+    rows_top = col_header_top + QUEUE_IMG_COL_HEADER_HEIGHT
+    table_bottom = rows_top + num_rows * QUEUE_IMG_ROW_HEIGHT + QUEUE_IMG_CARD_BOTTOM_PAD
+    height = table_bottom + QUEUE_IMG_PADDING + 14
+
+    image = Image.new("RGB", (QUEUE_IMG_WIDTH * S, height * S), QUEUE_IMG_BG)
+    draw = ImageDraw.Draw(image)
+
+    title_font = load_font(62 * S, "bold")
+    subtitle_font = load_font(38 * S, "bold")
+    header_font = load_font(30 * S, "bold")
+    stat_label_font = load_font(20 * S, "bold")
+    stat_value_font = load_font(38 * S, "bold")
+    spark_axis_font = load_font(22 * S, "bold")
+    spark_val_font = load_font(23 * S, "bold")
+    body_font = load_font(35 * S)
+    body_font_bold = load_font(35 * S, "bold")
+    duration_font = load_font(22 * S, "bold")
+    footer_font = load_font(22 * S)
+
+    # 1. Header gradient
+    _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
+
+    summary_box_w = 616
+    summary_box_h = 146
+    summary_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - summary_box_w
+    summary_box_y = 32
+
+    max_title_width = (summary_box_x - QUEUE_IMG_PADDING - 28) * S
+    title_text = truncate_to_width(draw, f"{player_name}'s History", title_font, max_title_width)
+    draw.text((QUEUE_IMG_PADDING * S, 28 * S), title_text, font=title_font, fill=QUEUE_IMG_TEXT)
+
+    wins = sum(1 for r in history_rows if r.get("won") is True)
+    losses = sum(1 for r in history_rows if r.get("won") is False)
+    n = len(history_rows)
+    if wins > losses:
+        subtitle_color = QUEUE_IMG_WIN
+    elif losses > wins:
+        subtitle_color = QUEUE_IMG_LOSE
+    else:
+        subtitle_color = QUEUE_IMG_MUTED
+    subtitle_text = f"Last {n} {'Queue' if n == 1 else 'Queues'} · {wins}W - {losses}L"
+    draw.text((QUEUE_IMG_PADDING * S, 96 * S), subtitle_text, font=subtitle_font, fill=subtitle_color)
+
+    tot_dmg = sum(r.get("total_damage") or 0 for r in history_rows)
+    tot_gms = sum(r.get("games") or 1 for r in history_rows)
+    overall_avg_dmg = (tot_dmg / tot_gms) if tot_gms > 0 else 0.0
+
+    impact_scores = [r["impact"] for r in history_rows if r.get("impact") is not None]
+    overall_impact = f"{sum(impact_scores) / len(impact_scores):.0f}" if impact_scores else "-"
+
+    has_any_kills = any(r.get("kills") is not None for r in history_rows)
+    tot_kills = sum(r.get("kills") or 0 for r in history_rows)
+    kills_str = f"{tot_kills:,}" if has_any_kills else "-"
+
+    decided = wins + losses
+    if decided > 0:
+        win_rate = round(100 * wins / decided)
+        meta_text = f"Win Rate: {win_rate}% · {tot_gms} {'Game' if tot_gms == 1 else 'Games'} Played"
+    else:
+        meta_text = f"{tot_gms} {'Game' if tot_gms == 1 else 'Games'} Played"
+    draw.text((QUEUE_IMG_PADDING * S, 152 * S), meta_text, font=duration_font, fill=QUEUE_IMG_MUTED)
+
+    # Header Right Summary Box (mirrors MATCH TIMELINE container geometry)
+    draw.rounded_rectangle(
+        [
+            summary_box_x * S,
+            summary_box_y * S,
+            (summary_box_x + summary_box_w) * S,
+            (summary_box_y + summary_box_h) * S,
+        ],
+        radius=20 * S,
+        fill=(28, 40, 64),
+        outline=QUEUE_IMG_ROW_DIVIDER,
+        width=2 * S,
+    )
+
+    summary_stats = [
+        ("damage", "AVG DAMAGE", f"{overall_avg_dmg:,.0f}"),
+        ("impact", "AVG IMPACT", overall_impact),
+        ("kills", "TOTAL KILLS", kills_str),
+    ]
+    stat_col_w = summary_box_w / len(summary_stats)
+    for s_idx, (s_key, s_label, s_val) in enumerate(summary_stats):
+        col_x0 = (summary_box_x + s_idx * stat_col_w) * S
+        col_cx = col_x0 + (stat_col_w * S) / 2
+        if s_idx > 0:
+            draw.line(
+                [(col_x0, (summary_box_y + 22) * S), (col_x0, (summary_box_y + summary_box_h - 22) * S)],
+                fill=QUEUE_IMG_ROW_DIVIDER,
+                width=1 * S,
+            )
+        is_active_stat = s_key == metric
+        lbl_fill = QUEUE_IMG_TEXT if is_active_stat else QUEUE_IMG_MUTED
+        val_fill = QUEUE_IMG_ACCENT if is_active_stat else QUEUE_IMG_TEXT
+
+        lbl_bbox = draw.textbbox((0, 0), s_label, font=stat_label_font)
+        lbl_x = col_cx - (lbl_bbox[2] - lbl_bbox[0]) / 2 - lbl_bbox[0]
+        lbl_y = _vcenter_y(draw, stat_label_font, (summary_box_y + 20) * S, (summary_box_y + 56) * S)
+        draw.text((lbl_x, lbl_y), s_label, font=stat_label_font, fill=lbl_fill)
+
+        val_bbox = draw.textbbox((0, 0), s_val, font=stat_value_font)
+        val_x = col_cx - (val_bbox[2] - val_bbox[0]) / 2 - val_bbox[0]
+        val_y = _vcenter_y(draw, stat_value_font, (summary_box_y + 62) * S, (summary_box_y + 126) * S)
+        draw.text((val_x, val_y), s_val, font=stat_value_font, fill=val_fill)
+
+    # 2. Sparkline Panel
+    card_x0 = QUEUE_IMG_PADDING
+    card_x1 = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+    card_radius = QUEUE_IMG_CARD_RADIUS * S
+    spark_header_bottom = sparkline_top + 52
+
+    draw.rounded_rectangle(
+        [card_x0 * S, sparkline_top * S, card_x1 * S, sparkline_bottom * S],
+        radius=card_radius,
+        fill=QUEUE_IMG_CARD_BG,
+        outline=QUEUE_IMG_ROW_DIVIDER,
+        width=2 * S,
+    )
+
+    metric_labels = {
+        "damage": "AVG DAMAGE TREND",
+        "impact": "AVERAGE IMPACT TREND (0–100)",
+        "kills": "TOTAL KILLS TREND",
+    }
+    spark_title = metric_labels.get(metric, "TREND")
+    spark_title_y = _vcenter_y(draw, header_font, sparkline_top * S, spark_header_bottom * S)
+    draw.text(((card_x0 + 24) * S, spark_title_y), spark_title, font=header_font, fill=QUEUE_IMG_TEXT)
+
+    divider_y = spark_header_bottom * S
+    draw.line([((card_x0 + 16) * S, divider_y), ((card_x1 - 16) * S, divider_y)], fill=QUEUE_IMG_ROW_DIVIDER, width=1 * S)
+
+    chronological = list(reversed(history_rows))
+    P = len(chronological)
+
+    def get_val(row):
+        if metric == "damage":
+            return row.get("avg_damage")
+        elif metric == "impact":
+            return row.get("impact")
+        else:
+            return row.get("kills")
+
+    valid_points = [(i, get_val(r)) for i, r in enumerate(chronological) if get_val(r) is not None]
+
+    plot_x0 = (card_x0 + 68) * S
+    plot_x1 = (card_x1 - 68) * S
+    plot_y0 = (sparkline_top + 106) * S
+    plot_y1 = (sparkline_bottom - 72) * S
+    area_base_y = (sparkline_bottom - 50) * S
+
+    if P == 0 or not valid_points:
+        empty_text = "No data available for this metric."
+        empty_bbox = draw.textbbox((0, 0), empty_text, font=body_font)
+        empty_x = (QUEUE_IMG_WIDTH * S - (empty_bbox[2] - empty_bbox[0])) / 2
+        empty_y = _vcenter_y(draw, body_font, spark_header_bottom * S, sparkline_bottom * S)
+        draw.text((empty_x, empty_y), empty_text, font=body_font, fill=QUEUE_IMG_MUTED)
+    else:
+        values = [v for _, v in valid_points]
+        min_val = min(values)
+        max_val = max(values)
+
+        def pt_coords(idx, val):
+            if P <= 1:
+                cx = (plot_x0 + plot_x1) / 2
+            else:
+                cx = plot_x0 + idx * (plot_x1 - plot_x0) / (P - 1)
+            if max_val == min_val:
+                cy = (plot_y0 + plot_y1) / 2
+            else:
+                cy = plot_y1 - ((val - min_val) / (max_val - min_val)) * (plot_y1 - plot_y0)
+            return cx, cy
+
+        # Subtle mid reference line and bottom plot baseline
+        mid_guide_y = (plot_y0 + plot_y1) / 2
+        draw.line([(plot_x0, mid_guide_y), (plot_x1, mid_guide_y)], fill=(29, 39, 59), width=1 * S)
+        draw.line([(plot_x0, area_base_y), (plot_x1, area_base_y)], fill=QUEUE_IMG_ROW_DIVIDER, width=1 * S)
+
+        coords = [pt_coords(idx, val) for idx, val in valid_points]
+        if len(coords) > 1:
+            area_poly = [(coords[0][0], area_base_y)] + coords + [(coords[-1][0], area_base_y)]
+            area_layer = Image.new("RGBA", (QUEUE_IMG_WIDTH * S, height * S), (0, 0, 0, 0))
+            area_draw = ImageDraw.Draw(area_layer)
+            area_draw.polygon(area_poly, fill=(255, 165, 50, 28))
+            image.paste(Image.alpha_composite(image.convert("RGBA"), area_layer).convert("RGB"))
+            draw = ImageDraw.Draw(image)
+
+            draw.line(coords, fill=QUEUE_IMG_ACCENT, width=4 * S, joint="curve")
+
+        # X-axis tick marks and queue # labels below area_base_y
+        axis_label_y = _vcenter_y(draw, spark_axis_font, area_base_y + 4 * S, (sparkline_bottom - 6) * S)
+        for idx in range(P):
+            if P <= 1:
+                cx = (plot_x0 + plot_x1) / 2
+            else:
+                cx = plot_x0 + idx * (plot_x1 - plot_x0) / (P - 1)
+
+            draw.line([(cx, area_base_y), (cx, area_base_y + 5 * S)], fill=QUEUE_IMG_ROW_DIVIDER, width=2 * S)
+            match_label = f"#{chronological[idx]['match_id']}"
+            is_latest = idx == P - 1
+            x_fill = QUEUE_IMG_TEXT if is_latest else QUEUE_IMG_MUTED
+            x_bbox = draw.textbbox((0, 0), match_label, font=spark_axis_font)
+            x_text_x = cx - (x_bbox[2] - x_bbox[0]) / 2 - x_bbox[0]
+            draw.text((x_text_x, axis_label_y), match_label, font=spark_axis_font, fill=x_fill)
+
+        # Draw data dots first, then value pills on top so pills are never clipped by lines or rings
+        for idx, val in valid_points:
+            cx, cy = pt_coords(idx, val)
+            won = chronological[idx].get("won")
+            if won is True:
+                dot_color = QUEUE_IMG_WIN
+            elif won is False:
+                dot_color = QUEUE_IMG_LOSE
+            else:
+                dot_color = QUEUE_IMG_MUTED
+
+            is_latest = idx == P - 1
+            r = 7 * S
+            if is_latest:
+                ring_r = 13 * S
+                draw.ellipse([cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r], outline=QUEUE_IMG_ACCENT, width=3 * S)
+            draw.ellipse([cx - r - 2 * S, cy - r - 2 * S, cx + r + 2 * S, cy + r + 2 * S], fill=QUEUE_IMG_CARD_BG)
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=dot_color)
+
+        for idx, val in valid_points:
+            cx, cy = pt_coords(idx, val)
+            is_latest = idx == P - 1
+
+            if metric == "damage":
+                v_text = f"{val:,.0f}"
+            elif metric == "impact":
+                v_text = f"{int(val + 0.5)}"
+            else:
+                v_text = str(int(val))
+
+            v_bbox = draw.textbbox((0, 0), v_text, font=spark_val_font)
+            text_w = v_bbox[2] - v_bbox[0]
+            text_h = v_bbox[3] - v_bbox[1]
+
+            pad_x = 9 * S
+            pad_y = 5 * S
+            pill_w = text_w + 2 * pad_x
+            pill_h = text_h + 2 * pad_y
+
+            marker_clearance = (16 if is_latest else 10) * S
+            pill_bottom = cy - marker_clearance
+            pill_top = pill_bottom - pill_h
+            pill_left = cx - pill_w / 2
+            pill_right = cx + pill_w / 2
+
+            pill_outline = QUEUE_IMG_ACCENT if is_latest else QUEUE_IMG_ROW_DIVIDER
+            v_fill = QUEUE_IMG_ACCENT if is_latest else QUEUE_IMG_TEXT
+
+            draw.rounded_rectangle(
+                [pill_left, pill_top, pill_right, pill_bottom],
+                radius=8 * S,
+                fill=QUEUE_IMG_BG,
+                outline=pill_outline,
+                width=2 * S if is_latest else 1 * S,
+            )
+            v_x = pill_left + pad_x - v_bbox[0]
+            v_y = pill_top + pad_y - v_bbox[1]
+            draw.text((v_x, v_y), v_text, font=spark_val_font, fill=v_fill)
+
+    # 3. Table Card
+    draw.rounded_rectangle(
+        [card_x0 * S, table_top * S, card_x1 * S, table_bottom * S],
+        radius=card_radius,
+        fill=QUEUE_IMG_CARD_BG,
+        outline=QUEUE_IMG_ROW_DIVIDER,
+        width=2 * S,
+    )
+
+    inner_pad_x = 24
+    inner_width = (card_x1 - card_x0) - 2 * inner_pad_x
+    inner_x0 = card_x0 + inner_pad_x
+    columns = [round(ratio * inner_width) for ratio in QUEUE_IMG_HISTORY_COLUMN_RATIOS]
+    col_widths = [columns[i + 1] - columns[i] for i in range(len(columns) - 1)] + [inner_width - columns[-1]]
+
+    active_col_map = {"kills": "Kills", "damage": "Avg Dmg", "impact": "Impact"}
+    active_col_label = active_col_map.get(metric)
+
+    header_y = _vcenter_y(draw, header_font, col_header_top * S, rows_top * S)
+    for col_idx, label in enumerate(QUEUE_IMG_HISTORY_COLUMN_LABELS):
+        label_x = (inner_x0 + columns[col_idx]) * S
+        label_bbox = draw.textbbox((0, 0), label, font=header_font)
+        label_width = label_bbox[2] - label_bbox[0]
+        if col_idx != 0 and col_widths[col_idx] * S > label_width:
+            label_x += (col_widths[col_idx] * S - label_width) / 2
+        header_fill = QUEUE_IMG_ACCENT if label == active_col_label else QUEUE_IMG_TEXT
+        draw.text((label_x, header_y), label, font=header_font, fill=header_fill)
+
+    draw.line(
+        [((card_x0 + 12) * S, rows_top * S), ((card_x1 - 12) * S, rows_top * S)],
+        fill=QUEUE_IMG_ROW_DIVIDER,
+        width=1 * S,
+    )
+
+    if not history_rows:
+        empty_y = _vcenter_y(draw, body_font, rows_top * S, (rows_top + QUEUE_IMG_ROW_HEIGHT) * S)
+        draw.text((inner_x0 * S, empty_y), "No queue history found.", font=body_font, fill=QUEUE_IMG_MUTED)
+
+    for row_idx, row in enumerate(history_rows):
+        row_top = rows_top + row_idx * QUEUE_IMG_ROW_HEIGHT
+        row_box_top = (row_top + 4) * S
+        row_box_bottom = (row_top + QUEUE_IMG_ROW_HEIGHT - 4) * S
+
+        if row_idx % 2 == 0:
+            draw.rounded_rectangle(
+                [(card_x0 + 12) * S, row_box_top, (card_x1 - 12) * S, row_box_bottom],
+                radius=10 * S,
+                fill=QUEUE_IMG_ROW_ALT,
+            )
+
+        match_id_str = f"#{row['match_id']}"
+        won = row.get("won")
+        wins_list = row.get("team_round_wins")
+        my_team = row.get("team_index")
+
+        if isinstance(wins_list, list) and len(wins_list) >= 2 and my_team is not None and 0 <= my_team < len(wins_list):
+            my_score = wins_list[my_team]
+            opp_score = wins_list[1 - my_team] if len(wins_list) == 2 else sum(w for i, w in enumerate(wins_list) if i != my_team)
+            score_str = f"{my_score} - {opp_score}"
+            if won is True:
+                res_str = f"W · {score_str}"
+                res_fill = QUEUE_IMG_WIN
+            elif won is False:
+                res_str = f"L · {score_str}"
+                res_fill = QUEUE_IMG_LOSE
+            else:
+                res_str = f"T · {score_str}"
+                res_fill = QUEUE_IMG_MUTED
+        else:
+            if won is True:
+                res_str = "WIN"
+                res_fill = QUEUE_IMG_WIN
+            elif won is False:
+                res_str = "LOSS"
+                res_fill = QUEUE_IMG_LOSE
+            else:
+                res_str = "-"
+                res_fill = QUEUE_IMG_MUTED
+
+        kills_val = row.get("kills")
+        kills_str = str(kills_val) if kills_val is not None else "-"
+        kills_fill = QUEUE_IMG_TEXT if kills_val is not None else QUEUE_IMG_MUTED
+
+        avg_val = row.get("avg_damage")
+        avg_str = f"{avg_val:,.0f}" if avg_val is not None else "-"
+        avg_fill = QUEUE_IMG_ACCENT if avg_val is not None else QUEUE_IMG_MUTED
+
+        imp_val = row.get("impact")
+        imp_str = str(int(imp_val + 0.5)) if imp_val is not None else "-"
+        imp_fill = QUEUE_IMG_TEXT if imp_val is not None else QUEUE_IMG_MUTED
+
+        cells = [
+            (match_id_str, body_font_bold, QUEUE_IMG_TEXT, False),
+            (res_str, body_font_bold, res_fill, True),
+            (kills_str, body_font, kills_fill, True),
+            (avg_str, body_font_bold, avg_fill, True),
+            (imp_str, body_font_bold, imp_fill, True),
+        ]
+
+        for col_idx, (text_val, cell_font, fill_color, center_align) in enumerate(cells):
+            cell_x = (inner_x0 + columns[col_idx]) * S
+            cell_y = _vcenter_y(draw, cell_font, row_box_top, row_box_bottom)
+            if center_align:
+                val_bbox = draw.textbbox((0, 0), text_val, font=cell_font)
+                val_w = val_bbox[2] - val_bbox[0]
+                cell_x += (col_widths[col_idx] * S - val_w) / 2
+            draw.text((cell_x, cell_y), text_val, font=cell_font, fill=fill_color)
+
+    # 4. Footer attribution
+    footer_text = "Impact is survev.de's per-game impact score (0–100) · Data courtesy of NeatQueue & survev.de APIs :)"
+    footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
+    footer_w = footer_bbox[2] - footer_bbox[0]
+    footer_x = (QUEUE_IMG_WIDTH * S - footer_w) / 2
+    footer_y = _vcenter_y(draw, footer_font, table_bottom * S, height * S)
+    draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+    image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     buffer.seek(0)

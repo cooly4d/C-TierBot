@@ -10,7 +10,13 @@ import aiohttp
 import discord
 
 from bot_config import API_CONCURRENCY_LIMIT, LEADERBOARD_BANNER_URL, LEADERBOARD_SORT_CONFIG
-from db import get_all_users, get_player_queue_stats_summary, get_seasonal_queue_stats, get_user_token
+from db import (
+    get_all_users,
+    get_player_queue_history,
+    get_player_queue_stats_summary,
+    get_seasonal_queue_stats,
+    get_user_token,
+)
 from survev_client import (
     extract_squad_tier,
     fetch_player_timeframe_stats,
@@ -25,9 +31,11 @@ from image_utils import (
     compute_inventory_worth,
     format_duration_ms,
     generate_compare_image,
+    generate_history_image,
     generate_inventory_image,
     generate_shop_image,
     group_inventory_items,
+    normalize_history_metric,
     normalize_inventory_rarity_filter,
 )
 
@@ -234,17 +242,39 @@ async def build_profile_payload(target: discord.abc.User, access_token: str | No
         ),
     )
     if has_queues:
+        month_name = datetime.now(timezone.utc).strftime("%B")
         all_time_avg = summary["all_time_avg_damage"]
         monthly_avg = summary["monthly_avg_damage"]
-        embed.add_field(name="4v4 Play Time", value=format_duration_ms(summary["total_duration_ms"]), inline=True)
+        all_time_avg_impact = summary.get("all_time_avg_impact")
+        monthly_avg_impact = summary.get("monthly_avg_impact")
+
+        if monthly_avg_impact is not None:
+            monthly_impact_val = f"{monthly_avg_impact:,.0f}"
+        elif monthly_avg is None:
+            monthly_impact_val = "No queues this month"
+        else:
+            monthly_impact_val = "N/A"
+
+        embed.add_field(name="4v4 Play Time", value=format_duration_ms(summary["total_duration_ms"]), inline=False)
         embed.add_field(
             name="All-Time Avg Damage",
             value=f"{all_time_avg:,.0f}" if all_time_avg is not None else "N/A",
             inline=True,
         )
         embed.add_field(
-            name=f"{datetime.now(timezone.utc).strftime('%B')} Avg Damage",
+            name=f"{month_name} Avg Damage",
             value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
+            inline=True,
+        )
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+        embed.add_field(
+            name="All-Time Avg Impact",
+            value=f"{all_time_avg_impact:,.0f}" if all_time_avg_impact is not None else "N/A",
+            inline=True,
+        )
+        embed.add_field(
+            name=f"{month_name} Avg Impact",
+            value=monthly_impact_val,
             inline=True,
         )
     footer = "Stats from NeatQueue 4v4s only."
@@ -253,6 +283,58 @@ async def build_profile_payload(target: discord.abc.User, access_token: str | No
         footer += " Tier comes from survev.de."
     embed.set_footer(text=footer)
     return embed, None
+
+
+async def build_history_payload(guild_id: int | None, target: discord.abc.User, metric: str = "damage"):
+    """Builds (embed, file, normalized_metric, None) for a player's last 10 queues in the guild,
+    or (None, None, normalized_metric, error_message) when no history exists.
+    """
+    metric = normalize_history_metric(metric)
+    if guild_id is None:
+        return None, None, metric, "Queue history is only available within a server."
+
+    rows = get_player_queue_history(guild_id, target.id, limit=10)
+    if not rows:
+        return None, None, metric, f"No cached NeatQueue history found for {target.display_name} in this server yet."
+
+    image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, rows, metric)
+    filename = f"history_{guild_id}_{target.id}_{metric}.png"
+
+    alt_lines = [f"Last {len(rows)} queues for {target.display_name}:"]
+    for r in rows:
+        won_str = "Won" if r.get("won") is True else "Lost" if r.get("won") is False else "Undecided"
+        kills_str = f"{r.get('kills')} kills" if r.get("kills") is not None else ""
+        dmg_str = f"{r.get('avg_damage', 0):,.0f} avg dmg"
+        imp_str = f"impact {int(r['impact'] + 0.5)}" if r.get("impact") is not None else ""
+        parts = [p for p in (kills_str, dmg_str, imp_str) if p]
+        alt_lines.append(f"Queue #{r['match_id']} ({won_str}): {', '.join(parts)}")
+    alt_text = " ".join(alt_lines)[:1000]
+
+    file = discord.File(image_buffer, filename=filename, description=alt_text)
+
+    wins = sum(1 for r in rows if r.get("won") is True)
+    losses = sum(1 for r in rows if r.get("won") is False)
+    n = len(rows)
+
+    metric_names = {
+        "damage": "Average Damage",
+        "impact": "Average Impact",
+        "kills": "Total Kills",
+    }
+    metric_name = metric_names.get(metric, "Damage")
+
+    embed = discord.Embed(
+        title=f"{target.display_name}'s Queue History",
+        description=f"Showing last **{n}** queues ({wins}W - {losses}L) · Trend: **{metric_name}**",
+        color=discord.Color.blurple(),
+    )
+    embed.set_image(url=f"attachment://{filename}")
+    footer_text = "Toggle the trend chart above with the buttons below."
+    if any(r.get("impact") is not None for r in rows):
+        footer_text += " • Impact is survev.de's per-game score (0–100)."
+    embed.set_footer(text=footer_text)
+
+    return embed, file, metric, None
 
 
 async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kills"):

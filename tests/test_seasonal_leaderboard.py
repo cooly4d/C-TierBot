@@ -54,6 +54,10 @@ class SeasonalQueueStatsTests(unittest.TestCase):
                     match_start_ms INTEGER,
                     match_end_ms INTEGER,
                     cached_at TEXT NOT NULL,
+                    kills INTEGER,
+                    impact REAL,
+                    winning_team_index INTEGER,
+                    team_round_wins TEXT,
                     PRIMARY KEY (guild_id, match_id, player_key)
                 )
                 """

@@ -9,9 +9,11 @@ import discord
 from bot_config import LEADERBOARD_SORT_CONFIG
 from image_utils import (
     INVENTORY_RARITY_FILTERS,
+    normalize_history_metric,
     normalize_inventory_rarity_filter,
 )
 from leaderboard_service import (
+    build_history_payload,
     build_inventory_image_payload,
     build_seasonal_leaderboard_payload,
     build_shop_image_payload,
@@ -379,3 +381,55 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_use
     view.update_button_states(clamped_page)
 
     await interaction.message.edit(attachments=[file], embed=embed, view=view)
+
+
+class HistoryMetricView(discord.ui.View):
+    """View with 3 metric toggle buttons (Damage, Impact, Kills) for /history."""
+    def __init__(self, guild_id: int, discord_id: int, active_metric: str = "damage"):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self.discord_id = discord_id
+        self.active_metric = normalize_history_metric(active_metric)
+
+        metrics = [
+            ("damage", "Damage"),
+            ("impact", "Impact"),
+            ("kills", "Kills"),
+        ]
+        for key, label in metrics:
+            is_active = (key == self.active_metric)
+            self.add_item(discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary,
+                custom_id=f"history_metric:{key}:{guild_id}:{discord_id}",
+            ))
+
+
+def parse_history_metric_id(custom_id: str) -> tuple[str, int, int]:
+    """Splits 'history_metric:{metric}:{guild_id}:{discord_id}' into (metric, guild_id, discord_id)."""
+    _, metric, guild_id, discord_id = custom_id.split(":")
+    return metric, int(guild_id), int(discord_id)
+
+
+async def refresh_history_message(interaction: discord.Interaction, metric: str, guild_id: int, discord_id: int):
+    """Updates the /history message with a different trend line metric."""
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            pass
+
+    target = interaction.client.get_user(discord_id)
+    if target is None:
+        try:
+            target = await interaction.client.fetch_user(discord_id)
+        except Exception:
+            target = interaction.user
+
+    embed, file, norm_metric, error = await build_history_payload(guild_id, target, metric=metric)
+    if error or not file:
+        await interaction.followup.send(error or "Failed to load history.", ephemeral=True)
+        return
+
+    view = HistoryMetricView(guild_id, discord_id, active_metric=norm_metric)
+    await interaction.message.edit(embed=embed, attachments=[file], view=view)

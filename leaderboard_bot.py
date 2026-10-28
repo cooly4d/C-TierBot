@@ -31,6 +31,7 @@ from db import (
     update_guild_last_updated,
 )
 from discord_ui import (
+    HistoryMetricView,
     InventoryPaginationView,
     LeaderboardView,
     ShopPaginationView,
@@ -39,6 +40,8 @@ from discord_ui import (
     inventory_pagination_state,
     market_pagination_state,
     parse_game_page_id,
+    parse_history_metric_id,
+    refresh_history_message,
     refresh_inventory_message,
     refresh_leaderboard_message,
     refresh_market_message,
@@ -50,6 +53,7 @@ from discord_ui import (
 from leaderboard_service import (
     build_compare_payload,
     build_goldenfries_embed_payload,
+    build_history_payload,
     build_inventory_image_payload,
     build_leaderboard_fries_embed,
     build_profile_payload,
@@ -192,6 +196,10 @@ async def log_interaction(interaction: discord.Interaction):
             else:
                 current_page = min(total_pages - 1, current_page + 1)
             await refresh_market_message(interaction, target_user, access_token, mode, current_page, msg_id)
+    elif custom_id and custom_id.startswith("history_metric:"):
+        print(f"DEBUG - handling history metric toggle {custom_id} for {interaction.user}")
+        metric, guild_id, target_discord_id = parse_history_metric_id(custom_id)
+        await refresh_history_message(interaction, metric, guild_id, target_discord_id)
     elif custom_id in ("market_mode_daily", "market_mode_weekly", "market_mode_all"):
         print(f"DEBUG - handling market mode switch {custom_id} for {interaction.user}")
         msg_id = interaction.message.id
@@ -293,6 +301,22 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
         await interaction.followup.send(message)
         return
     await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="history", description="View a player's last 10 NeatQueue results and performance trend.")
+@discord.app_commands.describe(member="Discord member whose queue history to display. Omit to use yourself.")
+@discord.app_commands.guild_only()
+async def history(interaction: discord.Interaction, member: discord.User | None = None):
+    target = member or interaction.user
+    await interaction.response.defer()
+
+    embed, file, metric, error = await build_history_payload(interaction.guild_id, target, metric="damage")
+    if error or not file:
+        await interaction.followup.send(error or "Failed to load history.")
+        return
+
+    view = HistoryMetricView(interaction.guild_id, target.id, active_metric=metric)
+    await interaction.followup.send(embed=embed, file=file, view=view)
 
 
 @bot.tree.command(name="hall_of_fame", description="View the best single-queue stats ever recorded.")

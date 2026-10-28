@@ -261,4 +261,24 @@ One game of a finished queue, opened by the `Game breakdown` button as an **ephe
 - **Embed (`build_queue_game_payload`):** Blurple (`discord.Color.blurple()`), title `Game G of N · Queue #id`, description with the winner/series line plus `Top damage` and `Top impact` (names in bold), footer explaining Impact only when it is shown. The image carries Discord alt text (`discord.File(description=...)`) listing every player's kills, damage and impact (capped at 1000 characters), so the card is never image-only.
 - **Empty state:** a missing, expired or unreadable snapshot answers privately with what happened and the exact `/queue_stats {match_id}` command that rebuilds it.
 
+### 5.5 Player History Card (`generate_history_image`)
+A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues in the current server, paired with interactive metric toggle buttons (`Damage`, `Impact`, `Kills`) in Discord.
+- **Top Header Banner (`1600 x 210`, `_draw_header_gradient`):**
+  - **Left Column:** Title (`66px` bold `QUEUE_IMG_TEXT`) `f"{player_name}'s History"` at `y = 28`; Subtitle (`38px` bold) `Last N Queues · XW - YL` colored `QUEUE_IMG_WIN` / `QUEUE_IMG_LOSE` / `QUEUE_IMG_MUTED`; Meta line (`22px` bold `QUEUE_IMG_MUTED` at `y = 152`) `Server 4v4 Queue History · Active View: {Metric}`.
+  - **Right 3-Stat Summary Box (`x = 940..1556, y = 32..178`, `radius=16`):** Displays `AVG DAMAGE`, `AVG IMPACT`, and `TOTAL KILLS` side-by-side (`38px` bold value over `18px` bold label), highlighting the active metric in `QUEUE_IMG_ACCENT` (`#FFA532`) and inactive metrics in `QUEUE_IMG_TEXT`.
+- **Minimalist Sparkline Panel (`270px` tall, `radius=18`, fill `QUEUE_IMG_CARD_BG`, border `QUEUE_IMG_ROW_DIVIDER`):**
+  - Card header strip at `y + 16`: metric title on left (`AVG DAMAGE TREND`, `AVERAGE IMPACT TREND (0–100)`, or `TOTAL KILLS TREND` in `30px` bold `QUEUE_IMG_TEXT`), followed by a `1px` horizontal divider.
+  - Chronological plot from left (oldest) to right (newest), with `#match_id` labels along the X-axis (`sparkline_bottom - 36`, latest queue in bold `QUEUE_IMG_TEXT`) and vertical `6px` tick marks extending down from a continuous baseline rule (`area_base_y = sparkline_bottom - 50`).
+  - `plot_y1 = sparkline_bottom - 72` keeps the minimum data point `22px` above the baseline rule so the translucent area fill (`fill=(255, 165, 50, 26)`) never pinches to zero height and never collides with X-axis queue numbers.
+  - `4px` `QUEUE_IMG_ACCENT` (`#FFA532`) line, `7px` radius dots colored by result (`QUEUE_IMG_WIN` green, `QUEUE_IMG_LOSE` red, `QUEUE_IMG_MUTED` grey), and `13px` outer `QUEUE_IMG_ACCENT` ring on the latest queue.
+  - Pill-backed value badges: every data point displays its numeric value placed **above** its marker inside a dark rounded pill badge (`fill=QUEUE_IMG_BG`, `outline=QUEUE_IMG_ACCENT` with accent text for latest / `QUEUE_IMG_ROW_DIVIDER` with light text for others) with exact `textbbox` top-bearing compensation (`16px` clearance above the latest outer ring, `10px` above normal dots).
+- **10-Queue Table Card (`radius=18`, fill `QUEUE_IMG_CARD_BG`, border `QUEUE_IMG_ROW_DIVIDER`):**
+  - Column header strip at `48px` height with labels `["Queue", "Result", "Kills", "Avg Dmg", "Impact"]` at ratios `[0.0, 0.22, 0.48, 0.68, 0.84]`, highlighting the active metric's column header in `QUEUE_IMG_ACCENT`.
+  - Ordered **newest-first** with alternating even-row `QUEUE_IMG_ROW_ALT` pills (`radius=10`, `12px` X-inset).
+  - Cells: `Queue` (`#3674`), `Result` (`W · 3 - 1` in green / `L · 1 - 3` in red / `-` in muted), `Kills` (regular body), `Avg Dmg` (bold accent `#FFA532`), `Impact` (bold text `0–100`, or `-` in muted).
+- **Discord Interaction (`HistoryMetricView`):**
+  - Stateless button row: `Damage`, `Impact`, `Kills` with `custom_id="history_metric:{metric}:{guild_id}:{discord_id}"`.
+  - Active button is `discord.ButtonStyle.primary` (Blurple); inactive buttons are `discord.ButtonStyle.secondary` (Grey).
+
+
 
