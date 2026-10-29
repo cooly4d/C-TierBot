@@ -277,6 +277,7 @@ async def build_profile_payload(target: discord.abc.User, access_token: str | No
             value=monthly_impact_val,
             inline=True,
         )
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
     footer = "Stats from NeatQueue 4v4s only."
     if access_token:
         embed.add_field(name="survev.de Squad Tier", value=format_squad_tier_field(tier, tier_error), inline=False)

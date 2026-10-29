@@ -218,6 +218,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
                 "\u200b",
                 "All-Time Avg Impact",
                 f"{month} Avg Impact",
+                "\u200b",
                 "survev.de Squad Tier",
             ],
         )
@@ -252,7 +253,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
             embed, _ = await leaderboard_service.build_profile_payload(self.target, None)
 
         get_tier.assert_not_awaited()
-        self.assertEqual(len(embed.fields), 6)
+        self.assertEqual(len(embed.fields), 7)
         self.assertEqual(embed.footer.text, "Stats from NeatQueue 4v4s only.")
 
     async def test_lookup_errors_are_shown_instead_of_hiding_the_queue_stats(self):
@@ -260,7 +261,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
         with summary_patch, tier_patch:
             embed, _ = await leaderboard_service.build_profile_payload(self.target, "tok")
 
-        self.assertEqual(len(embed.fields), 7)
+        self.assertEqual(len(embed.fields), 8)
         self.assertEqual(embed.fields[-1].value, "survev.de is rate limiting the bot right now.")
 
 
