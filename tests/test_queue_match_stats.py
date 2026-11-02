@@ -276,6 +276,34 @@ class ImpactHelperTests(unittest.TestCase):
 
 
 class UnfinishedQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pending_history_is_used_when_panel_is_missing_or_has_no_roster(self):
+        unreadable_panel = panel_message("No mentions", "No mentions")
+        for panel in (None, unreadable_panel):
+            with self.subTest(panel=panel):
+                with fake_world(**three_game_world(history=finished_history(winner=-2), panel=panel)):
+                    with patch.object(neatqueue_client, "datetime", wraps=datetime) as clock:
+                        clock.now.return_value = datetime.fromtimestamp(END_MS / 1000, timezone.utc)
+                        result, error = await neatqueue_client.calculate_queue_match_stats("4601", 999)
+
+                self.assertIsNone(error)
+                self.assertFalse(result["is_final"])
+                self.assertEqual(result["team_round_wins"], [2, 1])
+                self.assertEqual(result["match_start_ms"], START_MS)
+                self.assertEqual(result["match_end_ms"], END_MS)
+                self.assertEqual(result["diagnostics"]["roster_source"], "neatqueue_history")
+                self.assertEqual(result["diagnostics"]["window"]["start_source"], "neatqueue_history")
+                self.assertEqual(result["diagnostics"]["window"]["end_source"], "lookup_current_time")
+                self.assertEqual(result["diagnostics"]["neatqueue"]["history_players_per_team"], [2, 2])
+
+    async def test_pending_history_without_panel_reports_missing_history_fields(self):
+        for overrides, missing in (({"start_time": None}, "start time"), ({"teams": []}, "player roster")):
+            with self.subTest(missing=missing):
+                result, error = await calculate(**three_game_world(
+                    history=finished_history(winner=-2, **overrides), panel=None))
+                self.assertIsNone(result)
+                self.assertIn(missing, error)
+                self.assertNotIn("no match entries", error)
+
     async def test_queue_4600_pending_winner_does_not_cut_off_rounds_after_ten_minutes(self):
         # Queue #4600's logged times: all five rounds ended before the live lookup,
         # but the old winner=-2 check limited it to the first two (a 2-0 score).
@@ -286,8 +314,6 @@ class UnfinishedQueueTests(unittest.IsolatedAsyncioTestCase):
         games = [{"guid": f"g{i}", "end_time": f"2026-11-02T{time}Z"}
                  for i, time in enumerate(round_times, start=1)]
         boards = {f"g{i}": lobby(winner) for i, winner in enumerate(("A", "A", "B", "A", "A"), start=1)}
-        panel = panel_message("<@101> <@102>", "<@201> <@202>")
-        panel.created_at = start
         real_get_end = neatqueue_client.get_match_end_ms
 
         async def fetch_in_window(_session, _token, from_ms, to_ms, diagnostics=None):
@@ -299,7 +325,7 @@ class UnfinishedQueueTests(unittest.IsolatedAsyncioTestCase):
                 history = finished_history(winner=winner, start_time=start.isoformat())
                 if winner == 0:
                     history[0]["end_time_ms"] = int(final_end.timestamp() * 1000)
-                with fake_world(history=history, panel=panel, boards=boards):
+                with fake_world(history=history, panel=None, boards=boards):
                     with patch.object(neatqueue_client, "datetime", wraps=datetime) as clock, \
                             patch.object(neatqueue_client, "get_match_end_ms", AsyncMock(wraps=real_get_end)) as get_end, \
                             patch.object(neatqueue_client, "fetch_player_matches_in_window", side_effect=fetch_in_window):

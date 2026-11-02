@@ -60,6 +60,8 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 NeatQueue's pending `winner: -2` value is treated as an ongoing queue: the lookup runs through the current time instead of using the finished-queue duration fallback.
 
+If the ongoing queue's Discord panel cannot be found or read, the bot uses the NeatQueue history entry's roster and start time when available. Logs record the roster source and history roster counts to help diagnose missing data.
+
 ### Admin
 
 Admin-only commands are hidden from members without the **Administrator** permission.

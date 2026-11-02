@@ -345,6 +345,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
         entries = extract_neatqueue_entries(nq_data) if nq_data else []
         match = entries[0] if entries else None
+        history_teams = collect_neatqueue_teams(match)
 
         # NeatQueue can return winner=-2 while a series is still running. Treat it as
         # pending so live lookups end at "now", rather than a finished-match fallback.
@@ -359,6 +360,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             "winner_channel_id": get_nested_value(match, "winner_channel"),
             "history_start_ms": get_match_start_ms(match),
             "history_end_ms": parse_neatqueue_time(get_nested_value(match, "end_time_ms")),
+            "history_players_per_team": [len(team) for team in history_teams],
         }
         diagnostics["is_final"] = is_finished
         diagnostics["finality_reason"] = (
@@ -378,35 +380,48 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             window["start_source"] = "neatqueue_history"
             end_ms = await get_match_end_ms(match, start_ms, diagnostics=window)
 
-            teams = collect_neatqueue_teams(match)
+            teams = history_teams
+            diagnostics["roster_source"] = "neatqueue_history"
             if not teams:
                 return None, "NeatQueue match entry contains no player roster."
         else:
             is_final = False
-            # No finished-match history yet — the queue is probably still in progress. Fall back to
-            # NeatQueue's own panel/winner Discord message: its post time is the start, and "now" is
-            # the end, so /queue_stats still works mid-queue instead of erroring out.
+            # Keep using the live panel when available. A pending history entry can also
+            # supply the roster and start if the panel is absent or unreadable.
             panel_message = await find_queue_panel_message(guild_id, match_id)
             diagnostics["panel"] = {"found": panel_message is not None}
-            if panel_message is None:
-                return None, error or "NeatQueue history contains no match entries."
-            diagnostics["panel"].update({
-                "message_id": getattr(panel_message, "id", None),
-                "channel_id": getattr(getattr(panel_message, "channel", None), "id", None),
-                "created_at_utc": panel_message.created_at.isoformat(),
-            })
-
             teams = None
-            for embed in panel_message.embeds:
-                parsed = parse_teams_from_panel_embed(embed)
-                if parsed:
-                    teams = parsed
-                    break
-            if not teams:
-                return None, "Couldn't read the player roster from NeatQueue's message for this queue."
+            if panel_message is not None:
+                diagnostics["panel"].update({
+                    "message_id": getattr(panel_message, "id", None),
+                    "channel_id": getattr(getattr(panel_message, "channel", None), "id", None),
+                    "created_at_utc": panel_message.created_at.isoformat(),
+                })
+                for embed in panel_message.embeds:
+                    parsed = parse_teams_from_panel_embed(embed)
+                    if any(parsed):
+                        teams = parsed
+                        break
+                diagnostics["panel"]["roster_readable"] = bool(teams)
 
-            start_ms = int(panel_message.created_at.timestamp() * 1000)
-            window["start_source"] = "panel_created_at"
+            if teams:
+                start_ms = int(panel_message.created_at.timestamp() * 1000)
+                window["start_source"] = "panel_created_at"
+                diagnostics["roster_source"] = "discord_panel"
+            elif match is not None:
+                start_ms = get_match_start_ms(match)
+                if start_ms is None:
+                    return None, "NeatQueue history entry is missing a recognizable start time, and no readable queue panel was found."
+                if not any(history_teams):
+                    return None, "NeatQueue history entry contains no player roster, and no readable queue panel was found."
+                teams = history_teams
+                window["start_source"] = "neatqueue_history"
+                diagnostics["roster_source"] = "neatqueue_history"
+            elif panel_message is not None:
+                return None, "Couldn't read the player roster from NeatQueue's message for this queue."
+            else:
+                return None, error or "No NeatQueue history entry or readable queue panel was found for this queue."
+
             end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
             window["end_source"] = "lookup_current_time"
 
