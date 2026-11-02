@@ -17,7 +17,7 @@
 
 ## Current State
 
-All features below are implemented, committed in Git, deployed in production, and covered by an automated unit test suite (`194` passing tests across `9` test modules via `python -m unittest discover tests`).
+The existing features below are implemented. The queue-mention shortcut is a local change pending deployment; the automated unit test suite currently passes `207` tests across `10` test modules via `python -m unittest discover tests`. See Current Focus and Handover for deployment and working-tree status.
 
 ### Slash Commands (`16` total in `leaderboard_bot.py`)
 
@@ -41,6 +41,7 @@ All features below are implemented, committed in Git, deployed in production, an
 | **Admin** | `/reset_hall_of_fame` | **Implemented & Verified.** Clears all Hall of Fame records for the current guild. |
 
 ### Automated Systems & Console
+- **Queue-channel mentions (`reply_to_queue_mention` in `leaderboard_bot.py`):** A human explicitly mentioning the bot in a channel named exactly `queue-<digits>` receives the same current stats as `/queue_stats` in a public reply, without registering the channel with `/setup`. Uses a per-channel in-flight guard and 30-second cooldown, ignores bot/webhook messages and implicit reply pings, and never changes `processed_matches` or the guild catch-up timestamp. Final results retain Game breakdown; ongoing results remain IN PROGRESS. The user explicitly approved finished-queue support and the 30-second channel cooldown with a brief wait reply on 2026-11-02.
 - **Live NeatQueue Tracking (`on_message`, `on_message_edit`):** Detects NeatQueue result embeds in tracked channels, waits `QUEUE_RESULT_FETCH_DELAY_SECONDS` (`5s`), builds and posts the queue result card with `QueueResultView` (`Verify Survev Account` + `Game breakdown` buttons), and ignores message edits older than `24` hours (`QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS`).
 - **Startup Catch-Up (`backfill_missed_queue_results`):** On `on_ready`, scans the last `10` NeatQueue matches per tracked guild (`STARTUP_QUEUE_BACKFILL_LIMIT = 10`) and posts any finalized matches missing from `processed_matches`.
 - **Per-Game Breakdown (`QueueGamesPagerView`):** Clicking `Game breakdown` on any finalized queue card (for up to 90 days) opens an ephemeral message rendering one `1600px` card per game (`generate_queue_game_image`) with an interactive round timeline pill strip and `Previous` / `Next` buttons.
@@ -177,6 +178,7 @@ The following decisions were explicitly requested or approved by the user across
 
 | Task | Status | Context & Acceptance Criteria |
 | :--- | :--- | :--- |
+| **Reply with queue stats when mentioned in queue channels** | **Completed** | Explicit human mentions in `queue-<number>` reuse the existing stats payload and finality-aware view; no `/setup` needed for the mention channel. Ignore recurring vote messages, preserve automatic tracking, guard duplicate requests, and cover routing/error handling with tests. Local implementation; Discord deployment verification remains outstanding. |
 | **Distinguish ongoing queue cards from final results** | **Completed** | Show `IN PROGRESS` above the scoreboard and `Team N leads` / `No team leading` for ongoing queues. Pass `is_final` into image rendering. Verified with 196 passing tests and a rendered preview; local changes await deployment. |
 | **Initialise shared `MEMORY.md`, `AGENTS.md`, and clean up `README.md`** | **Completed** | Establish Git-managed shared project memory (`MEMORY.md`) and permanent agent operating instructions (`AGENTS.md`) for seamless switching between Antigravity, Claude Code, and OpenAI Codex across two computers; separate human-facing documentation in `README.md` from internal working notes. |
 | **Ongoing queue fallback to NeatQueue history roster/start time** | **Completed** | When an ongoing queue's Discord panel (`Queue#<id>`) cannot be found or read, fall back to the pending NeatQueue history entry's roster and `start_time` when available, and record `roster_source` and `history_players_per_team` in diagnostics (`commit 22e6c84`). |
@@ -224,6 +226,13 @@ The following decisions were explicitly requested or approved by the user across
 ---
 
 ## Current Focus and Handover
+
+### Queue-Channel Mention Shortcut (2026-11-02, local changes)
+- Added `reply_to_queue_mention` ahead of automatic message detection in `leaderboard_bot.py`. Reads the queue number from the channel name and reuses `build_queue_stats_payload`; the voting panel is not used as a roster or finality signal. Replies disable outgoing mentions and show typing while fetching.
+- The user confirmed current stats (including final queues) and a 30-second per-channel cooldown with a brief wait reply on 2026-11-02. The implementation already matches: cooldown starts after successful delivery of stats/lookup errors, and concurrent requests receive a wait reply. Unexpected lookup/send failures release the guard for retry. Recording these approvals required documentation changes only; no code changed after the 207-test pass.
+- All 207 tests passed, including 11 new mention tests for routing, finality-aware controls, cooldown/concurrency, errors, and compatibility with automatic results. `git diff --check` passed. No live Discord messages, commit, push, or deployment performed.
+- Started from clean commit `8555c6f`. This change touches `leaderboard_bot.py`, `README.md`, `MEMORY.md`, and new `tests/test_queue_mentions.py`. Prior IN PROGRESS work is committed in `8555c6f`; earlier handover notes describing it as uncommitted are historical.
+- Cross-check found older architecture notes use outdated names: the actual listener is `on_raw_message_edit`, automatic posting/backfill live in `leaderboard_bot.py`, and the panel scanner is `find_queue_panel_message` (200 messages). NeatQueue uses `/api/v1/history/{guild_id}` filtered to the requested game; current lookup windows use the selected start and end directly. Consult code when older notes differ.
 
 ### Queue Card Status Update (2026-11-02, local changes)
 - Added the centered `IN PROGRESS` label and live leader wording in `image_utils.py`; `queue_stats_service.py` supplies the queue's finality flag.

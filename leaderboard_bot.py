@@ -4,7 +4,9 @@ All the heavy lifting (DB access, survev.de/NeatQueue API calls, image rendering
 components) lives in the sibling modules below — this file just wires it together.
 """
 import asyncio
+import math
 import re
+import time
 from datetime import datetime, timezone
 
 import aiohttp
@@ -71,6 +73,9 @@ from survev_client import backfill_missing_slugs, run_survev_verification
 
 _console_listener_started = False
 SLUG_BACKFILL_INTERVAL_MINUTES = 30
+QUEUE_MENTION_COOLDOWN_SECONDS = 30
+_queue_mention_busy: set[tuple[int, int]] = set()
+_queue_mention_cooldowns: dict[tuple[int, int], float] = {}
 
 
 @tasks.loop(minutes=SLUG_BACKFILL_INTERVAL_MINUTES)
@@ -515,8 +520,70 @@ async def post_queue_result(message: discord.Message, match_id: str):
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
 
 
+async def reply_to_queue_mention(message: discord.Message) -> bool:
+    """Reply to human mentions in queue channels without consuming automatic result tracking."""
+    if message.guild is None or message.author.bot or message.webhook_id is not None or bot.user is None:
+        return False
+    match = re.fullmatch(r"queue-([0-9]+)", getattr(message.channel, "name", ""))
+    if match is None:
+        return False
+    # Require an explicit user mention in the text, not @everyone, a role, or a reply's implicit ping.
+    if not any(user.id == bot.user.id for user in message.mentions):
+        return False
+    if re.search(rf"<@!?{bot.user.id}>", message.content) is None:
+        return False
+
+    match_id = match.group(1)
+    key = (message.guild.id, message.channel.id)
+    now = time.monotonic()
+    for expired_key, deadline in list(_queue_mention_cooldowns.items()):
+        if deadline <= now:
+            del _queue_mention_cooldowns[expired_key]
+    reply_options = {"allowed_mentions": discord.AllowedMentions.none(), "mention_author": False}
+
+    try:
+        if key in _queue_mention_busy:
+            await message.reply("I'm already fetching stats for this queue. Please wait.", **reply_options)
+            return True
+        remaining = _queue_mention_cooldowns.get(key, now) - now
+        if remaining > 0:
+            await message.reply(f"Please wait {math.ceil(remaining)}s before requesting this queue's stats again.", **reply_options)
+            return True
+
+        # Claim before the first await so simultaneous pings cannot start duplicate lookups.
+        _queue_mention_busy.add(key)
+        file = None
+        try:
+            async with message.channel.typing():
+                content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
+                if error_text:
+                    await message.reply(error_text, **reply_options)
+                else:
+                    await message.reply(
+                        content=content, file=file,
+                        view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
+                        **reply_options,
+                    )
+            _queue_mention_cooldowns[key] = time.monotonic() + QUEUE_MENTION_COOLDOWN_SECONDS
+        except discord.HTTPException:
+            raise
+        except Exception as exc:
+            print(f"[Queue Mention] Queue#{match_id} lookup failed: {type(exc).__name__}")
+            await message.reply("I couldn't fetch this queue's stats. Please try again shortly.", **reply_options)
+        finally:
+            _queue_mention_busy.discard(key)
+            if file is not None:
+                file.close()
+    except discord.HTTPException as exc:
+        # Missing send permissions or a deleted request/channel must not break the listener.
+        print(f"[Queue Mention] Could not reply for Queue#{match_id}: {type(exc).__name__}")
+    return True
+
+
 @bot.event
 async def on_message(message: discord.Message):
+    if await reply_to_queue_mention(message):
+        return
     if message.guild is not None and message.author.id != bot.user.id:
         # The winner announcement is sometimes already complete when first posted...
         match_id = find_neatqueue_embed_match(message, (QUEUE_WINNER_TITLE_PATTERN,))
