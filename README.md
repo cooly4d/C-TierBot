@@ -58,6 +58,8 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Also works while the queue is still in progress (the Game breakdown button only appears once it has finished). |
 | `/hall_of_fame` | Best single-queue records: most kills, most average damage, longest queue. Only finished queues can set records. |
 
+NeatQueue's pending `winner: -2` value is treated as an ongoing queue: the lookup runs through the current time instead of using the finished-queue duration fallback.
+
 ### Admin
 
 Admin-only commands are hidden from members without the **Administrator** permission.

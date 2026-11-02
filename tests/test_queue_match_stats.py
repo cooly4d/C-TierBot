@@ -276,6 +276,50 @@ class ImpactHelperTests(unittest.TestCase):
 
 
 class UnfinishedQueueTests(unittest.IsolatedAsyncioTestCase):
+    async def test_queue_4600_pending_winner_does_not_cut_off_rounds_after_ten_minutes(self):
+        # Queue #4600's logged times: all five rounds ended before the live lookup,
+        # but the old winner=-2 check limited it to the first two (a 2-0 score).
+        start = datetime(2026, 11, 2, 17, 34, 15, tzinfo=timezone.utc)
+        live_now = datetime(2026, 11, 2, 17, 56, 58, tzinfo=timezone.utc)
+        final_end = datetime(2026, 11, 2, 18, 0, 40, tzinfo=timezone.utc)
+        round_times = ["17:37:08.220", "17:41:45.500", "17:48:40.314", "17:51:49.744", "17:55:10.865"]
+        games = [{"guid": f"g{i}", "end_time": f"2026-11-02T{time}Z"}
+                 for i, time in enumerate(round_times, start=1)]
+        boards = {f"g{i}": lobby(winner) for i, winner in enumerate(("A", "A", "B", "A", "A"), start=1)}
+        panel = panel_message("<@101> <@102>", "<@201> <@202>")
+        panel.created_at = start
+        real_get_end = neatqueue_client.get_match_end_ms
+
+        async def fetch_in_window(_session, _token, from_ms, to_ms, diagnostics=None):
+            return [game for game in games
+                    if from_ms <= neatqueue_client.get_match_history_timestamp(game) <= to_ms]
+
+        for winner in (-2, 0):
+            with self.subTest(winner=winner):
+                history = finished_history(winner=winner, start_time=start.isoformat())
+                if winner == 0:
+                    history[0]["end_time_ms"] = int(final_end.timestamp() * 1000)
+                with fake_world(history=history, panel=panel, boards=boards):
+                    with patch.object(neatqueue_client, "datetime", wraps=datetime) as clock, \
+                            patch.object(neatqueue_client, "get_match_end_ms", AsyncMock(wraps=real_get_end)) as get_end, \
+                            patch.object(neatqueue_client, "fetch_player_matches_in_window", side_effect=fetch_in_window):
+                        clock.now.return_value = live_now
+                        result, error = await neatqueue_client.calculate_queue_match_stats("4600", 999)
+
+                self.assertIsNone(error)
+                self.assertEqual(result["team_round_wins"], [4, 1])
+                self.assertEqual(result["total_games_played"], 5)
+                self.assertEqual(result["is_final"], winner == 0)
+                self.assertEqual(result["diagnostics"]["neatqueue"]["winner"], winner)
+                if winner == -2:
+                    get_end.assert_not_awaited()
+                    self.assertEqual(result["match_end_ms"], int(live_now.timestamp() * 1000))
+                    self.assertEqual(result["diagnostics"]["window"]["end_source"], "lookup_current_time")
+                    self.assertEqual(result["diagnostics"]["finality_reason"], "history_winner_is_pending")
+                else:
+                    get_end.assert_awaited_once()
+                    self.assertEqual(result["match_end_ms"], int(final_end.timestamp() * 1000))
+
     async def test_roster_comes_from_the_panel_and_the_result_is_not_final(self):
         world = three_game_world(
             history=None,

@@ -116,7 +116,7 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         result, _ = await calculate(**three_game_world())
         self.assertTrue(result["diagnostics"]["is_final"])
         self.assertEqual(result["diagnostics"]["neatqueue"]["winner"], 0)
-        self.assertEqual(result["diagnostics"]["finality_reason"], "history_winner_is_not_null")
+        self.assertEqual(result["diagnostics"]["finality_reason"], "history_winner_is_not_null_or_pending")
 
     async def test_end_boundary_reports_which_source_was_used(self):
         edited_at = datetime.fromtimestamp(END_MS / 1000, timezone.utc)

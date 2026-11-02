@@ -346,15 +346,15 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         entries = extract_neatqueue_entries(nq_data) if nq_data else []
         match = entries[0] if entries else None
 
-        # NeatQueue creates the history record early (after the first game) and does NOT keep updating
-        # it as a Best-of-N series continues — only "winner" gets set once the whole series concludes.
-        # So an entry existing isn't enough; only trust it once it actually has a decided winner.
-        is_finished = match is not None and get_nested_value(match, "winner") is not None
+        # NeatQueue can return winner=-2 while a series is still running. Treat it as
+        # pending so live lookups end at "now", rather than a finished-match fallback.
+        winner = get_nested_value(match, "winner")
+        is_finished = match is not None and winner not in (None, -2)
         diagnostics["neatqueue"] = {
             "history_lookup_failed": error is not None,
             "entry_count": len(entries),
             "selected_game_number": get_match_game_number(match),
-            "winner": get_nested_value(match, "winner"),
+            "winner": winner,
             "winner_message_id": get_nested_value(match, "winner_message"),
             "winner_channel_id": get_nested_value(match, "winner_channel"),
             "history_start_ms": get_match_start_ms(match),
@@ -362,7 +362,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         }
         diagnostics["is_final"] = is_finished
         diagnostics["finality_reason"] = (
-            "history_winner_is_not_null" if is_finished else
+            "history_winner_is_not_null_or_pending" if is_finished else
+            "history_winner_is_pending" if winner == -2 else
             "history_winner_is_null" if match is not None else "no_history_entry"
         )
 
