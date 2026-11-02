@@ -20,7 +20,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 - **Leaderboards** for kills, wins, games and damage (weekly and monthly), plus a Golden Fries rich list.
 - **Automatic scrim stats.** When a [NeatQueue](https://neatqueue.com) game finishes, the bot posts a results image with per-player kills, damage and survev.de impact score, the series score, and each team's roster. A **Game breakdown** button under it shows every game on its own.
-- **Player profiles, inventory, and shop viewers** rendered as images, so nobody has to open the site. Profiles and comparisons also show each player's survev.de Squad tier.
+- **Player profiles, history, inventory, and shop viewers** rendered as images, so nobody has to open the site. Profiles and comparisons also show each player's survev.de Squad tier.
 - **Hall of Fame** for the best single-queue performances ever recorded (finished queues only).
 - **Catch-up on restart.** If the bot was offline when a queue finished, it finds the missed matches and posts them when it comes back.
 
@@ -47,6 +47,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | :--- | :--- |
 | `/profile [member]` | Cached NeatQueue stats: 4v4 play time, average damage, and average impact (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). The tier needs a linked account. |
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
+| `/history [member]` | Recent 4v4 queue history card (last 10 finished queues) with a trend chart and buttons to switch between Damage, Impact, and Kills. |
 | `/inventory [member]` | Paged inventory image with a rarity filter. |
 | `/goldenfries [member]` | Golden Fries balance. |
 | `/market [member]` | Shop offers image with buttons to switch between Daily, Weekly, and All. |
@@ -55,12 +56,8 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Also works while the queue is still in progress (the Game breakdown button only appears once it has finished). |
+| `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Ongoing queues show **IN PROGRESS** above the score and **Team N leads** (or **No team leading**). The Game breakdown button only appears once the queue has finished. |
 | `/hall_of_fame` | Best single-queue records: most kills, most average damage, longest queue. Only finished queues can set records. |
-
-NeatQueue's pending `winner: -2` value is treated as an ongoing queue: the lookup runs through the current time instead of using the finished-queue duration fallback.
-
-If the ongoing queue's Discord panel cannot be found or read, the bot uses the NeatQueue history entry's roster and start time when available. Logs record the roster source and history roster counts to help diagnose missing data.
 
 ### Admin
 
@@ -151,9 +148,7 @@ Optional settings:
 python leaderboard_bot.py
 ```
 
-Slash commands are synced on startup. The SQLite database (`leaderboard.db`) and a `log/` folder are created automatically in the working directory.
-
-Each `/queue_stats` JSON log includes the result and lookup diagnostics: whether the bot treated the queue as finished and why, the NeatQueue winner value, the lookup time window and its sources, each linked player's returned game IDs and timestamps, API page status/completion, and each candidate round's inclusion or rejection reason and scoreboard availability. Failed lookups retain the diagnostics collected before the error. These diagnostics contain no access tokens, authorization headers, or raw API response bodies. When reporting a live-score discrepancy, keep both the in-progress and final command logs.
+Slash commands are synced on startup. The SQLite database (`leaderboard.db`) and a `log/` folder are created automatically in the working directory. Each `/queue_stats` run writes a diagnostic JSON log to `log/` (without tokens or raw API payloads) to help troubleshoot live vs. final score lookups.
 
 Then, in Discord, run `/setup` in your NeatQueue results channel and ask players to `/verify`.
 

@@ -232,6 +232,7 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 ### 5.1 Top Header Banner (`_draw_header_gradient`)
 - **Structure:** Full-width `1600 x 210` horizontal strip at `y = 0` with a vertical line-by-line interpolated gradient from `QUEUE_IMG_HEADER_BG` (`#182137`) to `QUEUE_IMG_HEADER_GRADIENT_END` (`#223049`).
 - **Queue Result Header Layout:**
+  - **Ongoing queue status:** When `is_final` is false, display `IN PROGRESS` centered above the series score (`x = 800`, text top `y = 48`, `30px` bold, `QUEUE_IMG_ACCENT`, no container). The left subtitle reads `Team N leads`, or `No team leading` when there is no leader. Finished cards omit this status and retain `Team N Wins` / `Result unknown`.
   - **Left Column (`x = 44`):** Match ID (`#3674`) at `y = 28`, Winner subtitle (`Team 1 Wins`) at `y = 96`, Match Duration / Games Played metadata at `y = 152`.
   - **Center Scoreboard (`x = centered`, `y = 88`):** Large `72px` bold round score (`left_score - right_score`), where the winning side's digit is colored `QUEUE_IMG_WIN` and the losing side's digit is colored `QUEUE_IMG_LOSE`, separated by `" - "` in `QUEUE_IMG_TEXT`.
   - **Right Column (`MATCH TIMELINE`, `x = 996`, `y = 32`, `560 x 146`):** Displayed when `match_history` is present. Features centered `"MATCH TIMELINE"` header at `y + 14`, horizontal axis at `y + 74` (`28px` horizontal inset), color-coded game outcome dots (`G1`, `G2`, …), and an outer `QUEUE_IMG_ACCENT` ring highlighting the final game.

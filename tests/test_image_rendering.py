@@ -1,7 +1,8 @@
 import io
 import unittest
+from unittest.mock import patch
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 import image_utils
 from image_utils import (
@@ -83,6 +84,33 @@ class ImpactColumnLayoutTests(unittest.TestCase):
         image = decode(generate_queue_result_image("3674", [team_a(), []], 0, self.HISTORY, [2, 1]))
 
         self.assertEqual(image.width, image_utils.QUEUE_IMG_WIDTH)
+
+
+class QueueProgressLabelTests(unittest.TestCase):
+    def test_live_and_final_cards_draw_the_appropriate_status_and_result_text(self):
+        original_text = ImageDraw.ImageDraw.text
+        for is_final, leader, expected in ((False, 1, "Team 2 leads"),
+                                           (False, None, "No team leading"),
+                                           (True, 1, "Team 2 Wins")):
+            with self.subTest(is_final=is_final, leader=leader):
+                drawn = []
+
+                def capture(draw, xy, text, *args, **kwargs):
+                    drawn.append((text, xy))
+                    return original_text(draw, xy, text, *args, **kwargs)
+
+                with patch.object(ImageDraw.ImageDraw, "text", new=capture):
+                    rendered = decode(generate_queue_result_image(
+                        "4603", [team_a(), team_b()], leader, [True, False, True],
+                        [1, 2] if leader is not None else [1, 1], is_final=is_final))
+                self.assertEqual(rendered.width, image_utils.QUEUE_IMG_WIDTH)
+                texts = dict(drawn)
+                self.assertIn(expected, texts)
+                self.assertEqual("IN PROGRESS" in texts, not is_final)
+                if not is_final:
+                    self.assertNotIn("Team 2 Wins", texts)
+                    self.assertEqual(texts["IN PROGRESS"][0], image_utils.QUEUE_IMG_WIDTH)
+                    self.assertLess(texts["IN PROGRESS"][1], texts[" - "][1])
 
 
 class ImpactCellTests(unittest.TestCase):

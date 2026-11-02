@@ -222,6 +222,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_result.get("match_history"),
         match_result.get("team_round_wins"),
         duration_ms=match_result.get("duration_ms"),
+        is_final=bool(match_result.get("is_final")),
     )
     file = discord.File(image_buffer, filename=queue_result_filename(match_id))
 

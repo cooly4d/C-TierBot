@@ -324,6 +324,7 @@ def _render_queue_card(
     panel_winner_index: int | None,
     match_history: list[bool | None] | None,
     highlight_index: int | None,
+    status_text: str = "",
 ) -> BytesIO:
     """Draws one queue card: a header (title, result line, score, game timeline) above one table panel per team.
     The series result image and the single-game card share this and differ only in what they pass in."""
@@ -359,6 +360,10 @@ def _render_queue_card(
 
     draw.text((QUEUE_IMG_PADDING * S, 28 * S), title, font=title_font, fill=QUEUE_IMG_TEXT)
     draw.text((QUEUE_IMG_PADDING * S, 96 * S), subtitle, font=subtitle_font, fill=subtitle_color)
+
+    if status_text:
+        draw.text((QUEUE_IMG_WIDTH * S / 2, 48 * S), status_text,
+                  font=header_font, fill=QUEUE_IMG_ACCENT, anchor="mt")
 
     if match_history:
         history_count = len(match_history)
@@ -588,12 +593,15 @@ def generate_queue_result_image(
     match_history: list[bool | None] | None = None,
     team_round_wins: list[int] | None = None,
     duration_ms: int | None = None,
+    *,
+    is_final: bool = True,
 ) -> BytesIO:
     num_teams = max(len(teams), 1)
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
-        subtitle, subtitle_color = f"Team {winning_team_index + 1} Wins", QUEUE_IMG_WIN
+        result_word = "Wins" if is_final else "leads"
+        subtitle, subtitle_color = f"Team {winning_team_index + 1} {result_word}", QUEUE_IMG_WIN
     else:
-        subtitle, subtitle_color = "Result unknown", QUEUE_IMG_MUTED
+        subtitle, subtitle_color = "Result unknown" if is_final else "No team leading", QUEUE_IMG_MUTED
 
     if team_round_wins is not None and len(team_round_wins) == num_teams:
         team_scores = team_round_wins
@@ -626,6 +634,7 @@ def generate_queue_result_image(
         panel_winner_index=winning_team_index,
         match_history=match_history,
         highlight_index=len(match_history) - 1 if match_history else None,
+        status_text="" if is_final else "IN PROGRESS",
     )
 
 

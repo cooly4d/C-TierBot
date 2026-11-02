@@ -1,0 +1,96 @@
+# AGENTS.md — Operating Instructions for Coding Agents
+
+These instructions govern **all AI coding agents** working in this repository (including **Google Antigravity**, **Claude Code**, and **OpenAI Codex**) across all development machines.
+
+---
+
+## Starting a Session
+
+1. **Read Shared Context First:**
+   - Always read [`AGENTS.md`](AGENTS.md) and [`MEMORY.md`](MEMORY.md) before starting meaningful work.
+   - If your task involves Pillow image rendering, embeds, or UI components, also read [`design-system/MASTER.md`](design-system/MASTER.md).
+   - If your task involves host terminal commands, also read [`HOST_COMMANDS.md`](HOST_COMMANDS.md).
+2. **Inspect Git State:**
+   - Run `git status`, `git diff`, and `git log -n 5 --oneline` at the start of a session to see recent commits, uncommitted work from another agent or computer, or work-in-progress changes.
+3. **Understand Before Modifying:**
+   - Read the relevant source files and tests before suggesting or making changes.
+   - Cross-check the actual codebase against [`MEMORY.md`](MEMORY.md) rather than blindly trusting potentially outdated notes. If you find a discrepancy between the code and `MEMORY.md`, verify which is authoritative and update `MEMORY.md` accordingly.
+
+---
+
+## Working on the Project
+
+1. **Respect Approved Requirements and Decisions:**
+   - Follow all architectural patterns, visual rules, and user decisions documented in [`MEMORY.md`](MEMORY.md) and [`design-system/MASTER.md`](design-system/MASTER.md).
+   - **Never reintroduce explicitly rejected features or designs**, including:
+     - The summary callout banner / podium layout on `/leaderboard_season`
+     - A bordered container box around the center series score on queue result cards
+     - `" (unlinked)"` text suffixes on queue cards (use the vector broken-chain icon)
+     - Impact score explanation subtext on main queue result Discord messages or `/history` footers
+     - The `Oldest ───► Newest` label on `/history` sparklines
+     - The removed `/queueresults` alias command or split `/market` subcommands
+2. **Stay Within Scope:**
+   - Do not make unrelated code changes, opportunistic refactors, or unrequested visual tweaks.
+   - Do not add features, speculative improvements, or your own suggestions to the **Approved TODO List** in `MEMORY.md` without the user's explicit approval.
+     - *What counts as approval:* A direct request from the user to implement something, or explicit user acceptance of an agent's suggestion.
+     - *What does NOT count as approval:* Discussing, considering, diagnosing, or exploring an idea.
+3. **Project-Specific Technical Guardrails:**
+   - **Discord UI Interactions (`leaderboard_bot.py` & `discord_ui.py`):** All interactive component clicks (`custom_id`s) are routed through `log_interaction(interaction)` in [`leaderboard_bot.py`](leaderboard_bot.py). Leave `@discord.ui.button` / `@discord.ui.select` method bodies in [`discord_ui.py`](discord_ui.py) as `pass`. Never handle an interaction in both places (causes Discord HTTP `40060: Interaction has already been acknowledged`).
+   - **Non-Blocking Event Loop:** Offload all Pillow (`PIL`) image generation calls to `asyncio.to_thread(...)` and bound concurrent external API bursts with `API_SEM` (`asyncio.Semaphore(5)`).
+   - **Cross-Platform Fonts:** Keep font paths anchored to `_BASE_DIR` in [`bot_config.py`](bot_config.py) (`QuattrocentoSans-Bold.ttf`) so rendering is identical on Windows and Linux (PebbleHost).
+   - **Privacy & Security in Logs:** Never log or persist `access_token`s, `Authorization` headers, OAuth secrets, or raw API response bodies in `log/` diagnostic JSON files or console output.
+   - **Console Utilities Over One-Off Scripts:** When the user asks for an internal inspection or analytics tool, prefer adding a host console command in [`console_service.py`](console_service.py) (and documenting it in [`HOST_COMMANDS.md`](HOST_COMMANDS.md)) rather than cluttering the repository root with standalone scripts.
+4. **Verify Functionality:**
+   - Always run the unit test suite before concluding code changes:
+     ```bash
+     python -m unittest discover tests
+     ```
+   - Add or update unit tests in `tests/` when changing business logic, SQLite queries, interaction routing, or image rendering.
+   - Run `git diff --check` to ensure no whitespace errors or conflict markers are introduced.
+5. **Keep Documentation Consistent:**
+   - Maintain a clean separation of responsibilities across documentation files:
+     - [`README.md`](README.md): Human-facing project introduction, command reference, installation, usage, and general documentation.
+     - [`MEMORY.md`](MEMORY.md): Internal project knowledge, architectural context, approved decisions, approved TODO list, known issues, and handover notes.
+     - [`AGENTS.md`](AGENTS.md): Permanent operating instructions for coding agents.
+     - [`design-system/MASTER.md`](design-system/MASTER.md): Locked visual design tokens, typography, and component layout specs.
+     - [`HOST_COMMANDS.md`](HOST_COMMANDS.md): Host terminal command reference.
+
+---
+
+## Maintaining Memory
+
+1. **Shared Source of Truth:**
+   - Treat [`MEMORY.md`](MEMORY.md) as the shared, persistent project memory across Antigravity, Claude Code, and OpenAI Codex on all machines.
+2. **When to Update `MEMORY.md`:**
+   - Update `MEMORY.md` whenever meaningful technical discoveries, newly approved decisions, implementation changes, or task completions occur.
+   - Record newly approved tasks in the **Approved TODO List** with a clear status (`Not started`, `In progress`, `Blocked`, or `Completed`), context, and acceptance criteria.
+   - Preserve completed tasks and historical decisions rather than deleting them. Never silently remove or alter an approved task.
+3. **Keep Memory Concise and Structured:**
+   - Keep `MEMORY.md` structured, factual, and easy to scan. Do not turn it into a chronological conversation transcript.
+   - Put detailed visual specifications in [`design-system/MASTER.md`](design-system/MASTER.md), host console syntax in [`HOST_COMMANDS.md`](HOST_COMMANDS.md), and user-facing setup/command docs in [`README.md`](README.md) rather than bloating `MEMORY.md`.
+
+---
+
+## Handover Between Agents
+
+1. **Zero-Context Handover Standard:**
+   - Never assume the next agent has access to your private conversation history, IDE state, or agent-specific memory (`~/.gemini`, `.claude`, etc.).
+   - Before finishing a meaningful working session, update the **Current Focus and Handover** section of [`MEMORY.md`](MEMORY.md).
+2. **What to Record in Handover Notes:**
+   - What was changed and why it was changed.
+   - What was tested (and how to verify it).
+   - What remains outstanding or partially complete.
+   - Any uncommitted changes, temporary files, or potential merge conflicts the next agent should be aware of.
+
+---
+
+## Git and Multiple Computers
+
+1. **Track Shared Memory in Git:**
+   - Both [`MEMORY.md`](MEMORY.md) and [`AGENTS.md`](AGENTS.md) must remain tracked by Git at the repository root so context syncs cleanly across computers.
+   - Never store important project knowledge exclusively in local, untracked, or agent-specific directories.
+2. **Protect Multi-Agent / Multi-Machine Work:**
+   - Inspect `git status` and `git diff` before editing files so you do not accidentally overwrite uncommitted work left by another agent or pulled from another machine.
+3. **Commit & Push Policy:**
+   - **Do not automatically `git commit` or `git push` unless the user explicitly asks you to.** Leave changes staged or in the working tree for user review unless instructed otherwise.
+

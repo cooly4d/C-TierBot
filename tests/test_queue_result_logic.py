@@ -106,13 +106,21 @@ async def build_payload(teams=None, record_lines=(), **result_overrides):
     match_result.update(result_overrides)
     with patch("queue_stats_service.calculate_queue_match_stats", new=AsyncMock(return_value=(match_result, None))), \
             patch("queue_stats_service.resolve_queue_user_display_names", new=AsyncMock()), \
-            patch("queue_stats_service.generate_queue_result_image", return_value=io.BytesIO(b"png")), \
+            patch("queue_stats_service.generate_queue_result_image", return_value=io.BytesIO(b"png")) as render, \
             patch("queue_stats_service.cache_player_queue_stats"), \
             patch("queue_stats_service.save_queue_result") as save, \
             patch("queue_stats_service.check_queue_hall_of_fame_records", return_value=list(record_lines)) as hof:
         content, _file, error, _result = await build_queue_stats_payload("3674", 999)
     assert error is None, error
-    return SimpleNamespace(content=content, hof=hof, save=save)
+    return SimpleNamespace(content=content, hof=hof, save=save, render=render)
+
+
+class QueueImageFinalityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_payload_passes_finality_to_image_renderer(self):
+        for finality in (True, False, None):
+            with self.subTest(finality=finality):
+                built = await build_payload(is_final=finality)
+                self.assertEqual(built.render.call_args.kwargs["is_final"], bool(finality))
 
 
 class HallOfFameFinalityTests(unittest.IsolatedAsyncioTestCase):
