@@ -245,15 +245,21 @@ async def _run_verification_flow(discord_user_id: int, state: dict):
             await _notify_all(senders, content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
 
 
-async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int) -> list[dict]:
+async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int,
+                                        diagnostics: dict | None = None) -> list[dict]:
     """Pages through a verified player's own match history and returns the raw match objects (with guid etc.)."""
     headers = {"Authorization": f"Bearer {access_token}"}
 
     all_matches = []
     offset = 0
     limit = 200
+    if diagnostics is not None:
+        diagnostics.update({"pages": [], "pagination_complete": False})
 
     while True:
+        page = {"offset": offset, "limit": limit}
+        if diagnostics is not None:
+            diagnostics["pages"].append(page)
         payload = {
             "teamModeFilter": 7,  # All modes
             "from": from_ms,
@@ -264,20 +270,27 @@ async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_
 
         try:
             async with session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
+                page["http_status"] = resp.status
                 if resp.status != 200:
+                    page["error"] = "http_error"
                     break
                 matches = await resp.json()
-        except (aiohttp.ClientError, ValueError):
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            page["error"] = type(exc).__name__
             break
 
         # Stop if no matches are returned
-        if not matches or not isinstance(matches, list):
+        if not isinstance(matches, list):
+            page["error"] = "unexpected_response_type"
             break
+        page["returned_count"] = len(matches)
 
         all_matches.extend(matches)
 
         # Stop if we received less than the maximum request count (we reached the last page)
         if len(matches) < limit:
+            if diagnostics is not None:
+                diagnostics["pagination_complete"] = True
             break
 
         # Move to the next page
@@ -408,14 +421,22 @@ def extract_squad_tier(stats: dict | None) -> dict | None:
     return None
 
 
-async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str) -> list[dict] | None:
+async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str,
+                                 diagnostics: dict | None = None) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
     with no survev.de account at all (they still show up with a username, just slug=None)."""
+    if diagnostics is None:
+        diagnostics = {}
     try:
         async with session.post("https://survev.de/api/match_data", json={"gameId": guid}) as resp:
+            diagnostics["http_status"] = resp.status
             if resp.status != 200:
+                diagnostics["error"] = "http_error"
                 return None
             data = await resp.json()
-    except aiohttp.ClientError:
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+        diagnostics["error"] = type(exc).__name__
         return None
+    if not isinstance(data, list):
+        diagnostics["error"] = "unexpected_response_type"
     return data if isinstance(data, list) else None

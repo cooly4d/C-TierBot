@@ -82,9 +82,10 @@ def write_queue_stats_command_log(
         "error": error_text,
         "result_summary": None,
         "individual_games": [],
+        "diagnostics": match_result.get("diagnostics") if match_result else None,
     }
 
-    if match_result:
+    if match_result and "teams" in match_result:
         teams = match_result.get("teams") or []
         payload["result_summary"] = {
             "winning_team_index": match_result.get("winning_team_index"),
@@ -93,6 +94,10 @@ def write_queue_stats_command_log(
             "total_games_played": match_result.get("total_games_played"),
             "team_count": len(teams),
             "players_per_team": [len(team) for team in teams],
+            "is_final": match_result.get("is_final"),
+            "match_start_ms": match_result.get("match_start_ms"),
+            "match_end_ms": match_result.get("match_end_ms"),
+            "duration_ms": match_result.get("duration_ms"),
         }
         payload["individual_games"] = match_result.get("individual_games") or []
 
@@ -197,14 +202,16 @@ def build_queue_snapshot(match_id: str, match_result: dict) -> dict:
 
 async def build_queue_stats_payload(match_id: str, guild_id: int):
     """Runs the NeatQueue/survev.de cross-reference and returns either
-    (content, discord.File, None, match_result) on success or (None, None, error_text, None) on failure."""
-    match_result, error = await calculate_queue_match_stats(match_id, guild_id)
+    (content, discord.File, None, match_result) on success. On failure the fourth value
+    carries diagnostics only, so the command can still log why the lookup failed."""
+    diagnostics = {}
+    match_result, error = await calculate_queue_match_stats(match_id, guild_id, diagnostics=diagnostics)
     if error:
-        return None, None, f"❌ {error}", None
+        return None, None, f"❌ {error}", {"diagnostics": diagnostics}
 
     teams = match_result["teams"]
     if not any(teams):
-        return None, None, "This NeatQueue match has no player roster to show stats for.", None
+        return None, None, "This NeatQueue match has no player roster to show stats for.", {"diagnostics": diagnostics}
 
     await resolve_queue_user_display_names(teams, bot)
     image_buffer = await asyncio.to_thread(

@@ -137,7 +137,12 @@ def get_match_start_ms(match):
     return None
 
 
-async def get_match_end_ms(match, default_start_ms: int):
+async def get_match_end_ms(match, default_start_ms: int, diagnostics: dict | None = None):
+    def record_end(value, source):
+        if diagnostics is not None:
+            diagnostics["end_source"] = source
+        return value
+
     # NeatQueue edits the winner message in place once the whole series (all games) has finished, so that
     # message's actual edited_at (fetched live) is the most reliable end boundary we can get — far better
     # than guessing a fixed duration. Every candidate below is clamped to be after start_ms, since a stale
@@ -151,23 +156,24 @@ async def get_match_end_ms(match, default_start_ms: int):
             end_dt = winner_message.edited_at or winner_message.created_at
             end_ms = int(end_dt.timestamp() * 1000) + 5000
             if end_ms > default_start_ms:
-                return end_ms
-        except (discord.HTTPException, discord.Forbidden, discord.NotFound, TypeError, ValueError, AttributeError):
-            pass
+                return record_end(end_ms, "winner_message_edited_at" if winner_message.edited_at else "winner_message_created_at")
+        except (discord.HTTPException, discord.Forbidden, discord.NotFound, TypeError, ValueError, AttributeError) as exc:
+            if diagnostics is not None:
+                diagnostics["winner_message_lookup_error"] = type(exc).__name__
 
     if winner_message_id:
         try:
             end_dt = discord.utils.snowflake_time(int(winner_message_id))
             end_ms = int(end_dt.timestamp() * 1000) + 5000
             if end_ms > default_start_ms:
-                return end_ms
+                return record_end(end_ms, "winner_message_snowflake")
         except (TypeError, ValueError):
             pass
 
     end_ms = get_nested_value(match, "end_time_ms")
     parsed_end = parse_neatqueue_time(end_ms)
     if parsed_end is not None and parsed_end > default_start_ms:
-        return parsed_end
+        return record_end(parsed_end, "neatqueue_end_time_ms")
 
     player_timestamps = []
     for team in collect_neatqueue_teams(match):
@@ -180,9 +186,9 @@ async def get_match_end_ms(match, default_start_ms: int):
     if player_timestamps:
         latest = max(player_timestamps) + 5000
         if latest > default_start_ms:
-            return latest
+            return record_end(latest, "latest_player_timestamp")
 
-    return default_start_ms + QUEUE_MATCH_FALLBACK_DURATION_MS
+    return record_end(default_start_ms + QUEUE_MATCH_FALLBACK_DURATION_MS, "fallback_duration")
 
 
 NEATQUEUE_MATCH_ID_KEYS = ("match_id", "id", "matchId", "game_id", "gameId", "server_match_id", "game_number", "gameNumber")
@@ -321,10 +327,20 @@ def parse_impact_score(raw) -> int | float | None:
     return raw
 
 
-async def calculate_queue_match_stats(match_id: str, guild_id: int):
+async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics: dict | None = None):
     """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
     and which team_id they were on), then overlays a Discord display name wherever the player's slug
     matches a /verify'd user. Anyone without a linked account just keeps their survev.de username."""
+    if diagnostics is None:
+        diagnostics = {}
+    diagnostics.update({
+        "schema_version": 1,
+        "lookup_started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "window": {},
+        "anchors": [],
+        "round_selection": [],
+    })
+    window = diagnostics["window"]
     async with aiohttp.ClientSession() as session:
         nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
         entries = extract_neatqueue_entries(nq_data) if nq_data else []
@@ -334,6 +350,21 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         # it as a Best-of-N series continues — only "winner" gets set once the whole series concludes.
         # So an entry existing isn't enough; only trust it once it actually has a decided winner.
         is_finished = match is not None and get_nested_value(match, "winner") is not None
+        diagnostics["neatqueue"] = {
+            "history_lookup_failed": error is not None,
+            "entry_count": len(entries),
+            "selected_game_number": get_match_game_number(match),
+            "winner": get_nested_value(match, "winner"),
+            "winner_message_id": get_nested_value(match, "winner_message"),
+            "winner_channel_id": get_nested_value(match, "winner_channel"),
+            "history_start_ms": get_match_start_ms(match),
+            "history_end_ms": parse_neatqueue_time(get_nested_value(match, "end_time_ms")),
+        }
+        diagnostics["is_final"] = is_finished
+        diagnostics["finality_reason"] = (
+            "history_winner_is_not_null" if is_finished else
+            "history_winner_is_null" if match is not None else "no_history_entry"
+        )
 
         if is_finished:
             is_final = True
@@ -343,7 +374,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             if start_ms is None:
                 return None, "NeatQueue match entry is missing a recognizable start time."
 
-            end_ms = await get_match_end_ms(match, start_ms)
+            window["start_source"] = "neatqueue_history"
+            end_ms = await get_match_end_ms(match, start_ms, diagnostics=window)
 
             teams = collect_neatqueue_teams(match)
             if not teams:
@@ -354,8 +386,14 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             # NeatQueue's own panel/winner Discord message: its post time is the start, and "now" is
             # the end, so /queue_stats still works mid-queue instead of erroring out.
             panel_message = await find_queue_panel_message(guild_id, match_id)
+            diagnostics["panel"] = {"found": panel_message is not None}
             if panel_message is None:
                 return None, error or "NeatQueue history contains no match entries."
+            diagnostics["panel"].update({
+                "message_id": getattr(panel_message, "id", None),
+                "channel_id": getattr(getattr(panel_message, "channel", None), "id", None),
+                "created_at_utc": panel_message.created_at.isoformat(),
+            })
 
             teams = None
             for embed in panel_message.embeds:
@@ -367,7 +405,16 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                 return None, "Couldn't read the player roster from NeatQueue's message for this queue."
 
             start_ms = int(panel_message.created_at.timestamp() * 1000)
+            window["start_source"] = "panel_created_at"
             end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            window["end_source"] = "lookup_current_time"
+
+        window.update({
+            "from_ms": start_ms,
+            "to_ms": end_ms,
+            "from_utc": datetime.fromtimestamp(start_ms / 1000, timezone.utc).isoformat(),
+            "to_utc": datetime.fromtimestamp(end_ms / 1000, timezone.utc).isoformat(),
+        })
 
         # Remember NeatQueue's own team ordering (by discord_id) so our survev.de-team_id-based grouping
         # can be displayed in the same left/right order NeatQueue itself uses.
@@ -395,14 +442,22 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
                     anchor_candidates.append((discord_id, token))
 
         async def _fetch_anchor(discord_id: int, token: str):
+            anchor_diagnostics = {"discord_id": discord_id}
             async with sem:
-                own_matches = await fetch_player_matches_in_window(session, token, start_ms, end_ms)
-                return discord_id, own_matches
+                own_matches = await fetch_player_matches_in_window(
+                    session, token, start_ms, end_ms, diagnostics=anchor_diagnostics)
+                anchor_diagnostics["matches"] = [
+                    {"guid": m.get("guid"), "timestamp_ms": get_match_history_timestamp(m)}
+                    for m in own_matches
+                ]
+                anchor_diagnostics["returned_count"] = len(own_matches)
+                return discord_id, own_matches, anchor_diagnostics
 
         anchor_results = await asyncio.gather(*(_fetch_anchor(did, tok) for did, tok in anchor_candidates))
         anchor_guid_sets = []
         anchor_matches_by_discord: dict[int, list[dict]] = {}
-        for discord_id, own_matches in anchor_results:
+        for discord_id, own_matches, anchor_diagnostics in anchor_results:
+            diagnostics["anchors"].append(anchor_diagnostics)
             guids = {m.get("guid") for m in own_matches if m.get("guid")}
             if guids:
                 anchor_guid_sets.append(guids)
@@ -411,16 +466,22 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
         if not anchor_guid_sets:
             return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
 
-        queue_guids = set.intersection(*anchor_guid_sets) if len(anchor_guid_sets) > 1 else anchor_guid_sets[0]
+        shared_guids = set.intersection(*anchor_guid_sets)
+        candidate_guids = set.union(*anchor_guid_sets)
+        queue_guids = shared_guids
+        diagnostics["selection_strategy"] = "intersection_nonempty_histories" if len(anchor_guid_sets) > 1 else "single_history"
         if not queue_guids:
             # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
-            queue_guids = set.union(*anchor_guid_sets)
+            queue_guids = candidate_guids
+            diagnostics["selection_strategy"] = "union_fallback_no_shared_games"
+        diagnostics["shared_guids"] = sorted(shared_guids)
+        diagnostics["candidate_guids"] = sorted(candidate_guids)
 
         guid_timestamps: dict[str, int] = {}
         for own_matches in anchor_matches_by_discord.values():
             for own_match in own_matches:
                 guid = own_match.get("guid")
-                if guid is None or guid not in queue_guids:
+                if guid is None or guid not in candidate_guids:
                     continue
                 timestamp = get_match_history_timestamp(own_match) or 0
                 if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
@@ -433,11 +494,29 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
 
         # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
         # player (keyed by slug when present, else username — covers accounts with no public slug).
+        scoreboard_diagnostics = {}
+
         async def _fetch_board(guid: str):
+            scoreboard_diagnostics[guid] = {}
             async with sem:
-                return guid, await fetch_public_match_data(session, guid)
+                return guid, await fetch_public_match_data(session, guid, diagnostics=scoreboard_diagnostics[guid])
 
         boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_queue_guids)))
+
+        for guid in sorted(candidate_guids, key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))):
+            board = boards_by_guid.get(guid)
+            included = guid in queue_guids
+            diagnostics["round_selection"].append({
+                "guid": guid,
+                "timestamp_ms": guid_timestamps.get(guid),
+                "included": included,
+                "reason": diagnostics["selection_strategy"] if included else "not_shared_by_all_nonempty_histories",
+                "scoreboard_requested": included,
+                "scoreboard_player_count": (len(board) if board else 0) if included else None,
+                "scoreboard_available": bool(board) if included else None,
+                "scoreboard_fetch": scoreboard_diagnostics.get(guid),
+            })
+        diagnostics["selected_guids"] = ordered_queue_guids
 
         players: dict[str, dict] = {}
         # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
@@ -618,4 +697,5 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int):
             "match_end_ms": end_ms,
             "is_final": is_final,
             "individual_games": individual_games,
+            "diagnostics": diagnostics,
         }, None

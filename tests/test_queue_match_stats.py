@@ -73,10 +73,10 @@ def fake_world(*, history=None, history_error=None, anchors=None, boards=None, t
     boards = boards or {}
     tokens = DEFAULT_TOKENS if tokens is None else tokens
 
-    async def fake_own_matches(_session, token, _start_ms, _end_ms):
+    async def fake_own_matches(_session, token, _start_ms, _end_ms, diagnostics=None):
         return anchors.get(token, [])
 
-    async def fake_board(_session, guid):
+    async def fake_board(_session, guid, diagnostics=None):
         return boards.get(guid)
 
     with contextlib.ExitStack() as stack:

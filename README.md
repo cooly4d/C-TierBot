@@ -149,6 +149,8 @@ python leaderboard_bot.py
 
 Slash commands are synced on startup. The SQLite database (`leaderboard.db`) and a `log/` folder are created automatically in the working directory.
 
+Each `/queue_stats` JSON log includes the result and lookup diagnostics: whether the bot treated the queue as finished and why, the NeatQueue winner value, the lookup time window and its sources, each linked player's returned game IDs and timestamps, API page status/completion, and each candidate round's inclusion or rejection reason and scoreboard availability. Failed lookups retain the diagnostics collected before the error. These diagnostics contain no access tokens, authorization headers, or raw API response bodies. When reporting a live-score discrepancy, keep both the in-progress and final command logs.
+
 Then, in Discord, run `/setup` in your NeatQueue results channel and ask players to `/verify`.
 
 ## Host console
