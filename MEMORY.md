@@ -193,6 +193,7 @@ The following decisions were explicitly requested or approved by the user across
 
 | Task | Status | Context & Acceptance Criteria |
 | :--- | :--- | :--- |
+| **`IN PROGRESS` header on unfinished queue stats messages** | **Completed** | Requested 2026-11-03. `build_queue_stats_payload` heads unfinished queues (`is_final` falsy) with `NeatQueue#<id> - IN PROGRESS`; finished queues keep `Queue stats for NeatQueue#<id>`. Covered by a finality header test; user confirmed working live 2026-11-03. |
 | **Exclude spectators from queue teams and stats** | **Completed** | Requested 2026-11-03 after Queue `#4600` showed a spectator as a fifth Team 1 player. Rank-`999` rows are logged but never aggregated or displayed; regressions cover a spectator reusing a team's earlier `team_id`, a spectator named like a player, and zero-stat real players. Offline replay of the 4600 log: 5/4 became 4/4, score 4-1 unchanged. Local change pending deployment. |
 | **Silence queue-stat cooldown and in-flight wait replies** | **Completed** | Approved 2026-11-03. Repeated mentions and `score?` requests are consumed silently during the shared cooldown or active lookup, without a reply, DM, typing indicator, or duplicate lookup. Normal requests resume after cooldown expiry. |
 | **Show queue stats for `score?` without a bot mention** | **Completed** | Reuses the queue-channel mention handler, stats payload, and cooldown. Matches `score?` anywhere in the message, case-insensitive (widened from whole-message match 2026-11-03). Covered by trigger, exclusions, mixed-trigger cooldown/concurrency, and finished-queue tests. Local change pending deployment. |
@@ -248,7 +249,7 @@ The following decisions were explicitly requested or approved by the user across
 ### Broader `score?` Trigger (2026-11-03, local changes)
 - `reply_to_queue_mention` now uses `SCORE_QUESTION_PATTERN` (`score\?`, case-insensitive) so `score?` anywhere in a message triggers stats (e.g. "what is the score?"); `scores?`, `scoreboard?`, `underscore?`, `score ?` and `score` still do not. Mention trigger, cooldown and exclusions unchanged.
 - Diagnosed a live temp-queue channel returning Discord 403/50001 Missing Access: the bot lacked View Channel. Fixed server-side by the owners via NeatQueue `/tempchannels permissions set` for the bot role (applies to newly created channels only).
-- Stats message header for unfinished queues (`is_final` falsy) in `build_queue_stats_payload` is now `NeatQueue#<id> - IN PROGRESS`; finished queues keep `Queue stats for NeatQueue#<id>`. Applies to `/queue_stats`, mention, and `score?` replies.
+- Stats message header for unfinished queues (`is_final` falsy) in `build_queue_stats_payload` is now `NeatQueue#<id> - IN PROGRESS`; finished queues keep `Queue stats for NeatQueue#<id>`. Applies to `/queue_stats`, mention, and `score?` replies. User confirmed it working live (2026-11-03).
 - All 215 tests pass via `.venv/Scripts/python.exe -m unittest discover tests`; `git diff --check` passed. Changes in `leaderboard_bot.py`, `queue_stats_service.py`, `tests/test_queue_mentions.py`, `tests/test_queue_result_logic.py`, `README.md`, `MEMORY.md`; no commit, push, or deployment.
 
 ### Queue Stats Accuracy Re-review (2026-11-03, analysis only)
