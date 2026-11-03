@@ -313,6 +313,11 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
             entry["display_name"] = await get_user_display_name(client, discord_id)
 
 
+# survev.de saves spectators with this placeholder rank (the game server's getPlayersSortedByRank). A spectator can
+# sit in a team_id that a queue team used in an earlier game, so they must never be counted as a player.
+SURVEV_SPECTATOR_RANK = 999
+
+
 def player_identity(slug: str | None, username: str) -> str:
     """Key that identifies one survev.de player across a series' games: their account slug, else their
     lowercased name (accounts without a public slug)."""
@@ -572,6 +577,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
                     "damage_dealt": p.get("damage_dealt", 0),
                     "impact_score": impact,
                 })
+                if parsed_rank == SURVEV_SPECTATOR_RANK:
+                    continue  # kept in the game log, but never on a team or in the series stats
 
                 agg = players.setdefault(key, {
                     "username": username, "slug": slug, "team_id": p.get("team_id"),
@@ -679,8 +686,10 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             game_entry = game_details_by_guid.get(guid, {"guid": guid, "players": []})
             players_for_game = game_entry.get("players", [])
             for game_player in players_for_game:
-                # None for lobby strangers outside the two teams that were kept for display.
-                game_player["display_team_index"] = identity_to_display_index.get(game_player["identity"])
+                # None for lobby strangers outside the two teams that were kept for display, and for spectators
+                # (even one whose name matches a player, so the Game breakdown never shows them).
+                is_spectator = game_player["rank"] == SURVEV_SPECTATOR_RANK
+                game_player["display_team_index"] = None if is_spectator else identity_to_display_index.get(game_player["identity"])
             players_for_game.sort(
                 key=lambda player: (
                     player.get("rank") is None,

@@ -194,6 +194,45 @@ class FinishedQueueTests(unittest.IsolatedAsyncioTestCase):
         logged = {p["username"] for p in result["individual_games"][0]["players"]}
         self.assertTrue({"Rando1", "Rando2"} <= logged)
 
+    async def test_spectators_never_join_a_team_even_when_they_reuse_its_old_team_id(self):
+        # Queue 4600: a late spectator (rank 999) sat in the team_id team A had used in earlier games,
+        # and showed up as a fifth player on that team.
+        world = three_game_world(boards={
+            "g1": lobby("A", 10, 20), "g2": lobby("B", 4, 9),
+            "g3": lobby("A", 1, 2) + [player(None, "Watcher", 10, 999, 0, 0, impact_score=0)],
+        })
+        result, error = await calculate(**world)
+
+        self.assertIsNone(error)
+        self.assertEqual([[e["username"] for e in team] for team in result["teams"]],
+                         [["Alice", "Bob", "GuestG"], ["Carol", "Dave"]])
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        self.assertEqual(result["teams"][0][0]["stats"], {"games": 3, "wins": 2, "kills": 15, "damage": 3000, "impact": None})
+        rows = {p["username"]: p for p in result["individual_games"][2]["players"]}
+        self.assertEqual((rows["Watcher"]["rank"], rows["Watcher"]["display_team_index"]), (999, None))
+
+    async def test_a_spectator_named_like_a_player_is_left_out_of_that_players_stats(self):
+        world = three_game_world(boards={
+            "g1": lobby("A", 10, 20), "g2": lobby("B", 4, 9),
+            "g3": lobby("A", 1, 2) + [player(None, "guestg", 1, 999, 0, 0)],
+        })
+        result, _ = await calculate(**world)
+
+        guest = next(e for e in result["teams"][0] if e["username"] == "GuestG")
+        self.assertEqual(guest["stats"]["games"], 3)
+        rows = [p for p in result["individual_games"][2]["players"] if p["identity"] == "guestg"]
+        self.assertEqual(sorted((p["rank"], p["display_team_index"]) for p in rows), [(1, 0), (999, None)])
+
+    async def test_players_with_no_kills_or_damage_still_count(self):
+        world = three_game_world(boards={
+            "g1": lobby("A", 10, 20) + [player(None, "Quiet", 20, 2, 0, 0)], "g2": lobby("B", 4, 9),
+            "g3": lobby("A", 1, 2),
+        })
+        result, _ = await calculate(**world)
+
+        quiet = next(e for e in result["teams"][1] if e["username"] == "Quiet")
+        self.assertEqual(quiet["stats"], {"games": 1, "wins": 0, "kills": 0, "damage": 0, "impact": None})
+
     async def test_two_teams_both_ranked_first_leave_the_round_and_series_undecided(self):
         both_first = [player("alice", "Alice", 10, 1, 5, 1000), player("carol", "Carol", 20, 1, 4, 900)]
         world = three_game_world(anchors={"tok-101": own_games(("g1", 10))}, boards={"g1": both_first})

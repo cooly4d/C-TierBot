@@ -110,7 +110,9 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
                     message.mentions = [self.bot_user] if "<@" in content else []
                     await app.on_message(message)
                 self.assertEqual(self.payload.await_count, 1)
-                self.assertIn("30s", message.reply.await_args.args[0])
+                message.reply.assert_not_awaited()
+                message.channel.typing.assert_not_called()
+                self.process.assert_not_awaited()
 
     async def test_only_exact_queue_names_with_numeric_ids(self):
         for name in ("queue", "queue-", "queue-4607-chat", "other-queue-4607", "queue-abc", "queue-４６０７"):
@@ -167,7 +169,9 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         blocked.author.id = 888
         self.clock.return_value = 110
         await app.on_message(blocked)
-        self.assertIn("20s", blocked.reply.await_args.args[0])
+        blocked.reply.assert_not_awaited()
+        blocked.channel.typing.assert_not_called()
+        self.process.assert_not_awaited()
         self.assertEqual(self.payload.await_count, 1)
         await app.on_message(self.message(name="queue-4608", channel_id=56))
         self.assertEqual(self.payload.await_count, 2)
@@ -191,7 +195,9 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
             duplicate = self.message(content="score?")
             duplicate.mentions = []
             await app.on_message(duplicate)
-            self.assertIn("already fetching", duplicate.reply.await_args.args[0])
+            duplicate.reply.assert_not_awaited()
+            duplicate.channel.typing.assert_not_called()
+            self.process.assert_not_awaited()
             self.assertEqual(self.payload.await_count, 1)
         finally:
             release.set()

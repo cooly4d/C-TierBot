@@ -61,7 +61,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel** (for example, `queue-4607`) to get that queue's current stats as a public reply. `score?` needs no mention and matches the whole message, ignoring capitalization and surrounding whitespace. For the mention shortcut, select the actual bot mention in Discord. Ongoing queues show **IN PROGRESS**; finished queues show final results and the Game breakdown button. These channels do not need individual `/setup` registration, but the bot needs permission to view them, send replies, and attach files. The same linked-player and queue-data requirements as `/queue_stats` apply.
 
-Both shortcuts share a **30-second cooldown per channel** after a stats or lookup-error reply. Requests while a lookup is running receive a brief wait reply. Bot/webhook messages, NeatQueue's recurring winner-vote panels, and implicit reply pings do not trigger these shortcuts. Checking stats this way does not mark the queue as automatically posted. The `score?` shortcut requires the Message Content Intent described in setup below.
+Both shortcuts share a **30-second cooldown per channel** after a stats or lookup-error reply. Requests during the cooldown or while a lookup is running are silently ignored, with no wait message or DM. Bot/webhook messages, NeatQueue's recurring winner-vote panels, and implicit reply pings do not trigger these shortcuts. Checking stats this way does not mark the queue as automatically posted. The `score?` shortcut requires the Message Content Intent described in setup below.
 
 ### Admin
 

@@ -4,7 +4,6 @@ All the heavy lifting (DB access, survev.de/NeatQueue API calls, image rendering
 components) lives in the sibling modules below — this file just wires it together.
 """
 import asyncio
-import math
 import re
 import time
 from datetime import datetime, timezone
@@ -543,12 +542,11 @@ async def reply_to_queue_mention(message: discord.Message) -> bool:
     reply_options = {"allowed_mentions": discord.AllowedMentions.none(), "mention_author": False}
 
     try:
+        # Silently consume repeated requests so the cooldown cannot itself spam the channel.
         if key in _queue_mention_busy:
-            await message.reply("I'm already fetching stats for this queue. Please wait.", **reply_options)
             return True
         remaining = _queue_mention_cooldowns.get(key, now) - now
         if remaining > 0:
-            await message.reply(f"Please wait {math.ceil(remaining)}s before requesting this queue's stats again.", **reply_options)
             return True
 
         # Claim before the first await so simultaneous pings cannot start duplicate lookups.
