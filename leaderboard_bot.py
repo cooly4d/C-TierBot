@@ -521,17 +521,18 @@ async def post_queue_result(message: discord.Message, match_id: str):
 
 
 async def reply_to_queue_mention(message: discord.Message) -> bool:
-    """Reply to human mentions in queue channels without consuming automatic result tracking."""
+    """Reply to human mentions or 'score?' in queue channels without consuming automatic result tracking."""
     if message.guild is None or message.author.bot or message.webhook_id is not None or bot.user is None:
         return False
     match = re.fullmatch(r"queue-([0-9]+)", getattr(message.channel, "name", ""))
     if match is None:
         return False
-    # Require an explicit user mention in the text, not @everyone, a role, or a reply's implicit ping.
-    if not any(user.id == bot.user.id for user in message.mentions):
-        return False
-    if re.search(rf"<@!?{bot.user.id}>", message.content) is None:
-        return False
+    if message.content.strip().casefold() != "score?":
+        # Otherwise require an explicit user mention, not @everyone, a role, or a reply's implicit ping.
+        if not any(user.id == bot.user.id for user in message.mentions):
+            return False
+        if re.search(rf"<@!?{bot.user.id}>", message.content) is None:
+            return False
 
     match_id = match.group(1)
     key = (message.guild.id, message.channel.id)

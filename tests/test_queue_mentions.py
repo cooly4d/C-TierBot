@@ -51,10 +51,66 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_results_include_breakdown(self):
         self.payload.side_effect = None
         self.payload.return_value = ("Final stats", None, None, {"is_final": True})
-        message = self.message(content="stats <@!123>")
-        await app.on_message(message)
-        self.assertEqual([item.custom_id for item in message.reply.await_args.kwargs["view"].children],
-                         ["queue_result_games", "queue_result_verify"])
+        for content in ("stats <@!123>", "score?"):
+            with self.subTest(content=content):
+                app._queue_mention_cooldowns.clear()
+                message = self.message(content=content)
+                message.mentions = [self.bot_user] if "<@" in content else []
+                await app.on_message(message)
+                self.assertEqual([item.custom_id for item in message.reply.await_args.kwargs["view"].children],
+                                 ["queue_result_games", "queue_result_verify"])
+
+    async def test_score_question_without_mention_posts_live_stats(self):
+        for content in ("score?", "Score?", "SCORE?", "  score? \n"):
+            with self.subTest(content=content):
+                app._queue_mention_cooldowns.clear()
+                message = self.message(content=content)
+                message.mentions = []
+                await app.on_message(message)
+                self.payload.assert_awaited_with("4607", 10)
+                sent = message.reply.await_args.kwargs
+                self.assertEqual(sent["file"].filename, "queue_stats_4607.png")
+                self.assertEqual([item.custom_id for item in sent["view"].children], ["queue_result_verify"])
+        self.assertEqual(self.payload.await_count, 4)
+        self.mark.assert_not_called()
+        self.updated.assert_not_called()
+        self.channels.assert_not_called()
+        self.process.assert_not_awaited()
+
+    async def test_score_question_ignores_other_text_and_channels(self):
+        cases = [("queue-4607", text) for text in ("score", "score??", "what is the score?", "score? please", "`score?`", "")]
+        cases += [(name, "score?") for name in ("general", "queue-", "queue-4607-chat")]
+        for name, content in cases:
+            with self.subTest(name=name, content=content):
+                message = self.message(name=name, content=content)
+                message.mentions = []
+                await app.on_message(message)
+                message.reply.assert_not_awaited()
+        self.payload.assert_not_awaited()
+
+    async def test_score_question_still_ignores_bots_webhooks_and_dms(self):
+        for changes in ({"author": SimpleNamespace(id=app.NEATQUEUE_BOT_ID, bot=True)},
+                        {"webhook_id": 456}, {"guild": None}):
+            with self.subTest(changes=changes):
+                message = self.message(content="score?")
+                message.mentions = []
+                for key, value in changes.items():
+                    setattr(message, key, value)
+                await app.on_message(message)
+                message.reply.assert_not_awaited()
+        self.payload.assert_not_awaited()
+
+    async def test_score_and_mentions_share_cooldown_in_both_directions(self):
+        for first_content, next_content in (("score?", "<@123>"), ("<@123>", "score?")):
+            with self.subTest(first=first_content):
+                app._queue_mention_cooldowns.clear()
+                self.payload.reset_mock()
+                for content in (first_content, next_content):
+                    message = self.message(content=content)
+                    message.mentions = [self.bot_user] if "<@" in content else []
+                    await app.on_message(message)
+                self.assertEqual(self.payload.await_count, 1)
+                self.assertIn("30s", message.reply.await_args.args[0])
 
     async def test_only_exact_queue_names_with_numeric_ids(self):
         for name in ("queue", "queue-", "queue-4607-chat", "other-queue-4607", "queue-abc", "queue-４６０７"):
@@ -132,7 +188,8 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         try:
             await entered.wait()
             self.clock.return_value = 200
-            duplicate = self.message()
+            duplicate = self.message(content="score?")
+            duplicate.mentions = []
             await app.on_message(duplicate)
             self.assertIn("already fetching", duplicate.reply.await_args.args[0])
             self.assertEqual(self.payload.await_count, 1)

@@ -17,7 +17,7 @@
 
 ## Current State
 
-The existing features below are implemented. The queue-mention shortcut is a local change pending deployment; the automated unit test suite currently passes `207` tests across `10` test modules via `python -m unittest discover tests`. See Current Focus and Handover for deployment and working-tree status.
+The existing features below are implemented. The queue-mention shortcut is committed in `acb524d`; its `score?` alias is a local change pending deployment. The automated unit test suite currently passes `211` tests across `10` test modules via `python -m unittest discover tests`. See Current Focus and Handover for deployment and working-tree status.
 
 ### Slash Commands (`16` total in `leaderboard_bot.py`)
 
@@ -41,6 +41,7 @@ The existing features below are implemented. The queue-mention shortcut is a loc
 | **Admin** | `/reset_hall_of_fame` | **Implemented & Verified.** Clears all Hall of Fame records for the current guild. |
 
 ### Automated Systems & Console
+- **Plain-text scoreboard shortcut (approved 2026-11-03):** A human's entire message `score?` in `queue-<digits>` triggers the same handler as a bot mention, ignoring capitalization and surrounding whitespace. It requires no mention and shares the existing per-channel cooldown and in-flight guard. Bot/webhook messages and DMs remain excluded; finished queues still show final stats. Requires the existing Message Content Intent.
 - **Queue-channel mentions (`reply_to_queue_mention` in `leaderboard_bot.py`):** A human explicitly mentioning the bot in a channel named exactly `queue-<digits>` receives the same current stats as `/queue_stats` in a public reply, without registering the channel with `/setup`. Uses a per-channel in-flight guard and 30-second cooldown, ignores bot/webhook messages and implicit reply pings, and never changes `processed_matches` or the guild catch-up timestamp. Final results retain Game breakdown; ongoing results remain IN PROGRESS. The user explicitly approved finished-queue support and the 30-second channel cooldown with a brief wait reply on 2026-11-02.
 - **Live NeatQueue Tracking (`on_message`, `on_message_edit`):** Detects NeatQueue result embeds in tracked channels, waits `QUEUE_RESULT_FETCH_DELAY_SECONDS` (`5s`), builds and posts the queue result card with `QueueResultView` (`Verify Survev Account` + `Game breakdown` buttons), and ignores message edits older than `24` hours (`QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS`).
 - **Startup Catch-Up (`backfill_missed_queue_results`):** On `on_ready`, scans the last `10` NeatQueue matches per tracked guild (`STARTUP_QUEUE_BACKFILL_LIMIT = 10`) and posts any finalized matches missing from `processed_matches`.
@@ -178,6 +179,7 @@ The following decisions were explicitly requested or approved by the user across
 
 | Task | Status | Context & Acceptance Criteria |
 | :--- | :--- | :--- |
+| **Show queue stats for `score?` without a bot mention** | **Completed** | Reuses the queue-channel mention handler, stats payload, and cooldown. Whole-message match ignores capitalization and surrounding whitespace. Covered by trigger, exclusions, mixed-trigger cooldown/concurrency, and finished-queue tests. Local change pending deployment. |
 | **Reply with queue stats when mentioned in queue channels** | **Completed** | Explicit human mentions in `queue-<number>` reuse the existing stats payload and finality-aware view; no `/setup` needed for the mention channel. Ignore recurring vote messages, preserve automatic tracking, guard duplicate requests, and cover routing/error handling with tests. Local implementation; Discord deployment verification remains outstanding. |
 | **Distinguish ongoing queue cards from final results** | **Completed** | Show `IN PROGRESS` above the scoreboard and `Team N leads` / `No team leading` for ongoing queues. Pass `is_final` into image rendering. Verified with 196 passing tests and a rendered preview; local changes await deployment. |
 | **Initialise shared `MEMORY.md`, `AGENTS.md`, and clean up `README.md`** | **Completed** | Establish Git-managed shared project memory (`MEMORY.md`) and permanent agent operating instructions (`AGENTS.md`) for seamless switching between Antigravity, Claude Code, and OpenAI Codex across two computers; separate human-facing documentation in `README.md` from internal working notes. |
@@ -226,6 +228,11 @@ The following decisions were explicitly requested or approved by the user across
 ---
 
 ## Current Focus and Handover
+
+### Plain-Text Scoreboard Shortcut (2026-11-03, local changes)
+- Added `score?` to `reply_to_queue_mention` so anyone in `queue-<number>` can request the scoreboard without mentioning the bot. Both triggers share finality-aware replies, the 30-second channel cooldown, and concurrent-request protection. Exact whole-message matching ignores case and surrounding whitespace.
+- Verified all 211 tests with `.venv/Scripts/python.exe -m unittest discover tests`; added four tests and extended finality/concurrency cases. `git diff --check` passed. No live Discord verification or deployment performed.
+- Started from clean commit `acb524d` (the prior mention feature is now committed). This session leaves changes in `leaderboard_bot.py`, `tests/test_queue_mentions.py`, `README.md`, and `MEMORY.md`; no commit or push. Earlier handovers describing the mention implementation as uncommitted are historical.
 
 ### Queue-Channel Mention Shortcut (2026-11-02, local changes)
 - Added `reply_to_queue_mention` ahead of automatic message detection in `leaderboard_bot.py`. Reads the queue number from the channel name and reuses `build_queue_stats_payload`; the voting panel is not used as a roster or finality signal. Replies disable outgoing mentions and show typing while fetching.
