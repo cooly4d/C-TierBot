@@ -226,7 +226,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     )
     file = discord.File(image_buffer, filename=queue_result_filename(match_id))
 
-    content = f"Queue stats for NeatQueue#{match_id}"
+    content = f"Queue stats for NeatQueue#{match_id}" if match_result.get("is_final") else f"NeatQueue#{match_id} - IN PROGRESS"
     total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
 
     # Only a finished queue can set records: an unfinished one has partial stats, and its duration runs up to "now".

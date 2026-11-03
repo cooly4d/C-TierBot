@@ -75,6 +75,8 @@ SLUG_BACKFILL_INTERVAL_MINUTES = 30
 QUEUE_MENTION_COOLDOWN_SECONDS = 30
 _queue_mention_busy: set[tuple[int, int]] = set()
 _queue_mention_cooldowns: dict[tuple[int, int], float] = {}
+# "score?" anywhere in a message, as its own word (so "what is the score?" counts but "underscore?" doesn't).
+SCORE_QUESTION_PATTERN = re.compile(r"\bscore\?", re.IGNORECASE)
 
 
 @tasks.loop(minutes=SLUG_BACKFILL_INTERVAL_MINUTES)
@@ -526,7 +528,7 @@ async def reply_to_queue_mention(message: discord.Message) -> bool:
     match = re.fullmatch(r"queue-([0-9]+)", getattr(message.channel, "name", ""))
     if match is None:
         return False
-    if message.content.strip().casefold() != "score?":
+    if SCORE_QUESTION_PATTERN.search(message.content) is None:
         # Otherwise require an explicit user mention, not @everyone, a role, or a reply's implicit ping.
         if not any(user.id == bot.user.id for user in message.mentions):
             return False

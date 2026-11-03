@@ -61,7 +61,9 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
                                  ["queue_result_games", "queue_result_verify"])
 
     async def test_score_question_without_mention_posts_live_stats(self):
-        for content in ("score?", "Score?", "SCORE?", "  score? \n"):
+        contents = ("score?", "Score?", "SCORE?", "  score? \n", "what is the score?",
+                    "What's the Score? guys", "score??", "`score?`")
+        for content in contents:
             with self.subTest(content=content):
                 app._queue_mention_cooldowns.clear()
                 message = self.message(content=content)
@@ -71,14 +73,15 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
                 sent = message.reply.await_args.kwargs
                 self.assertEqual(sent["file"].filename, "queue_stats_4607.png")
                 self.assertEqual([item.custom_id for item in sent["view"].children], ["queue_result_verify"])
-        self.assertEqual(self.payload.await_count, 4)
+        self.assertEqual(self.payload.await_count, len(contents))
         self.mark.assert_not_called()
         self.updated.assert_not_called()
         self.channels.assert_not_called()
         self.process.assert_not_awaited()
 
     async def test_score_question_ignores_other_text_and_channels(self):
-        cases = [("queue-4607", text) for text in ("score", "score??", "what is the score?", "score? please", "`score?`", "")]
+        cases = [("queue-4607", text) for text in ("score", "what is the score", "scores?", "scoreboard?", "underscore?",
+                                                     "score ?", "")]
         cases += [(name, "score?") for name in ("general", "queue-", "queue-4607-chat")]
         for name, content in cases:
             with self.subTest(name=name, content=content):

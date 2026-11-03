@@ -122,6 +122,14 @@ class QueueImageFinalityTests(unittest.IsolatedAsyncioTestCase):
                 built = await build_payload(is_final=finality)
                 self.assertEqual(built.render.call_args.kwargs["is_final"], bool(finality))
 
+    async def test_payload_header_shows_in_progress_for_unfinished_queues(self):
+        for finality, header in ((True, "Queue stats for NeatQueue#3674"),
+                                 (False, "NeatQueue#3674 - IN PROGRESS"),
+                                 (None, "NeatQueue#3674 - IN PROGRESS")):
+            with self.subTest(finality=finality):
+                built = await build_payload(is_final=finality)
+                self.assertEqual(built.content.splitlines()[0], header)
+
 
 class HallOfFameFinalityTests(unittest.IsolatedAsyncioTestCase):
     """Only a finished queue may set Hall of Fame records: an unfinished one has partial stats and a duration
