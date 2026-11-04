@@ -141,6 +141,7 @@ Optional settings:
 | `NEATQUEUE_BOT_ID` | `857633321064595466` | The NeatQueue bot's user ID, used to recognize its result messages. |
 | `QUEUE_RESULT_FETCH_DELAY_SECONDS` | `5` | Wait before fetching stats after a queue ends, so survev.de has time to save the games. |
 | `QUEUE_MATCH_FALLBACK_DURATION_MINUTES` | `10` | Last-resort match window when NeatQueue gives no usable end time. |
+| `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of `/queue_stats` diagnostic JSON logs retained in `log/`. |
 | `LEADERBOARD_BANNER_URL` | a Giphy GIF | Banner image on the weekly and monthly leaderboards. |
 | `QUEUE_FONT_PATH` / `QUEUE_FONT_BOLD_PATH` | auto-detected | Custom fonts for the generated images. |
 

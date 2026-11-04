@@ -280,6 +280,110 @@ async def _handle_sync(bot: commands.Bot):
         print(f"[Console Error] Failed to sync slash commands: {exc}")
 
 
+def _resolve_console_guild_id(bot: commands.Bot, guild_str: str | None = None) -> int | None:
+    """Resolves a target guild_id from an explicit CLI argument, connected bot guilds, or guild_settings."""
+    if guild_str:
+        return int(guild_str) if guild_str.isdigit() else None
+    if getattr(bot, "guilds", None):
+        return bot.guilds[0].id
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute("SELECT guild_id FROM guild_settings LIMIT 1").fetchone()
+            if row:
+                return row[0]
+    except Exception:
+        pass
+    return None
+
+
+async def _handle_queue(bot: commands.Bot, raw_args: str):
+    """Inspects and calculates stats + diagnostics for a NeatQueue match without posting to Discord.
+    Usage: queue <match_id> [guild_id]
+    """
+    parts = raw_args.split()
+    if not parts:
+        print("[Console Error] Usage: queue <match_id> [guild_id]")
+        return
+
+    match_id = parts[0].lstrip("#")
+    if not match_id:
+        print("[Console Error] Usage: queue <match_id> [guild_id]")
+        return
+
+    if len(parts) > 1 and not parts[1].isdigit():
+        print(f"[Console Error] Invalid guild ID: {parts[1]}")
+        return
+
+    guild_id = _resolve_console_guild_id(bot, parts[1] if len(parts) > 1 else None)
+    if not guild_id:
+        print("[Console Error] No guild ID found. Usage: queue <match_id> <guild_id>")
+        return
+
+    from image_utils import format_duration_ms
+    from neatqueue_client import calculate_queue_match_stats, resolve_queue_user_display_names
+
+    diagnostics: dict = {}
+    print(f"[Console] Inspecting Queue#{match_id} for guild {guild_id}...")
+    match_result, error = await calculate_queue_match_stats(match_id, guild_id, diagnostics=diagnostics)
+
+    window = diagnostics.get("window") or {}
+    nq = diagnostics.get("neatqueue") or {}
+    anchors = diagnostics.get("anchors") or []
+    is_final = bool((match_result or {}).get("is_final", diagnostics.get("is_final")))
+    status_label = "FINAL" if is_final else "IN PROGRESS"
+
+    if error or not match_result:
+        print(f"[Console Error] Queue#{match_id} lookup failed: {error}")
+        print(f"  Status:          {status_label} ({diagnostics.get('finality_reason', 'unknown')})")
+        print(f"  Roster Source:   {diagnostics.get('roster_source', 'none')}")
+        print(f"  Window:          {window.get('from_utc', 'N/A')} -> {window.get('to_utc', 'N/A')}")
+        print(f"  Anchors Queried: {len(anchors)}")
+        return
+
+    teams = match_result.get("teams") or []
+    await resolve_queue_user_display_names(teams, bot)
+
+    round_wins = match_result.get("team_round_wins") or []
+    score_str = " - ".join(str(w) for w in round_wins) if round_wins else "N/A"
+    winner_idx = match_result.get("winning_team_index")
+    winner_str = f"Team {winner_idx + 1}" if winner_idx is not None else "Undecided / Tie"
+    duration_ms = match_result.get("duration_ms") or 0
+
+    print(f"\n[Console] === Queue #{match_id} Diagnostics (Guild: {guild_id}) ===")
+    print(f"  Status:          {status_label} ({diagnostics.get('finality_reason', 'unknown')}, NQ winner={nq.get('winner')})")
+    print(f"  Roster Source:   {diagnostics.get('roster_source', 'unknown')}")
+    print(f"  Window:          {window.get('from_utc', 'N/A')} -> {window.get('to_utc', 'N/A')} "
+          f"({window.get('start_source', '?')} -> {window.get('end_source', '?')})")
+    print(f"  Duration:        {format_duration_ms(duration_ms)}")
+    print(f"  Anchors:         {len(anchors)} queried ({diagnostics.get('selection_strategy', 'N/A')})")
+    print(f"  Games Selected:  {match_result.get('total_games_played', 0)} ({', '.join(diagnostics.get('selected_guids') or [])})")
+    print(f"  Series Score:    {score_str} (Winner: {winner_str})")
+
+    headers = ["Team", "Player", "Account", "Games", "Kills", "Damage", "Avg", "Impact"]
+    rows = []
+    for team_idx, team in enumerate(teams, 1):
+        for entry in team:
+            stats = entry.get("stats") or {}
+            games = int(stats.get("games") or 0)
+            dmg = int(stats.get("damage") or 0)
+            avg = f"{dmg / games:,.0f}" if games > 0 else "0"
+            imp = stats.get("impact")
+            imp_str = f"{int(imp + 0.5)}" if imp is not None else "-"
+            acct = "Guest" if entry.get("guest") else f"Linked ({entry.get('slug') or entry.get('discord_id')})"
+            rows.append([
+                f"Team {team_idx}",
+                entry.get("display_name") or entry.get("username") or "Unknown",
+                acct,
+                str(games),
+                str(stats.get("kills") or 0),
+                f"{dmg:,}",
+                avg,
+                imp_str,
+            ])
+    print("\n" + _format_table(headers, rows))
+    print("====================================================\n")
+
+
 async def _handle_winrate(bot: commands.Bot, raw_args: str):
     """Calculates and displays Team 1 vs Team 2 winrate across NeatQueue match history.
     Usage: winrate [guild_id]
@@ -369,6 +473,7 @@ def _handle_help():
   status                               - View bot uptime, ping, and DB metrics
   sql <query>                          - Execute an SQL query on leaderboard.db
   winrate [guild_id]                   - Show NeatQueue Team 1 vs Team 2 winrate
+  queue <match_id> [guild_id]          - Inspect queue stats and lookup diagnostics
   sync                                 - Force sync application slash commands
   clear                                - Clear the terminal screen
   help                                 - Show this help menu
@@ -408,6 +513,8 @@ async def execute_console_command(bot: commands.Bot, line: str):
         _handle_sql(raw_args)
     elif command_name in ("winrate", "winrates"):
         await _handle_winrate(bot, raw_args)
+    elif command_name in ("queue", "queue_stats"):
+        await _handle_queue(bot, raw_args)
     elif command_name == "sync":
         await _handle_sync(bot)
     elif command_name == "clear":

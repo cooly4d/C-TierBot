@@ -18,6 +18,7 @@ When running the bot locally in your terminal (`python leaderboard_bot.py`), you
 | **`status`** | `status` | Displays bot latency, uptime, and database metrics. | `status` |
 | **`sql`** | `sql <query>` | Runs a query directly on `leaderboard.db` and renders results. | `sql SELECT discord_id, username FROM users LIMIT 5;` |
 | **`winrate`** | `winrate [guild_id]` | Shows NeatQueue Team 1 vs Team 2 winrate across match history. | `winrate` |
+| **`queue`** | `queue <match_id> [guild_id]` | Inspects calculated stats and lookup diagnostics for a queue without posting to Discord. | `queue 4600` |
 | **`sync`** | `sync` | Manually triggers slash command synchronization with Discord. | `sync` |
 | **`clear`** | `clear` | Clears the terminal screen. | `clear` |
 | **`exit`** | `exit` *(or `quit` / `stop`)* | Gracefully disconnects the bot and exits the process. | `exit` |

@@ -157,6 +157,67 @@ class ConsoleServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("66.7%", output)
                 self.assertIn("33.3%", output)
 
+    async def test_execute_queue_success_and_error(self):
+        bot = MagicMock()
+        bot.guilds = [MagicMock(id=123456)]
+        fake_result = {
+            "teams": [[{
+                "discord_id": 101,
+                "username": "Alice",
+                "display_name": "Alice",
+                "slug": "alice",
+                "guest": False,
+                "stats": {"games": 3, "kills": 12, "damage": 1500, "impact": 74.2},
+            }]],
+            "winning_team_index": 0,
+            "team_round_wins": [2, 1],
+            "total_games_played": 3,
+            "duration_ms": 900_000,
+            "is_final": True,
+        }
+
+        async def fake_calc(match_id, guild_id, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics.update({
+                    "is_final": True,
+                    "finality_reason": "history_winner_is_not_null_or_pending",
+                    "roster_source": "neatqueue_history",
+                    "selection_strategy": "single_history",
+                    "selected_guids": ["g1", "g2", "g3"],
+                    "neatqueue": {"winner": 0},
+                    "window": {"from_utc": "2026-11-01T00:00:00Z", "to_utc": "2026-11-01T00:15:00Z",
+                               "start_source": "neatqueue_history", "end_source": "winner_message_edited_at"},
+                    "anchors": [{"discord_id": 101}],
+                })
+            return fake_result, None
+
+        with patch("neatqueue_client.calculate_queue_match_stats", side_effect=fake_calc), \
+                patch("neatqueue_client.resolve_queue_user_display_names", new_callable=AsyncMock):
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                await execute_console_command(bot, "queue #4600")
+                output = mock_stdout.getvalue()
+                self.assertIn("Queue #4600 Diagnostics (Guild: 123456)", output)
+                self.assertIn("FINAL", output)
+                self.assertIn("2 - 1 (Winner: Team 1)", output)
+                self.assertIn("Alice", output)
+                self.assertIn("1,500", output)
+
+        async def fake_fail(match_id, guild_id, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics.update({"is_final": False, "finality_reason": "no_history_entry"})
+            return None, "No linked player found"
+
+        with patch("neatqueue_client.calculate_queue_match_stats", side_effect=fake_fail):
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+                await execute_console_command(bot, "queue 4600")
+                output = mock_stdout.getvalue()
+                self.assertIn("Queue#4600 lookup failed: No linked player found", output)
+                self.assertIn("no_history_entry", output)
+
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+            await execute_console_command(bot, "queue")
+            self.assertIn("Usage: queue <match_id> [guild_id]", mock_stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

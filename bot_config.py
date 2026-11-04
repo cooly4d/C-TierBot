@@ -31,6 +31,7 @@ QUEUE_MATCH_FALLBACK_DURATION_MS = int(os.getenv("QUEUE_MATCH_FALLBACK_DURATION_
 API_CONCURRENCY_LIMIT = int(os.getenv("API_CONCURRENCY_LIMIT", "5"))
 VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "300"))
 QUEUE_STATS_LOG_DIR = "log"
+QUEUE_STATS_LOG_MAX_FILES = int(os.getenv("QUEUE_STATS_LOG_MAX_FILES", "200"))
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
 QUEUE_WINNER_TITLE_PATTERN = re.compile(r"Winner For Queue#(\d+)", re.IGNORECASE)

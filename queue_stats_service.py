@@ -10,7 +10,13 @@ from datetime import datetime, timezone
 
 import discord
 
-from bot_config import HALL_OF_FAME_RECORDS, MIN_GAMES_FOR_HALL_OF_FAME_UPDATE, QUEUE_STATS_LOG_DIR, bot
+from bot_config import (
+    HALL_OF_FAME_RECORDS,
+    MIN_GAMES_FOR_HALL_OF_FAME_UPDATE,
+    QUEUE_STATS_LOG_DIR,
+    QUEUE_STATS_LOG_MAX_FILES,
+    bot,
+)
 from db import (
     QUEUE_RESULT_RETENTION_DAYS,
     cache_player_queue_stats,
@@ -48,6 +54,35 @@ def parse_queue_match_id(message) -> str | None:
             return found.group(1)
     found = _QUEUE_RESULT_CONTENT.search(getattr(message, "content", "") or "")
     return found.group(1) if found else None
+
+
+def prune_queue_stats_logs(log_dir: str | None = None, max_files: int | None = None) -> int:
+    """Removes the oldest queue_stats_*.json diagnostic logs when the directory exceeds max_files."""
+    target_dir = log_dir if log_dir is not None else QUEUE_STATS_LOG_DIR
+    limit = QUEUE_STATS_LOG_MAX_FILES if max_files is None else max_files
+    if limit is None or limit <= 0 or not os.path.isdir(target_dir):
+        return 0
+
+    try:
+        entries = sorted(
+            name for name in os.listdir(target_dir)
+            if name.startswith("queue_stats_") and name.endswith(".json")
+        )
+    except OSError:
+        return 0
+
+    excess = len(entries) - limit
+    if excess <= 0:
+        return 0
+
+    removed = 0
+    for old_name in entries[:excess]:
+        try:
+            os.remove(os.path.join(target_dir, old_name))
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def write_queue_stats_command_log(
@@ -103,6 +138,8 @@ def write_queue_stats_command_log(
 
     with open(file_path, "w", encoding="utf-8") as log_file:
         json.dump(payload, log_file, ensure_ascii=True, indent=2)
+
+    prune_queue_stats_logs(QUEUE_STATS_LOG_DIR)
 
 
 def check_queue_hall_of_fame_records(

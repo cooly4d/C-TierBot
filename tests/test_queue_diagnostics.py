@@ -163,6 +163,23 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 queue_stats_service.write_queue_stats_command_log(interaction, "3674", result, error)
             return json.loads(next(Path(directory).glob("*.json")).read_text(encoding="utf-8"))
 
+    def test_write_log_prunes_oldest_files_above_max_limit(self):
+        interaction = SimpleNamespace(guild_id=999, channel_id=123, user=None)
+        with tempfile.TemporaryDirectory() as directory:
+            for idx in range(4):
+                (Path(directory) / f"queue_stats_2026010{idx + 1}T000000.000000Z_g999_uNone_m{idx}.json").write_text(
+                    "{}", encoding="utf-8"
+                )
+            (Path(directory) / "unrelated.txt").write_text("keep", encoding="utf-8")
+            with patch.object(queue_stats_service, "QUEUE_STATS_LOG_DIR", directory), \
+                    patch.object(queue_stats_service, "QUEUE_STATS_LOG_MAX_FILES", 3):
+                queue_stats_service.write_queue_stats_command_log(interaction, "3674", None, "boom")
+            remaining_json = sorted(p.name for p in Path(directory).glob("queue_stats_*.json"))
+            self.assertEqual(len(remaining_json), 3)
+            self.assertNotIn("queue_stats_20260101T000000.000000Z_g999_uNone_m0.json", remaining_json)
+            self.assertNotIn("queue_stats_20260102T000000.000000Z_g999_uNone_m1.json", remaining_json)
+            self.assertTrue((Path(directory) / "unrelated.txt").exists())
+
 
 class ApiDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_history_reports_failed_page_without_logging_response_or_token(self):

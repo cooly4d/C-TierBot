@@ -286,7 +286,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         return
 
     content, file, error_text, match_result = await build_queue_stats_payload(match_id, interaction.guild_id)
-    write_queue_stats_command_log(interaction, match_id, match_result, error_text)
+    await asyncio.to_thread(write_queue_stats_command_log, interaction, match_id, match_result, error_text)
     if error_text:
         await interaction.followup.send(error_text)
         return
