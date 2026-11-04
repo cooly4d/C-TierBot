@@ -113,6 +113,49 @@ class QueueProgressLabelTests(unittest.TestCase):
                     self.assertLess(texts["IN PROGRESS"][1], texts[" - "][1])
 
 
+class PartialPlayerLabelTests(unittest.TestCase):
+    def drawn_texts(self, render):
+        original_text = ImageDraw.ImageDraw.text
+        drawn = []
+
+        def capture(draw, xy, text, *args, **kwargs):
+            drawn.append(text)
+            return original_text(draw, xy, text, *args, **kwargs)
+
+        with patch.object(ImageDraw.ImageDraw, "text", new=capture):
+            render()
+        return drawn
+
+    def test_only_players_who_missed_games_get_a_label(self):
+        self.assertEqual(image_utils.partial_games_label(person("Sub", 1, 174, games=1), 7), "1/7")
+        self.assertIsNone(image_utils.partial_games_label(person("Full", 1, 174, games=7), 7))
+        self.assertIsNone(image_utils.partial_games_label(person("Sub", 1, 174, games=1), None))
+
+    def test_a_substitute_is_labelled_and_the_footer_explains_it(self):
+        subbed = [person("Awang", 31, 9120, games=3), person("Mia", 18, 6400, games=2),
+                  person("StepZ", 4, 900, games=1, guest=True)]
+        others = [person("Bravo", 25, 8100, games=3), person("Delta", 12, 4900, games=3)]
+        texts = self.drawn_texts(lambda: generate_queue_result_image(
+            "4614", [subbed, others], 0, [True, False, True], [2, 1], duration_ms=600_000))
+
+        self.assertIn("2/3", texts)
+        self.assertIn("1/3", texts)
+        self.assertNotIn("3/3", texts)
+        footer = next(text for text in texts if text.startswith("Unlinked"))
+        self.assertTrue(footer.endswith("2/3 = played 2 of 3 games"))
+
+    def test_full_series_and_game_cards_have_no_label(self):
+        full = self.drawn_texts(lambda: generate_queue_result_image(
+            "3674", [team_a(), team_b()], 0, [True, False, True], [2, 1], duration_ms=600_000))
+        game = self.drawn_texts(lambda: generate_queue_game_image(
+            "4614", 7, 7, [[person("StepZ", 1, 174, games=1)], [person("Bravo", 0, 90, games=1)]], 0,
+            [True] * 7, [4, 3]))
+
+        for texts in (full, game):
+            self.assertFalse(any("/" in text and text.replace("/", "").isdigit() for text in texts))
+            self.assertFalse(any("games" in text and "played" in text for text in texts))
+
+
 class ImpactCellTests(unittest.TestCase):
     def cell(self, impact):
         return _queue_cell("Impact", person("Awang", 1, 1, impact), "Awang")

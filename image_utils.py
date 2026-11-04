@@ -311,6 +311,14 @@ def _queue_cell(label: str, entry: dict, player_label: str) -> tuple[str, bool, 
     return player_label, True, QUEUE_IMG_TEXT
 
 
+def partial_games_label(entry: dict, series_games: int | None) -> str | None:
+    """'1/7' for a player who played only part of the series (a substitute or a leaver), else None."""
+    games = (entry.get("stats") or {}).get("games")
+    if not series_games or games is None or games >= series_games:
+        return None
+    return f"{games}/{series_games}"
+
+
 def _render_queue_card(
     teams: list[list[dict]],
     labels: list[str],
@@ -325,9 +333,11 @@ def _render_queue_card(
     match_history: list[bool | None] | None,
     highlight_index: int | None,
     status_text: str = "",
+    series_games: int | None = None,
 ) -> BytesIO:
     """Draws one queue card: a header (title, result line, score, game timeline) above one table panel per team.
-    The series result image and the single-game card share this and differ only in what they pass in."""
+    The series result image and the single-game card share this and differ only in what they pass in.
+    With `series_games`, players who played fewer games than that get a muted 'played/total' label."""
     S = 2  # 2x supersampling factor for smooth anti-aliased circles, borders, and text
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
@@ -539,14 +549,24 @@ def _render_queue_card(
                     if is_guest:
                         icon_reserve = (QUEUE_IMG_UNLINKED_ICON_SIZE + QUEUE_IMG_UNLINKED_ICON_GAP) * S
                         max_name_width = max(0, max_name_width - icon_reserve)
+                    games_label = partial_games_label(entry, series_games)
+                    if games_label:
+                        games_bbox = draw.textbbox((0, 0), games_label, font=header_font)
+                        games_reserve = games_bbox[2] - games_bbox[0] + QUEUE_IMG_UNLINKED_ICON_GAP * S
+                        max_name_width = max(0, max_name_width - games_reserve)
                     value = truncate_to_width(draw, value, font, max_name_width)
                     draw.text((cell_x, cell_y), value, font=font, fill=fill)
+                    name_bbox = draw.textbbox((0, 0), value, font=font)
+                    next_x = cell_x + name_bbox[2] - name_bbox[0]
                     if is_guest:
-                        name_bbox = draw.textbbox((0, 0), value, font=font)
-                        name_width = name_bbox[2] - name_bbox[0]
-                        icon_x = round(cell_x + name_width + QUEUE_IMG_UNLINKED_ICON_GAP * S)
+                        icon_x = round(next_x + QUEUE_IMG_UNLINKED_ICON_GAP * S)
                         icon_y = round((row_box_top + row_box_bottom - unlinked_row_icon.height) / 2)
                         image.paste(unlinked_row_icon, (icon_x, icon_y), unlinked_row_icon)
+                        next_x = icon_x + unlinked_row_icon.width
+                    if games_label:
+                        games_y = _vcenter_y(draw, header_font, row_box_top, row_box_bottom)
+                        draw.text((next_x + QUEUE_IMG_UNLINKED_ICON_GAP * S, games_y), games_label,
+                                  font=header_font, fill=QUEUE_IMG_MUTED)
                 else:
                     value_bbox = draw.textbbox((0, 0), value, font=font)
                     value_width = value_bbox[2] - value_bbox[0]
@@ -564,6 +584,11 @@ def _render_queue_card(
     footer_icon = _build_unlinked_icon(18 * S)
     footer_icon_gap = 8 * S
     footer_text = "Unlinked — link your survev.de account with /verify to appear in future leaderboards!"
+    # Explain the played/total label with the first real one on this card, e.g. "1/7 = played 1 of 7 games".
+    example = next((label for team in teams for entry in team if (label := partial_games_label(entry, series_games))), None)
+    if example:
+        played, total = example.split("/")
+        footer_text += f"   ·   {example} = played {played} of {total} games"
     footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
     footer_text_width = footer_bbox[2] - footer_bbox[0]
     total_footer_width = footer_icon.width + footer_icon_gap + footer_text_width
@@ -635,6 +660,7 @@ def generate_queue_result_image(
         match_history=match_history,
         highlight_index=len(match_history) - 1 if match_history else None,
         status_text="" if is_final else "IN PROGRESS",
+        series_games=len(match_history) if match_history else None,
     )
 
 

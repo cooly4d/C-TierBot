@@ -161,18 +161,20 @@ class FinishedQueueTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([g["guid"] for g in result["individual_games"]], ["z-first", "a-second", "m-third"])
 
-    async def test_several_anchors_only_keep_games_all_of_them_played(self):
+    async def test_a_game_only_one_anchor_played_is_checked_rather_than_trusted(self):
+        solo = [player("alice", "Alice", 7, 3, 0, 80), player(None, "R1", 8, 1, 2, 300), player(None, "R2", 9, 2, 1, 200)]
         world = three_game_world(
             anchors={
                 "tok-101": own_games(("g1", 10), ("g2", 20), ("g3", 30), ("stray", 40)),
                 "tok-201": own_games(("g1", 10), ("g2", 20), ("g3", 30)),
             },
+            boards={**three_game_world()["boards"], "stray": solo},
         )
         result, _ = await calculate(**world)
 
         self.assertEqual([g["guid"] for g in result["individual_games"]], ["g1", "g2", "g3"])
 
-    async def test_anchors_that_disagree_entirely_fall_back_to_the_union(self):
+    async def test_games_seen_by_different_anchors_all_count(self):
         world = three_game_world(
             anchors={"tok-101": own_games(("g1", 10)), "tok-201": own_games(("g2", 20))},
             boards={"g1": lobby("A"), "g2": lobby("B")},
@@ -234,7 +236,8 @@ class FinishedQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(quiet["stats"], {"games": 1, "wins": 0, "kills": 0, "damage": 0, "impact": None})
 
     async def test_two_teams_both_ranked_first_leave_the_round_and_series_undecided(self):
-        both_first = [player("alice", "Alice", 10, 1, 5, 1000), player("carol", "Carol", 20, 1, 4, 900)]
+        both_first = [player("alice", "Alice", 10, 1, 5, 1000), player("bob", "Bob", 10, 1, 3, 600),
+                      player("carol", "Carol", 20, 1, 4, 900), player("dave", "Dave", 20, 1, 2, 500)]
         world = three_game_world(anchors={"tok-101": own_games(("g1", 10))}, boards={"g1": both_first})
         result, _ = await calculate(**world)
 
@@ -242,6 +245,156 @@ class FinishedQueueTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["team_round_wins"], [1, 1])
         self.assertIsNone(result["winning_team_index"])
         self.assertIsNone(result["individual_games"][0]["winning_display_team_index"])
+
+
+def swap(rows, leaving, joining):
+    """The same game with `leaving` replaced by a substitute."""
+    return [joining if row["username"] == leaving else row for row in rows]
+
+
+class SubstituteAndGameSelectionTests(unittest.IsolatedAsyncioTestCase):
+    """Queue #4614: survev.de renumbers the teams every game, so a substitute's first game can give their team the
+    number the other team had earlier. Teams are placed per game from the roster's linked players instead."""
+
+    def subbed_world(self, **overrides):
+        # Erin replaces the guest for game 3, where survev.de numbered team A 2 (team B's number in games 1-2).
+        erin = player("erin", "Erin", 2, 1, 2, 400)
+        world = three_game_world(boards={
+            "g1": lobby("A", 1, 2), "g2": lobby("B", 1, 2), "g3": swap(lobby("A", 2, 1), "GuestG", erin),
+        })
+        world.update(overrides)
+        return world
+
+    async def test_a_substitute_counts_for_the_team_they_played_with(self):
+        result, error = await calculate(**self.subbed_world())
+
+        self.assertIsNone(error)
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        self.assertEqual(result["winning_team_index"], 0)
+        self.assertEqual(result["match_history"], [True, False, True])
+        team_one, team_two = result["teams"]
+        self.assertEqual({e["username"]: e["stats"]["games"] for e in team_one},
+                         {"Alice": 3, "Bob": 3, "GuestG": 2, "Erin": 1})
+        self.assertEqual([e["username"] for e in team_two], ["Carol", "Dave"])
+        rows = {p["username"]: p for p in result["individual_games"][2]["players"]}
+        self.assertEqual(rows["Erin"]["display_team_index"], 0)
+
+    async def test_a_linked_substitute_keeps_the_games_played_before_they_joined(self):
+        # NeatQueue lists the substitute in its final roster; with a working token their history only holds game 3,
+        # which used to shrink the whole series to that one game.
+        world = self.subbed_world(
+            history=finished_history(roster=((101, 102, 103), (201, 202))),
+            tokens={**DEFAULT_TOKENS, 103: "tok-103"},
+            anchors={"tok-101": own_games(("g1", 10), ("g2", 20), ("g3", 30)), "tok-103": own_games(("g3", 30))},
+        )
+        with fake_world(**world), \
+                patch.object(neatqueue_client, "get_discord_id_by_slug", side_effect={**DISCORD_IDS, "erin": 103}.get):
+            result, error = await neatqueue_client.calculate_queue_match_stats("3674", 999)
+
+        self.assertIsNone(error)
+        self.assertEqual(result["total_games_played"], 3)
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        erin = next(e for e in result["teams"][0] if e["username"] == "Erin")
+        self.assertEqual((erin["discord_id"], erin["guest"], erin["stats"]["games"]), (103, False, 1))
+
+    async def test_a_team_playing_a_player_down_still_counts(self):
+        # Like 4614's game 6: a 2v2 here, after the guest left.
+        world = three_game_world(boards={**three_game_world()["boards"],
+                                         "g3": [row for row in lobby("A", 1, 2) if row["username"] != "GuestG"]})
+        result, _ = await calculate(**world)
+
+        self.assertEqual(result["total_games_played"], 3)
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        guest = next(e for e in result["teams"][0] if e["username"] == "GuestG")
+        self.assertEqual(guest["stats"]["games"], 2)
+
+    async def test_side_games_in_the_queue_window_are_not_counted(self):
+        side_games = {
+            "one-v-one": [player("alice", "Alice", 5, 1, 1, 100), player("carol", "Carol", 6, 2, 0, 50)],
+            # 4614's false starts: one team alone in the lobby for a few seconds, plus a spectator.
+            "false-start": [player("carol", "Carol", 1, 1, 0, 0), player("dave", "Dave", 1, 1, 0, 0),
+                            player(None, "zzz", 2, 999, 0, 0)],
+            "solo-lobby": [player("alice", "Alice", 7, 3, 0, 80), player(None, "R1", 8, 1, 2, 300),
+                           player(None, "R2", 9, 2, 1, 200)],
+            "shuffled": [player("alice", "Alice", 1, 1, 2, 300), player("carol", "Carol", 1, 1, 1, 200),
+                         player("bob", "Bob", 2, 2, 0, 90), player("dave", "Dave", 2, 2, 0, 80)],
+        }
+        world = three_game_world(
+            anchors={"tok-101": own_games(("g1", 10), ("one-v-one", 12), ("false-start", 14), ("solo-lobby", 16),
+                                          ("shuffled", 18), ("g2", 20), ("g3", 30))},
+            boards={**three_game_world()["boards"], **side_games},
+        )
+        result, _ = await calculate(**world)
+
+        self.assertEqual([g["guid"] for g in result["individual_games"]], ["g1", "g2", "g3"])
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        reasons = {d["guid"]: d["reason"] for d in result["diagnostics"]["round_selection"] if not d["included"]}
+        self.assertEqual(reasons, {"one-v-one": "team_too_small", "false-start": "one_playing_team",
+                                   "solo-lobby": "unknown_opponent", "shuffled": "roster_sides_conflict"})
+
+    async def test_a_side_game_against_strangers_is_not_counted(self):
+        # Only team A's linked players are in it; the opponents were never seen on team B in the real games.
+        vs_strangers = [player("alice", "Alice", 3, 1, 3, 500), player("bob", "Bob", 3, 1, 1, 300),
+                        player(None, "R1", 4, 2, 0, 90), player(None, "R2", 4, 2, 0, 60)]
+        world = three_game_world(
+            anchors={"tok-101": own_games(("g1", 10), ("g2", 20), ("vs-strangers", 25), ("g3", 30))},
+            boards={**three_game_world()["boards"], "vs-strangers": vs_strangers},
+        )
+        result, _ = await calculate(**world)
+
+        self.assertEqual([g["guid"] for g in result["individual_games"]], ["g1", "g2", "g3"])
+        decision = next(d for d in result["diagnostics"]["round_selection"] if d["guid"] == "vs-strangers")
+        self.assertEqual((decision["included"], decision["reason"]), (False, "opponent_not_in_queue"))
+
+    async def test_a_linked_opponent_replaced_by_an_unlinked_sub_still_counts(self):
+        # Carol is team B's only linked player; she leaves after game 2. Game 3 has no linked team B player,
+        # but Dave was seen on team B in games 1-2, so game 3 is still the queue's.
+        sub = player(None, "SubGuy", 1, 2, 0, 120)
+        world = three_game_world(boards={
+            "g1": lobby("A", 1, 2), "g2": lobby("B", 1, 2), "g3": swap(lobby("A", 2, 1), "Carol", sub),
+        })
+        with fake_world(**world), \
+                patch.object(neatqueue_client, "get_discord_id_by_slug", side_effect={"alice": 101, "bob": 102, "carol": 201}.get):
+            result, _ = await neatqueue_client.calculate_queue_match_stats("3674", 999)
+
+        self.assertEqual(result["total_games_played"], 3)
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        self.assertEqual({e["username"]: e["stats"]["games"] for e in result["teams"][1]},
+                         {"Carol": 2, "Dave": 3, "SubGuy": 1})
+
+    async def test_a_stranger_squad_beating_both_teams_neither_shows_nor_takes_the_game(self):
+        outsiders = [player(None, "Rando1", 30, 1, 4, 900), player(None, "Rando2", 30, 1, 2, 700)]
+        g1 = [{**row, "rank": 2 if row["team_id"] == 10 else 3} for row in lobby("A")] + outsiders
+        world = three_game_world(boards={**three_game_world()["boards"], "g1": g1})
+        result, _ = await calculate(**world)
+
+        self.assertEqual(result["individual_games"][0]["winning_display_team_index"], 0)
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        shown = {e["username"] for team in result["teams"] for e in team}
+        self.assertFalse({"Rando1", "Rando2"} & shown)
+
+    async def test_only_team_two_linked_keeps_neatqueue_team_numbers(self):
+        world = three_game_world(tokens={201: "tok-201"},
+                                 anchors={"tok-201": own_games(("g1", 10), ("g2", 20), ("g3", 30))})
+        with fake_world(**world), \
+                patch.object(neatqueue_client, "get_discord_id_by_slug", side_effect={"carol": 201, "dave": 202}.get):
+            result, _ = await neatqueue_client.calculate_queue_match_stats("3674", 999)
+
+        self.assertEqual([e["username"] for e in result["teams"][1]], ["Carol", "Dave"])
+        self.assertEqual(result["team_round_wins"], [2, 1])
+        self.assertEqual(result["winning_team_index"], 0)
+
+    async def test_same_name_guests_on_opposite_teams_stay_separate(self):
+        world = three_game_world(boards={
+            "g1": lobby("A", 1, 2) + [player(None, "Player", 1, 1, 1, 150)],
+            "g2": lobby("B", 1, 2) + [player(None, "Player", 2, 1, 2, 250)],
+            "g3": lobby("A", 1, 2),
+        })
+        result, _ = await calculate(**world)
+
+        guests = [(index, e["stats"]["games"], e["stats"]["damage"])
+                  for index, team in enumerate(result["teams"]) for e in team if e["username"] == "Player"]
+        self.assertEqual(sorted(guests), [(0, 1, 150), (1, 1, 250)])
 
 
 class ImpactScoreTests(unittest.IsolatedAsyncioTestCase):

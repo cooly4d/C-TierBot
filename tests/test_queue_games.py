@@ -191,6 +191,21 @@ class BuildQueueSnapshotTests(unittest.TestCase):
                          (0, [1, 0], [True]))
         self.assertEqual(json.loads(json.dumps(result)), result)
 
+    def test_a_player_on_both_teams_uses_that_sides_entry_in_each_game(self):
+        # Two different guests both named "Player", one per team, or one person who switched sides mid-series.
+        match_result = self.match_result()
+        match_result["teams"][0].append({"discord_id": None, "username": "Player", "slug": None, "guest": True,
+                                         "display_name": "Player (Team 1)", "stats": {}})
+        match_result["teams"][1].append({"discord_id": None, "username": "Player", "slug": None, "guest": True,
+                                         "display_name": "Player (Team 2)", "stats": {}})
+        match_result["individual_games"][0]["players"] += [game_row("player", "Player", None, 0, 1, 150, None),
+                                                           game_row("player", "Player", None, 1, 2, 250, None)]
+
+        rows = build_queue_snapshot("3674", match_result)["games"][0]["players"]
+
+        self.assertEqual([(p["team"], p["name"], p["damage"]) for p in rows if p["name"].startswith("Player")],
+                         [(0, "Player (Team 1)", 150), (1, "Player (Team 2)", 250)])
+
     def test_rows_without_a_matching_team_entry_are_skipped(self):
         match_result = self.match_result()
         match_result["individual_games"][0]["players"].append(game_row("ghost", "Ghost", "ghost", 1, 1, 1, 1))

@@ -50,18 +50,20 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(anchors[102]["matches"], [])
         self.assertEqual(anchors[201]["matches"], [{"guid": "g1", "timestamp_ms": START_MS + 600000}])
         decisions = {d["guid"]: d for d in diag["round_selection"]}
-        self.assertEqual(decisions["g1"]["reason"], "intersection_nonempty_histories")
-        self.assertEqual(decisions["g2"]["reason"], "not_shared_by_all_nonempty_histories")
-        self.assertEqual(decisions["stray"]["reason"], "not_shared_by_all_nonempty_histories")
+        self.assertEqual(diag["selection_strategy"], "validated_union")
+        # "stray" put both NeatQueue teams' players on one survev.de team (e.g. a shuffled warm-up).
+        self.assertEqual({guid: d["reason"] for guid, d in decisions.items()}, {
+            "g1": "accepted", "g2": "accepted", "stray": "roster_sides_conflict", "missing": "scoreboard_unavailable"})
+        self.assertEqual(decisions["g1"]["team_sides"], {"10": 0, "20": 1})
+        self.assertEqual(decisions["g1"]["roster_votes"], {"10": [2, 0], "20": [0, 2]})
         self.assertFalse(decisions["stray"]["included"])
-        self.assertFalse(decisions["missing"]["scoreboard_requested"])
-        self.assertIsNone(decisions["missing"]["scoreboard_available"])
+        self.assertTrue(decisions["missing"]["scoreboard_requested"])
+        self.assertFalse(decisions["missing"]["scoreboard_available"])
         self.assertEqual(decisions["g2"]["timestamp_ms"], START_MS + 1200000)
-        self.assertEqual(diag["selected_guids"], ["g1"])
-        self.assertEqual(diag["shared_guids"], ["g1"])
+        self.assertEqual(diag["selected_guids"], ["g1", "g2"])
         self.assertNotIn("token", json.dumps(diag))
 
-    async def test_disjoint_histories_still_use_union_with_no_linked_opponents(self):
+    async def test_games_seen_by_different_anchors_count_even_with_no_linked_opponents(self):
         world = three_game_world(
             tokens={101: "tok-a", 102: "tok-b"},
             anchors={"tok-a": own_games(("g1", 10)), "tok-b": own_games(("g2", 20))},
@@ -73,26 +75,34 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(error)
         self.assertEqual(result["team_round_wins"], [1, 1])
         diag = result["diagnostics"]
-        self.assertEqual(diag["selection_strategy"], "union_fallback_no_shared_games")
+        self.assertEqual(diag["selection_strategy"], "validated_union")
         self.assertEqual(diag["selected_guids"], ["g1", "g2"])
+        # Only Team 1 is linked: the one other playing team is taken as Team 2.
+        decision = diag["round_selection"][0]
+        self.assertEqual((decision["roster_votes"], decision["team_sides"]), ({"10": [2, 0]}, {"10": 0, "20": 1}))
 
-    async def test_excluded_rounds_are_not_fetched_and_missing_boards_are_distinguished(self):
+    async def test_every_candidate_is_fetched_and_each_rejection_is_explained(self):
+        false_start = [row for row in lobby("A") if row["slug"] in ("carol", "dave")]
+        boards = {"g1": lobby("A"), "false-start": false_start}
         world = three_game_world(anchors={
-            "tok-101": own_games(("g1", 10), ("missing", 20), ("excluded", 30)),
-            "tok-201": own_games(("g1", 10), ("missing", 20)),
+            "tok-101": own_games(("g1", 10), ("missing", 20)),
+            "tok-201": own_games(("g1", 10), ("false-start", 30)),
         })
         with fake_world(**world):
             with patch.object(neatqueue_client, "fetch_public_match_data",
-                              AsyncMock(side_effect=lambda session, guid, **kwargs: lobby("A") if guid == "g1" else None)) as fetch:
+                              AsyncMock(side_effect=lambda session, guid, **kwargs: boards.get(guid))) as fetch:
                 result, error = await neatqueue_client.calculate_queue_match_stats("3674", 999)
         self.assertIsNone(error)
-        self.assertEqual({call.args[1] for call in fetch.call_args_list}, {"g1", "missing"})
+        self.assertEqual({call.args[1] for call in fetch.call_args_list}, {"g1", "missing", "false-start"})
         decisions = {d["guid"]: d for d in result["diagnostics"]["round_selection"]}
-        self.assertTrue(decisions["missing"]["included"])
+        self.assertEqual({guid: (d["included"], d["reason"]) for guid, d in decisions.items()}, {
+            "g1": (True, "accepted"),
+            "missing": (False, "scoreboard_unavailable"),
+            "false-start": (False, "one_playing_team"),
+        })
         self.assertTrue(decisions["missing"]["scoreboard_requested"])
         self.assertFalse(decisions["missing"]["scoreboard_available"])
-        self.assertFalse(decisions["excluded"]["included"])
-        self.assertIsNone(decisions["excluded"]["scoreboard_fetch"])
+        self.assertEqual(result["total_games_played"], 1)
 
     async def test_active_queue_keeps_panel_start_and_logs_history_start_for_comparison(self):
         panel = panel_message("<@101> <@102>", "<@201> <@202>")

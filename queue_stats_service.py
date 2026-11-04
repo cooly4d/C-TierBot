@@ -204,16 +204,17 @@ def build_queue_snapshot(match_id: str, match_result: dict) -> dict:
     """The compact, JSON-safe slice of a finished queue that the Game breakdown needs: for every game, who played
     on which displayed team and their kills, damage and impact. Lobby strangers outside the two shown teams are
     left out, and names are the display names already resolved for the result image."""
+    # Keyed by team too: someone who switched sides mid-series has one entry per side.
     entries = {
-        player_identity(entry.get("slug"), entry.get("username") or ""): entry
-        for team in match_result.get("teams") or [] for entry in team
+        (team_index, player_identity(entry.get("slug"), entry.get("username") or "")): entry
+        for team_index, team in enumerate(match_result.get("teams") or []) for entry in team
     }
     games = []
     for game in match_result.get("individual_games") or []:
         rows = []
         for row in game.get("players") or []:
             team_index = row.get("display_team_index")
-            entry = entries.get(row.get("identity"))
+            entry = entries.get((team_index, row.get("identity")))
             if team_index is None or entry is None:
                 continue
             rows.append({

@@ -56,7 +56,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Ongoing queues show **IN PROGRESS** above the score and **Team N leads** (or **No team leading**). The Game breakdown button only appears once the queue has finished. |
+| `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Ongoing queues show **IN PROGRESS** above the score and **Team N leads** (or **No team leading**). Substitutes and players who left are shown on the team they played for, with the games they played (for example `1/7`). The Game breakdown button only appears once the queue has finished. |
 | `/hall_of_fame` | Best single-queue records: most kills, most average damage, longest queue. Only finished queues can set records. |
 
 You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel** (for example, `queue-4607`) to get that queue's current stats as a public reply. `score?` needs no mention and can appear anywhere in a message (for example, "what is the score?"), ignoring capitalization. It must be the word `score` followed directly by `?`, so `scoreboard?` or `score` without a question mark does not trigger it. For the mention shortcut, select the actual bot mention in Discord. Ongoing queues show **IN PROGRESS**; finished queues show final results and the Game breakdown button. These channels do not need individual `/setup` registration, but the bot needs permission to view them, send replies, and attach files. The same linked-player and queue-data requirements as `/queue_stats` apply.
@@ -77,8 +77,8 @@ Admin-only commands are hidden from members without the **Administrator** permis
 
 1. An admin runs `/setup` on the channel where NeatQueue posts its results.
 2. When NeatQueue announces a winner (or finalizes its results panel), the bot picks up the queue number.
-3. It looks up the queue on NeatQueue, then uses the linked players' own survev.de match history to find exactly which games belonged to that queue.
-4. It pulls the public scoreboard for each game, groups players by team, and posts the image.
+3. It looks up the queue on NeatQueue, then uses the linked players' own survev.de match history to find the games played during that queue.
+4. It pulls the public scoreboard for each game and keeps only games between the queue's two teams (each with at least 2 players). survev.de renumbers teams every game, so each game's teams are matched to NeatQueue's Team 1 and Team 2 from where the linked roster players played. That way substitutes count for the team they actually played with. Then it posts the image.
 5. For a finished queue it also saves each game's numbers (kept for 90 days), so the **Game breakdown** button can show them later, even after a restart. It opens a private message that only the person who clicked can see, with one card per game and Previous/Next buttons.
 
 You need **at least one linked player** in a queue for the bot to find its games. Players who haven't linked still show up under their survev.de name, and the result message has a button so they can link on the spot.

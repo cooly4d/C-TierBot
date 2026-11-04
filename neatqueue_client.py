@@ -4,6 +4,7 @@ turns a NeatQueue match number + survev.de match data into one finalized result.
 import asyncio
 import json
 import re
+from collections import Counter
 from datetime import datetime, timezone
 
 import aiohttp
@@ -316,6 +317,74 @@ async def resolve_queue_user_display_names(teams: list[list[dict]], client: disc
 # survev.de saves spectators with this placeholder rank (the game server's getPlayersSortedByRank). A spectator can
 # sit in a team_id that a queue team used in an earlier game, so they must never be counted as a player.
 SURVEV_SPECTATOR_RANK = 999
+QUEUE_TEAM_COUNT = 2
+# Smallest team a real queue game can have (a 3v4 after someone leaves still counts); anything smaller is a side game.
+MIN_QUEUE_TEAM_SIZE = 2
+
+
+def parse_rank(raw) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_round_sides(board: list[dict], roster_side) -> tuple[dict | None, str, dict]:
+    """Which survev.de team_id was NeatQueue's Team 1 and Team 2 in one game, as ({team_id: side}, "accepted", details),
+    or (None, reason, details) when the game isn't one of this queue's. survev.de renumbers teams every game, so this is
+    decided game by game from where the roster's linked players (`roster_side(slug)` -> side or None) actually played."""
+    members: dict = {}
+    for row in board:
+        if parse_rank(row.get("rank")) == SURVEV_SPECTATOR_RANK:
+            continue
+        if row.get("team_id") is None or not player_identity(row.get("slug"), (row.get("username") or "").strip()):
+            continue
+        members.setdefault(row["team_id"], []).append(row)
+
+    votes = {
+        team_id: Counter(side for side in (roster_side(row.get("slug")) for row in rows) if side is not None)
+        for team_id, rows in members.items()
+    }
+    details = {
+        "playing_teams": len(members),
+        "team_sizes": {str(team_id): len(rows) for team_id, rows in members.items()},
+        # Linked roster players per survev.de team, counted per NeatQueue team: {"2": [3, 0]} = three Team 1 players.
+        "roster_votes": {
+            str(team_id): [counter[side] for side in range(QUEUE_TEAM_COUNT)]
+            for team_id, counter in votes.items() if counter
+        },
+    }
+
+    sides = {}
+    for team_id, counter in votes.items():
+        ranked = counter.most_common()
+        if not ranked:
+            continue
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            return None, "roster_sides_conflict", details
+        sides[team_id] = ranked[0][0]
+    if not sides:
+        return None, "no_roster_players", details
+    if len(set(sides.values())) != len(sides):
+        # e.g. a warm-up with shuffled teams: one NeatQueue team's players spread over several survev.de teams.
+        return None, "roster_sides_conflict", details
+    if len(sides) == 1:
+        # Only one side has linked roster players here; the queue's lobbies hold exactly two teams, so the
+        # one other playing team is the opponent. No other team means a false start, several mean another lobby.
+        others = [team_id for team_id in members if team_id not in sides]
+        if not others:
+            return None, "one_playing_team", details
+        if len(others) > 1:
+            return None, "unknown_opponent", details
+        sides[others[0]] = 1 - next(iter(sides.values()))
+        details["inferred_team_id"] = others[0]
+    if any(len(members[team_id]) < MIN_QUEUE_TEAM_SIZE for team_id in sides):
+        return None, "team_too_small", details
+
+    details["team_sides"] = {str(team_id): side for team_id, side in sides.items()}
+    return sides, "accepted", details
 
 
 def player_identity(slug: str | None, username: str) -> str:
@@ -333,9 +402,10 @@ def parse_impact_score(raw) -> int | float | None:
 
 
 async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics: dict | None = None):
-    """Builds the queue's teams directly from survev.de's own match data (ground truth for who played
-    and which team_id they were on), then overlays a Discord display name wherever the player's slug
-    matches a /verify'd user. Anyone without a linked account just keeps their survev.de username."""
+    """Builds the queue's teams from survev.de's own match data (ground truth for who played each game and
+    with whom), placing each game's two teams on NeatQueue's Team 1/Team 2 via the roster's linked players,
+    then overlays a Discord display name wherever the player's slug matches a /verify'd user. Anyone without
+    a linked account just keeps their survev.de username."""
     if diagnostics is None:
         diagnostics = {}
     diagnostics.update({
@@ -437,8 +507,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             "to_utc": datetime.fromtimestamp(end_ms / 1000, timezone.utc).isoformat(),
         })
 
-        # Remember NeatQueue's own team ordering (by discord_id) so our survev.de-team_id-based grouping
-        # can be displayed in the same left/right order NeatQueue itself uses.
+        # NeatQueue's team index per rostered discord_id: each game's survev.de teams are mapped onto these.
         neatqueue_team_index_by_discord_id: dict[int, int] = {}
         for i, team_players in enumerate(teams):
             for player in team_players:
@@ -487,15 +556,11 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         if not anchor_guid_sets:
             return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
 
-        shared_guids = set.intersection(*anchor_guid_sets)
+        # Every game any linked player played in the window is a candidate, and each one is then checked against the
+        # roster (resolve_round_sides). Requiring every linked player to have played a game dropped real games
+        # whenever a linked substitute joined late or someone logged in partway through the series.
         candidate_guids = set.union(*anchor_guid_sets)
-        queue_guids = shared_guids
-        diagnostics["selection_strategy"] = "intersection_nonempty_histories" if len(anchor_guid_sets) > 1 else "single_history"
-        if not queue_guids:
-            # Anchors disagree entirely (e.g. inconsistent windowing) — union is safer than nothing.
-            queue_guids = candidate_guids
-            diagnostics["selection_strategy"] = "union_fallback_no_shared_games"
-        diagnostics["shared_guids"] = sorted(shared_guids)
+        diagnostics["selection_strategy"] = "validated_union"
         diagnostics["candidate_guids"] = sorted(candidate_guids)
 
         guid_timestamps: dict[str, int] = {}
@@ -508,13 +573,12 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
                 if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
                     guid_timestamps[guid] = timestamp
 
-        ordered_queue_guids: list[str] = sorted(
-            queue_guids,
+        ordered_candidate_guids: list[str] = sorted(
+            candidate_guids,
             key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
         )
 
-        # Step 2: pull the public scoreboard for every identified round and aggregate per survev.de
-        # player (keyed by slug when present, else username — covers accounts with no public slug).
+        # Step 2: pull the public scoreboard for every candidate game.
         scoreboard_diagnostics = {}
 
         async def _fetch_board(guid: str):
@@ -522,35 +586,79 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             async with sem:
                 return guid, await fetch_public_match_data(session, guid, diagnostics=scoreboard_diagnostics[guid])
 
-        boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_queue_guids)))
+        boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_candidate_guids)))
 
-        for guid in sorted(candidate_guids, key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))):
+        # NeatQueue keeps only the final roster (a substitute replaces the player who left), so it can place the
+        # linked players still listed in it; everyone else is placed by whom they played alongside in each game.
+        discord_id_by_slug: dict[str, int | None] = {}
+
+        def lookup_discord_id(slug: str) -> int | None:
+            if slug not in discord_id_by_slug:
+                discord_id_by_slug[slug] = get_discord_id_by_slug(slug)
+            return discord_id_by_slug[slug]
+
+        def roster_side(slug: str | None) -> int | None:
+            discord_id = lookup_discord_id(slug) if slug else None
+            side = neatqueue_team_index_by_discord_id.get(discord_id) if discord_id is not None else None
+            return side if side is not None and side < QUEUE_TEAM_COUNT else None
+
+        def row_identity(row: dict) -> str:
+            return player_identity(row.get("slug"), (row.get("username") or "").strip())
+
+        resolved = {guid: resolve_round_sides(board, roster_side) for guid, board in boards_by_guid.items() if board}
+
+        # In games where both teams had linked roster players, everyone's side is certain. A game where only one
+        # team had any is then kept only if the other team includes someone seen on the opposing side, so a side
+        # game against strangers isn't counted, while a linked opponent replaced by an unlinked sub still is. With
+        # no such game at all (e.g. nobody on one team is linked), the other playing team is trusted as before.
+        confirmed_sides: dict[str, set[int]] = {}
+        for guid, (sides, _reason, details) in resolved.items():
+            if sides is None or "inferred_team_id" in details:
+                continue
+            for row in boards_by_guid[guid]:
+                if parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK and row.get("team_id") in sides:
+                    confirmed_sides.setdefault(row_identity(row), set()).add(sides[row["team_id"]])
+        if confirmed_sides:
+            for guid, (sides, _reason, details) in list(resolved.items()):
+                if sides is None or "inferred_team_id" not in details:
+                    continue
+                inferred_team_id = details["inferred_team_id"]
+                opponents = {row_identity(row) for row in boards_by_guid[guid]
+                             if row.get("team_id") == inferred_team_id
+                             and parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK}
+                if not any(confirmed_sides.get(key) == {sides[inferred_team_id]} for key in opponents):
+                    resolved[guid] = (None, "opponent_not_in_queue", details)
+
+        # Step 3: aggregate per (side, survev.de player) over the accepted games. Sides are NeatQueue's own team
+        # indices, so Team 1/Team 2 always match NeatQueue, and a substitute counts for the side they actually
+        # played on in each game rather than whatever team_id they first appeared under.
+        players: dict[tuple[int, str], dict] = {}
+        selected_guids: list[str] = []
+        round_winner_display_indices: list[int | None] = []
+        game_rows_by_guid: dict[str, list[dict]] = {}
+        for guid in ordered_candidate_guids:
             board = boards_by_guid.get(guid)
-            included = guid in queue_guids
-            diagnostics["round_selection"].append({
+            decision = {
                 "guid": guid,
                 "timestamp_ms": guid_timestamps.get(guid),
-                "included": included,
-                "reason": diagnostics["selection_strategy"] if included else "not_shared_by_all_nonempty_histories",
-                "scoreboard_requested": included,
-                "scoreboard_player_count": (len(board) if board else 0) if included else None,
-                "scoreboard_available": bool(board) if included else None,
+                "scoreboard_requested": True,
+                "scoreboard_player_count": len(board) if board else 0,
+                "scoreboard_available": bool(board),
                 "scoreboard_fetch": scoreboard_diagnostics.get(guid),
-            })
-        diagnostics["selected_guids"] = ordered_queue_guids
-
-        players: dict[str, dict] = {}
-        # survev.de's team_id is allocated fresh per game (not stable across a series), so timeline
-        # round winners must be tracked per identity here and resolved via that identity later.
-        round_player_rank_by_guid: dict[str, dict[str, int]] = {}
-        game_details_by_guid: dict[str, dict] = {}
-        for guid in ordered_queue_guids:
-            board = boards_by_guid.get(guid)
+            }
+            diagnostics["round_selection"].append(decision)
             if not board:
+                decision.update({"included": False, "reason": "scoreboard_unavailable"})
+                continue
+            sides, reason, details = resolved[guid]
+            decision.update(details)
+            decision.update({"included": sides is not None, "reason": reason})
+            if sides is None:
                 continue
 
-            round_ranks = round_player_rank_by_guid.setdefault(guid, {})
-            game_entry = game_details_by_guid.setdefault(guid, {"guid": guid, "players": []})
+            selected_guids.append(guid)
+            game_rows = game_rows_by_guid.setdefault(guid, [])
+            best_rank_by_side: dict[int, int] = {}
             for p in board:
                 username = (p.get("username") or "").strip()
                 slug = p.get("slug")
@@ -558,16 +666,11 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
                 if not key:
                     continue
 
-                raw_rank = p.get("rank")
-                parsed_rank = None
-                if raw_rank is not None:
-                    try:
-                        parsed_rank = int(raw_rank)
-                    except (TypeError, ValueError):
-                        parsed_rank = None
-
+                parsed_rank = parse_rank(p.get("rank"))
                 impact = parse_impact_score(p.get("impact_score"))
-                game_entry["players"].append({
+                # None for spectators and for anyone outside the queue's two teams: logged, never counted.
+                side = None if parsed_rank == SURVEV_SPECTATOR_RANK else sides.get(p.get("team_id"))
+                game_rows.append({
                     "identity": key,
                     "username": username,
                     "slug": slug,
@@ -576,41 +679,42 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
                     "kills": p.get("kills", 0),
                     "damage_dealt": p.get("damage_dealt", 0),
                     "impact_score": impact,
+                    "display_team_index": side,
                 })
-                if parsed_rank == SURVEV_SPECTATOR_RANK:
-                    continue  # kept in the game log, but never on a team or in the series stats
+                if side is None:
+                    continue
+                if parsed_rank is not None:
+                    best_rank_by_side[side] = min(best_rank_by_side.get(side, parsed_rank), parsed_rank)
 
-                agg = players.setdefault(key, {
-                    "username": username, "slug": slug, "team_id": p.get("team_id"),
-                    "games": 0, "wins": 0, "kills": 0, "damage": 0, "best_rank": None,
+                agg = players.setdefault((side, key), {
+                    "username": username, "slug": slug,
+                    "games": 0, "wins": 0, "kills": 0, "damage": 0,
                     "impact_total": 0, "impact_games": 0,
                 })
                 agg["games"] += 1
-
                 agg["wins"] += 1 if parsed_rank == 1 else 0
                 agg["kills"] += p.get("kills", 0)
                 agg["damage"] += p.get("damage_dealt", 0)
                 if impact is not None:
                     agg["impact_total"] += impact
                     agg["impact_games"] += 1
-                if parsed_rank is not None and (agg["best_rank"] is None or parsed_rank < agg["best_rank"]):
-                    agg["best_rank"] = parsed_rank
-                if parsed_rank is not None and (key not in round_ranks or parsed_rank < round_ranks[key]):
-                    round_ranks[key] = parsed_rank
+
+            # The game goes to whichever queue team placed better (even if a lobby stranger finished above both);
+            # a tie for the best placing leaves it undecided.
+            best = min(best_rank_by_side.values(), default=None)
+            leaders = [side for side, rank in best_rank_by_side.items() if rank == best]
+            round_winner_display_indices.append(leaders[0] if len(leaders) == 1 else None)
+        diagnostics["selected_guids"] = selected_guids
 
         if not players:
+            if any(boards_by_guid.values()):
+                return None, "None of the linked players' survev.de games in this queue's time window were between its two teams."
             return None, "survev.de returned no player data for this queue's match(es)."
 
-        # Step 3: group by survev.de's own team_id (ground truth — no NeatQueue roster matching needed),
-        # resolving a Discord identity wherever the slug belongs to a /verify'd user.
-        team_ids = sorted({p["team_id"] for p in players.values() if p["team_id"] is not None})
-        team_id_index = {tid: i for i, tid in enumerate(team_ids)}
-        result_teams = [[] for _ in team_ids] or [[]]
-
-        for p in players.values():
-            idx = team_id_index.get(p["team_id"], 0)
-            discord_id = get_discord_id_by_slug(p["slug"]) if p["slug"] else None
-            result_teams[idx].append({
+        result_teams: list[list[dict]] = [[] for _ in range(QUEUE_TEAM_COUNT)]
+        for (side, _key), p in players.items():
+            discord_id = lookup_discord_id(p["slug"]) if p["slug"] else None
+            result_teams[side].append({
                 "discord_id": discord_id,
                 "username": p["username"],
                 "slug": p["slug"],
@@ -624,48 +728,6 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
 
         for team in result_teams:
             team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
-
-        # A game can involve more teams than just the queue's own (e.g. public matchmaking lobbies with
-        # random other squads) — only show the top 2 places so unrelated teams never clutter the image.
-        if len(result_teams) > 2:
-            team_best_rank = {}
-            for tid in team_ids:
-                ranks = [p["best_rank"] for p in players.values() if p["team_id"] == tid and p["best_rank"] is not None]
-                team_best_rank[tid] = min(ranks) if ranks else 999
-            top_two_indices = {
-                team_id_index[tid]
-                for tid in sorted(team_ids, key=lambda tid: team_best_rank[tid])[:2]
-            }
-            result_teams = [team for i, team in enumerate(result_teams) if i in top_two_indices]
-
-        # Reorder to match NeatQueue's own Team 1/Team 2 display order, using known discord_ids as votes.
-        def neatqueue_order_key(team):
-            votes = [neatqueue_team_index_by_discord_id[e["discord_id"]] for e in team if e["discord_id"] in neatqueue_team_index_by_discord_id]
-            if not votes:
-                return len(teams)  # no known players on this team — push to the end
-            return max(set(votes), key=votes.count)
-
-        result_teams = sorted(result_teams, key=neatqueue_order_key)
-
-        # Identity, not team_id, is what stays stable across a series' separate games.
-        identity_to_display_index: dict[str, int] = {
-            player_identity(entry["slug"], entry["username"]): idx
-            for idx, team in enumerate(result_teams) for entry in team
-        }
-        round_winner_display_indices: list[int | None] = []
-        for guid in ordered_queue_guids:
-            round_ranks = round_player_rank_by_guid.get(guid, {})
-            displayed_rank_one_winners = {
-                identity_to_display_index[key]
-                for key, rank in round_ranks.items()
-                if rank == 1 and key in identity_to_display_index
-            }
-
-            # Only classify round when exactly one displayed team has rank 1 for that game.
-            if len(displayed_rank_one_winners) == 1:
-                round_winner_display_indices.append(next(iter(displayed_rank_one_winners)))
-            else:
-                round_winner_display_indices.append(None)
 
         # Authoritative series score/winner should come from the actual round-by-round winners,
         # not from a teammate's aggregate win count. That keeps the displayed result aligned with
@@ -681,15 +743,8 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
                 winning_team_index = team_round_wins.index(max_wins)
 
         individual_games: list[dict] = []
-        for game_index, guid in enumerate(ordered_queue_guids, start=1):
-            winner_idx = round_winner_display_indices[game_index - 1] if game_index - 1 < len(round_winner_display_indices) else None
-            game_entry = game_details_by_guid.get(guid, {"guid": guid, "players": []})
-            players_for_game = game_entry.get("players", [])
-            for game_player in players_for_game:
-                # None for lobby strangers outside the two teams that were kept for display, and for spectators
-                # (even one whose name matches a player, so the Game breakdown never shows them).
-                is_spectator = game_player["rank"] == SURVEV_SPECTATOR_RANK
-                game_player["display_team_index"] = None if is_spectator else identity_to_display_index.get(game_player["identity"])
+        for game_index, guid in enumerate(selected_guids, start=1):
+            players_for_game = game_rows_by_guid[guid]
             players_for_game.sort(
                 key=lambda player: (
                     player.get("rank") is None,
@@ -700,7 +755,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             individual_games.append({
                 "game_number": game_index,
                 "guid": guid,
-                "winning_display_team_index": winner_idx,
+                "winning_display_team_index": round_winner_display_indices[game_index - 1],
                 "players": players_for_game,
             })
 
@@ -716,7 +771,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             "winning_team_index": winning_team_index,
             "match_history": match_history,
             "team_round_wins": team_round_wins,
-            "total_games_played": len(ordered_queue_guids),
+            "total_games_played": len(selected_guids),
             "duration_ms": max(0, end_ms - start_ms),
             "match_start_ms": start_ms,
             "match_end_ms": end_ms,
