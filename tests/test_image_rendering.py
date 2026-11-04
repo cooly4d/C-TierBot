@@ -6,6 +6,7 @@ from PIL import Image, ImageChops, ImageDraw
 
 import image_utils
 from image_utils import (
+    QUEUE_IMG_ACCENT,
     QUEUE_IMG_MUTED,
     QUEUE_IMG_TEXT,
     _queue_cell,
@@ -119,7 +120,7 @@ class PartialPlayerLabelTests(unittest.TestCase):
         drawn = []
 
         def capture(draw, xy, text, *args, **kwargs):
-            drawn.append(text)
+            drawn.append((text, kwargs.get("fill")))
             return original_text(draw, xy, text, *args, **kwargs)
 
         with patch.object(ImageDraw.ImageDraw, "text", new=capture):
@@ -138,11 +139,12 @@ class PartialPlayerLabelTests(unittest.TestCase):
         texts = self.drawn_texts(lambda: generate_queue_result_image(
             "4614", [subbed, others], 0, [True, False, True], [2, 1], duration_ms=600_000))
 
-        self.assertIn("2/3", texts)
-        self.assertIn("1/3", texts)
-        self.assertNotIn("3/3", texts)
-        footer = next(text for text in texts if text.startswith("Unlinked"))
-        self.assertTrue(footer.endswith("2/3 = played 2 of 3 games"))
+        colors = dict(texts)
+        self.assertEqual((colors.get("2/3"), colors.get("1/3")), (QUEUE_IMG_ACCENT, QUEUE_IMG_ACCENT))
+        self.assertNotIn("3/3", colors)
+        footer = next(text for text, _ in texts if text.startswith("Unlinked"))
+        self.assertEqual(colors[footer], QUEUE_IMG_MUTED)
+        self.assertEqual(colors.get("2/3 = played 2 of 3 games"), QUEUE_IMG_ACCENT)
 
     def test_full_series_and_game_cards_have_no_label(self):
         full = self.drawn_texts(lambda: generate_queue_result_image(
@@ -152,8 +154,8 @@ class PartialPlayerLabelTests(unittest.TestCase):
             [True] * 7, [4, 3]))
 
         for texts in (full, game):
-            self.assertFalse(any("/" in text and text.replace("/", "").isdigit() for text in texts))
-            self.assertFalse(any("games" in text and "played" in text for text in texts))
+            self.assertFalse(any("/" in text and text.replace("/", "").isdigit() for text, _ in texts))
+            self.assertFalse(any("games" in text and "played" in text for text, _ in texts))
 
 
 class ImpactCellTests(unittest.TestCase):

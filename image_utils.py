@@ -337,7 +337,7 @@ def _render_queue_card(
 ) -> BytesIO:
     """Draws one queue card: a header (title, result line, score, game timeline) above one table panel per team.
     The series result image and the single-game card share this and differ only in what they pass in.
-    With `series_games`, players who played fewer games than that get a muted 'played/total' label."""
+    With `series_games`, players who played fewer games than that get an orange 'played/total' label."""
     S = 2  # 2x supersampling factor for smooth anti-aliased circles, borders, and text
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
@@ -566,7 +566,7 @@ def _render_queue_card(
                     if games_label:
                         games_y = _vcenter_y(draw, header_font, row_box_top, row_box_bottom)
                         draw.text((next_x + QUEUE_IMG_UNLINKED_ICON_GAP * S, games_y), games_label,
-                                  font=header_font, fill=QUEUE_IMG_MUTED)
+                                  font=header_font, fill=QUEUE_IMG_ACCENT)
                 else:
                     value_bbox = draw.textbbox((0, 0), value, font=font)
                     value_width = value_bbox[2] - value_bbox[0]
@@ -584,24 +584,24 @@ def _render_queue_card(
     footer_icon = _build_unlinked_icon(18 * S)
     footer_icon_gap = 8 * S
     footer_text = "Unlinked — link your survev.de account with /verify to appear in future leaderboards!"
-    # Explain the played/total label with the first real one on this card, e.g. "1/7 = played 1 of 7 games".
+    # Explain the orange played/total label, in the same orange, with the first real one on this card.
+    legend_text = ""
     example = next((label for team in teams for entry in team if (label := partial_games_label(entry, series_games))), None)
     if example:
         played, total = example.split("/")
-        footer_text += f"   ·   {example} = played {played} of {total} games"
-    footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
-    footer_text_width = footer_bbox[2] - footer_bbox[0]
-    total_footer_width = footer_icon.width + footer_icon_gap + footer_text_width
+        footer_text += "   ·   "
+        legend_text = f"{example} = played {played} of {total} games"
+    footer_text_width = draw.textlength(footer_text, font=footer_font)
+    legend_width = draw.textlength(legend_text, font=footer_font) if legend_text else 0
+    total_footer_width = footer_icon.width + footer_icon_gap + footer_text_width + legend_width
     footer_start_x = (QUEUE_IMG_WIDTH * S - total_footer_width) / 2
     footer_y = _vcenter_y(draw, footer_font, panel_bottom * S, height * S)
     footer_icon_y = round((panel_bottom * S + height * S - footer_icon.height) / 2)
     image.paste(footer_icon, (round(footer_start_x), footer_icon_y), footer_icon)
-    draw.text(
-        (footer_start_x + footer_icon.width + footer_icon_gap, footer_y),
-        footer_text,
-        font=footer_font,
-        fill=QUEUE_IMG_MUTED,
-    )
+    footer_text_x = footer_start_x + footer_icon.width + footer_icon_gap
+    draw.text((footer_text_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+    if legend_text:
+        draw.text((footer_text_x + footer_text_width, footer_y), legend_text, font=footer_font, fill=QUEUE_IMG_ACCENT)
 
     image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
 
