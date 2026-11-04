@@ -17,7 +17,7 @@
 
 ## Current State
 
-The existing features below are implemented. The queue-mention shortcut is committed in `acb524d`, its `score?` alias in `a134178`, silent suppression in `94cde17`, the `IN PROGRESS` live header and broader `score?` regex in `8ad2a72`, and the queue spectator fix in `1f00ee9`. The automated unit test suite currently passes `230` tests across `10` test modules via `python -m unittest discover tests`. Of the nine queue-stat accuracy backlog items, five (substitutes, late join, unrelated games, top-two squads, Team-2-only order) are fixed locally pending deployment, same-name guests is partly fixed, and three remain. See Current Focus and Handover for deployment and working-tree status.
+The existing features below are implemented. The queue-mention shortcut is committed in `acb524d`, its `score?` alias in `a134178`, silent suppression in `94cde17`, the `IN PROGRESS` live header and broader `score?` regex in `8ad2a72`, and the queue spectator fix in `1f00ee9`. The automated unit test suite currently passes `232` tests across `10` test modules via `python -m unittest discover tests`. Of the nine queue-stat accuracy backlog items, five (substitutes, late join, unrelated games, top-two squads, Team-2-only order) are fixed locally pending deployment, same-name guests is partly fixed, and three remain. See Current Focus and Handover for deployment and working-tree status.
 
 ### Slash Commands (`16` total in `leaderboard_bot.py`)
 
@@ -247,6 +247,17 @@ The following decisions were explicitly requested or approved by the user across
 ---
 
 ## Current Focus and Handover
+
+### Single-Game Timeline Fix & Queue Stats Review (2026-11-04, local changes)
+- **Fixed:** with one game (e.g. a live `1 - 0`), `_render_queue_card` drew the timeline axis across the whole box with the dot at its left end. It now draws no axis and centers the lone dot; two or more games are unchanged. Also applies to one-game Game breakdown cards. Two `TimelineTests` (the single-game one fails on the old code); spec updated in `design-system/MASTER.md` 5.1. 232 tests pass; `git diff --check` clean. Started from clean commit `a753b14` (the substitute work is committed in `65b86a7`/`a753b14`). No commit, push, or deployment.
+- **The user deprioritized** remake detection and logged-out double rows (2026-11-04: "not important").
+- **Review findings — deprioritized by the user (2026-11-04: "not major issues for now, ignore them"). Do not implement unless the user raises them again:**
+  1. *Startup catch-up never posts (confirmed bug):* NeatQueue sends the queue number as `game_num`, which is missing from `NEATQUEUE_MATCH_ID_KEYS`, so `get_match_game_number` returns `None` (`selected_game_number` is null in all 13 logs) and `backfill_missed_queue_results` skips every match. Nothing checks that the returned history entry is the requested queue either.
+  2. *Rate limits can silently drop games:* survev.de allows 40 `match_data` requests per minute per IP and 60 external-API requests per minute for the whole OAuth app. Lookups fetch every candidate scoreboard (9 for `#4614`) with no retry, and `/leaderboard_weekly` and `/leaderboard_monthly` make one uncached history request per linked user. A 429 on a scoreboard drops that game but still saves the result as final; a 429 on history hides that anchor's games. Suggested fix: backoff retries, cache finished scoreboards by guid (they never change), and the existing P1 incomplete-data item.
+  3. *`/profile` "4v4 Play Time" credits subs and leavers the full queue duration* (`SUM(duration_ms)` per row).
+  4. *Live start time from the newest `Queue#N` message:* an in-progress lookup prefers the panel's `created_at` over NeatQueue's start, so a re-posted or early vote message would drop earlier games from the IN PROGRESS card (the panel was never found in the logs).
+  5. *Games played after the series but before voting* (same teams, in the window) count as rounds.
+- Checked and fine: survev.de saves a game about 2 seconds after it ends (`stopTicker = 1.8`), within the bot's 5-second fetch delay. NeatQueue `time` is UTC (consistent with survev.de game timestamps).
 
 ### Substitute Mapping & Validated Game Selection (2026-11-04, local changes)
 - NeatQueue API checked live (shape only, no tokens or payloads logged): the 4614 history entry has only the final roster (StepZ on Team 1, cooly absent), per-player `timestamp` = queue-join time, `pulled_from` = source queue channel, empty `matchdata`/`game_results`. No substitution record; the public OpenAPI spec only covers the gateway.

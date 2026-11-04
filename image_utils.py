@@ -399,12 +399,15 @@ def _render_queue_card(
         axis_y = timeline_box_y + 74 * S
         axis_x0 = timeline_box_x + 28 * S
         axis_x1 = timeline_box_x + timeline_box_width - 28 * S
-        draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2 * S)
-
-        spacing = 0 if history_count <= 1 else (axis_x1 - axis_x0) / (history_count - 1)
+        if history_count > 1:
+            draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2 * S)
+            first_x, spacing = axis_x0, (axis_x1 - axis_x0) / (history_count - 1)
+        else:
+            # A lone game has nothing to connect to: no axis line, and its dot sits in the middle of the box.
+            first_x, spacing = (axis_x0 + axis_x1) / 2, 0
 
         for idx, result in enumerate(match_history):
-            x = axis_x0 + spacing * idx
+            x = first_x + spacing * idx
             dot_color = QUEUE_IMG_MUTED if result is None else (QUEUE_IMG_WIN if result else QUEUE_IMG_LOSE)
             dot_radius = (14 if idx == highlight_index else 12) * S
             dot_bbox = [x - dot_radius, axis_y - dot_radius, x + dot_radius, axis_y + dot_radius]

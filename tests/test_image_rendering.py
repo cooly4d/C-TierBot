@@ -114,6 +114,48 @@ class QueueProgressLabelTests(unittest.TestCase):
                     self.assertLess(texts["IN PROGRESS"][1], texts[" - "][1])
 
 
+class TimelineTests(unittest.TestCase):
+    S = 2  # the renderer's supersampling factor
+    AXIS_Y = (32 + 74) * S
+    BOX_CENTER_X = ((image_utils.QUEUE_IMG_WIDTH - image_utils.QUEUE_IMG_PADDING) - 560 / 2) * S
+
+    def timeline(self, history):
+        """(axis lines, game-dot centre x positions) drawn for a series card with this match history."""
+        original_line, original_ellipse = ImageDraw.ImageDraw.line, ImageDraw.ImageDraw.ellipse
+        lines, dots = [], []
+
+        box_x0, box_x1 = self.BOX_CENTER_X - 280 * self.S, self.BOX_CENTER_X + 280 * self.S
+
+        def line(draw, xy, *args, **kwargs):
+            # Only the timeline box's axis (the header gradient also draws full-width lines at this height).
+            if all(y == self.AXIS_Y and box_x0 < x < box_x1 for x, y in xy):
+                lines.append(xy)
+            return original_line(draw, xy, *args, **kwargs)
+
+        def ellipse(draw, xy, *args, **kwargs):
+            if kwargs.get("fill") is not None and (xy[1] + xy[3]) / 2 == self.AXIS_Y:
+                dots.append((xy[0] + xy[2]) / 2)
+            return original_ellipse(draw, xy, *args, **kwargs)
+
+        with patch.object(ImageDraw.ImageDraw, "line", new=line), \
+                patch.object(ImageDraw.ImageDraw, "ellipse", new=ellipse):
+            generate_queue_result_image("4615", [team_a(), team_b()], 0, history, [len(history), 0], is_final=False)
+        return lines, dots
+
+    def test_a_single_game_has_no_axis_line_and_a_centred_dot(self):
+        lines, dots = self.timeline([True])
+
+        self.assertEqual(lines, [])
+        self.assertEqual(dots, [self.BOX_CENTER_X])
+
+    def test_several_games_keep_the_axis_spanning_the_box(self):
+        lines, dots = self.timeline([True, False, True])
+
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(len(dots), 3)
+        self.assertEqual((dots[0], dots[-1]), (lines[0][0][0], lines[0][1][0]))
+
+
 class PartialPlayerLabelTests(unittest.TestCase):
     def drawn_texts(self, render):
         original_text = ImageDraw.ImageDraw.text
