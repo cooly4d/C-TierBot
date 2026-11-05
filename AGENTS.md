@@ -26,8 +26,8 @@ These instructions govern **all AI coding agents** working in this repository (i
      - The summary callout banner / podium layout on `/leaderboard_season`
      - A bordered container box around the center series score on queue result cards
      - `" (unlinked)"` text suffixes on queue cards (use the vector broken-chain icon)
-     - Impact score explanation subtext on main queue result Discord messages or `/history` footers
-     - The `Oldest ───► Newest` label on `/history` sparklines
+     - Impact score explanation subtext on main queue result Discord messages or on the history card's footers (now part of `/profile`; `/history` was merged into it)
+     - The `Oldest ───► Newest` label on the history card's sparkline
      - The removed `/queueresults` alias command or split `/market` subcommands
 2. **Stay Within Scope:**
    - Do not make unrelated code changes, opportunistic refactors, or unrequested visual tweaks.
@@ -36,8 +36,8 @@ These instructions govern **all AI coding agents** working in this repository (i
      - *What does NOT count as approval:* Discussing, considering, diagnosing, or exploring an idea.
 3. **Project-Specific Technical Guardrails:**
    - **Discord UI Interactions (`leaderboard_bot.py` & `discord_ui.py`):** All interactive component clicks (`custom_id`s) are routed through `log_interaction(interaction)` in [`leaderboard_bot.py`](leaderboard_bot.py). Leave `@discord.ui.button` / `@discord.ui.select` method bodies in [`discord_ui.py`](discord_ui.py) as `pass`. Never handle an interaction in both places (causes Discord HTTP `40060: Interaction has already been acknowledged`).
-   - **Non-Blocking Event Loop:** Offload all Pillow (`PIL`) image generation calls to `asyncio.to_thread(...)` and bound concurrent external API bursts with `API_SEM` (`asyncio.Semaphore(5)`).
-   - **Cross-Platform Fonts:** Keep font paths anchored to `_BASE_DIR` in [`bot_config.py`](bot_config.py) (`QuattrocentoSans-Bold.ttf`) so rendering is identical on Windows and Linux (PebbleHost).
+   - **Non-Blocking Event Loop:** Offload all Pillow (`PIL`) image generation calls to `asyncio.to_thread(...)`. Make HTTP requests through the shared `http_session` in [`http_client.py`](http_client.py) (never a new `aiohttp.ClientSession`), and wrap each single survev.de request in `async with api_slot():`, the bot-wide limiter (`API_CONCURRENCY_LIMIT`, default `5`). Never hold a slot around code that takes another one.
+   - **Cross-Platform Fonts:** Keep font paths anchored to `_CURRENT_DIR` in [`image_utils.py`](image_utils.py) (`QuattrocentoSans-Bold.ttf` in the repository root) so rendering is identical on Windows and Linux (PebbleHost).
    - **Privacy & Security in Logs:** Never log or persist `access_token`s, `Authorization` headers, OAuth secrets, or raw API response bodies in `log/` diagnostic JSON files or console output.
    - **Console Utilities Over One-Off Scripts:** When the user asks for an internal inspection or analytics tool, prefer adding a host console command in [`console_service.py`](console_service.py) (and documenting it in [`HOST_COMMANDS.md`](HOST_COMMANDS.md)) rather than cluttering the repository root with standalone scripts.
 4. **Verify Functionality:**

@@ -271,7 +271,7 @@ def is_current_utc_month(timestamp_ms: int | None) -> bool:
 
 
 def cache_player_queue_stats(match_id: str, guild_id: int, match_result: dict) -> int:
-    """Caches finalized per-player queue stats for /profile and /history when the match is eligible."""
+    """Caches finalized per-player queue stats for /profile (stats and history card) when the match is eligible."""
     if not match_result.get("is_final"):
         return 0
 
@@ -452,17 +452,29 @@ def get_player_queue_history(guild_id: int, discord_id: int, limit: int = 10) ->
     return history
 
 
-def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_start_ms: int) -> list[dict]:
-    """Returns verified players' weighted damage averages for a UTC calendar month.
+# /leaderboard_season stats: (extra row filter, per-player value). Every value is a game-weighted average.
+SEASONAL_STAT_SQL = {
+    "damage": ("", "1.0 * SUM(total_damage) / SUM(game_count)"),
+    # impact is each queue's average over its scored games, weighted by games like /profile's summary.
+    "impact": ("AND impact IS NOT NULL", "1.0 * SUM(impact * game_count) / SUM(game_count)"),
+    # Legacy rows from before kills were stored have NULL kills and are left out.
+    "kills": ("AND kills IS NOT NULL", "1.0 * SUM(kills) / SUM(game_count)"),
+}
+
+
+def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_start_ms: int, stat: str = "damage") -> list[dict]:
+    """Returns verified players' game-weighted averages of `stat` (damage, impact or kills) for a UTC calendar
+    month, best first, as dicts with "value" and "games" (plus "total_damage"/"avg_damage" for damage).
 
     Rows with no positive damage are ignored. Legacy rows infer games from their
     stored average when possible; newly cached rows use the explicit games count.
     """
+    row_filter, value_expr = SEASONAL_STAT_SQL[stat]
     with sqlite3.connect(DB_PATH) as c:
         rows = c.execute(
-            """
+            f"""
             WITH eligible_rows AS (
-                SELECT discord_id, display_name, username, total_damage,
+                SELECT discord_id, display_name, username, total_damage, kills, impact,
                        CASE
                            WHEN games IS NOT NULL THEN games
                            WHEN avg_damage > 0 THEN CAST(ROUND(total_damage / avg_damage) AS INTEGER)
@@ -480,26 +492,28 @@ def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_star
                    MAX(username),
                    SUM(total_damage),
                    SUM(game_count),
-                   1.0 * SUM(total_damage) / SUM(game_count)
+                   {value_expr} AS value
             FROM eligible_rows
-            WHERE game_count > 0
+            WHERE game_count > 0 {row_filter}
             GROUP BY discord_id
-            ORDER BY 1.0 * SUM(total_damage) / SUM(game_count) DESC, discord_id
+            ORDER BY value DESC, discord_id
             """,
             (guild_id, month_start_ms, next_month_start_ms),
         ).fetchall()
 
-    return [
-        {
+    results = []
+    for row in rows:
+        entry = {
             "discord_id": row[0],
             "display_name": row[1],
             "username": row[2],
-            "total_damage": int(row[3]),
             "games": int(row[4]),
-            "avg_damage": float(row[5]),
+            "value": float(row[5]),
         }
-        for row in rows
-    ]
+        if stat == "damage":
+            entry.update({"total_damage": int(row[3]), "avg_damage": float(row[5])})
+        results.append(entry)
+    return results
 
 
 def get_player_queue_stats_summary(discord_id: int) -> dict:

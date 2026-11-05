@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import aiohttp
 import discord
 
-from bot_config import API_CONCURRENCY_LIMIT, LEADERBOARD_BANNER_URL, LEADERBOARD_SORT_CONFIG
+from bot_config import LEADERBOARD_BANNER_URL, LEADERBOARD_SORT_CONFIG
 from db import (
     get_all_users,
     get_player_queue_history,
@@ -17,6 +17,7 @@ from db import (
     get_seasonal_queue_stats,
     get_user_token,
 )
+from http_client import http_session
 from survev_client import (
     extract_squad_tier,
     fetch_player_timeframe_stats,
@@ -43,9 +44,12 @@ from image_utils import (
 MAX_PAYLOAD_CACHE_ENTRIES = 200
 # The survev.de external API is rate limited per OAuth app (shared by the whole bot), so tier lookups are cached.
 TIER_CACHE_TTL_SECONDS = 300
+# Per-player /leaderboard stats, so switching the stat or period re-sorts instead of re-fetching every player.
+LEADERBOARD_CACHE_TTL_SECONDS = 300
 _inventory_cache: dict[int, dict] = {}
 _market_cache: dict[int, dict] = {}
 _tier_cache: dict[int, tuple[float, dict | None]] = {}
+_timeframe_cache: dict[tuple[int, int], tuple[float, dict]] = {}
 
 
 def _store_cache_entry(cache: dict[int, dict], user_id: int, data: dict):
@@ -63,11 +67,7 @@ async def get_squad_tier(discord_id: int, access_token: str, session: aiohttp.Cl
     if cached is not None and time.monotonic() - cached[0] < TIER_CACHE_TTL_SECONDS:
         return cached[1], None
 
-    if session is None:
-        async with aiohttp.ClientSession() as own_session:
-            stats, error = await fetch_user_stats(own_session, access_token)
-    else:
-        stats, error = await fetch_user_stats(session, access_token)
+    stats, error = await fetch_user_stats(session or http_session, access_token)
     if error:
         return None, error
 
@@ -85,13 +85,12 @@ async def build_inventory_image_payload(
 ):
     inventory = _inventory_cache.get(target_user.id) if use_cache else None
     if inventory is None:
-        async with aiohttp.ClientSession() as session:
-            inventory, error = await fetch_user_inventory(session, access_token)
-            if error:
-                return None, None, error, None, None, None
+        inventory, error = await fetch_user_inventory(http_session, access_token)
+        if error:
+            return None, None, error, None, None, None
 
-            if not inventory:
-                return None, None, "survev.de returned an empty inventory response.", None, None, None
+        if not inventory:
+            return None, None, "survev.de returned an empty inventory response.", None, None, None
 
         _store_cache_entry(_inventory_cache, target_user.id, inventory)
 
@@ -120,13 +119,12 @@ async def build_shop_image_payload(
 ):
     market_data = _market_cache.get(target_user.id) if use_cache else None
     if market_data is None:
-        async with aiohttp.ClientSession() as session:
-            market_data, error = await fetch_user_market(session, access_token)
-            if error:
-                return None, None, None, error, None
+        market_data, error = await fetch_user_market(http_session, access_token)
+        if error:
+            return None, None, None, error, None
 
-            if not market_data:
-                return None, None, None, "survev.de returned an empty market response.", None
+        if not market_data:
+            return None, None, None, "survev.de returned an empty market response.", None
 
         _store_cache_entry(_market_cache, target_user.id, market_data)
 
@@ -154,60 +152,59 @@ async def build_shop_image_payload(
 
 
 async def build_goldenfries_embed_payload(target_user: discord.User, access_token: str):
-    async with aiohttp.ClientSession() as session:
-        market_data, error = await fetch_user_market(session, access_token)
-        if error:
-            return None, None, error
+    market_data, error = await fetch_user_market(http_session, access_token)
+    if error:
+        return None, None, error
 
-        if not market_data:
-            return None, None, "survev.de returned an empty market response."
+    if not market_data:
+        return None, None, "survev.de returned an empty market response."
 
-        username = market_data.get("username") or str(target_user)
-        balance = market_data.get("balance", 0)
-        return username, int(balance), None
+    username = market_data.get("username") or str(target_user)
+    balance = market_data.get("balance", 0)
+    return username, int(balance), None
 
 
 async def build_compare_payload(member_a: discord.User, member_b: discord.User):
-    async with aiohttp.ClientSession() as session:
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    session = http_session
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-        token_a = get_user_token(member_a.id)
-        token_b = get_user_token(member_b.id)
+    token_a = get_user_token(member_a.id)
+    token_b = get_user_token(member_b.id)
 
-        async def _fetch_member_data(member: discord.User, token: str | None):
-            if not token:
-                return None, 0, None
-            stats, (inventory, _), (tier, tier_error) = await asyncio.gather(
-                fetch_player_timeframe_stats(session, token, 0, now_ms),
-                fetch_user_inventory(session, token),
-                get_squad_tier(member.id, token, session),
-            )
-            worth = compute_inventory_worth(inventory.get("items", [])) if isinstance(inventory, dict) else 0
-            return stats, worth, ({"unavailable": True} if tier_error else tier)
-
-        (left_stats, left_worth, left_tier), (right_stats, right_worth, right_tier) = await asyncio.gather(
-            _fetch_member_data(member_a, token_a),
-            _fetch_member_data(member_b, token_b),
+    async def _fetch_member_data(member: discord.User, token: str | None):
+        if not token:
+            return None, 0, None
+        stats, (inventory, _), (tier, tier_error) = await asyncio.gather(
+            fetch_player_timeframe_stats(session, token, 0, now_ms),
+            fetch_user_inventory(session, token),
+            get_squad_tier(member.id, token, session),
         )
+        worth = compute_inventory_worth(inventory.get("items", [])) if isinstance(inventory, dict) else 0
+        return stats, worth, ({"unavailable": True} if tier_error else tier)
 
-        left_queue_summary = get_player_queue_stats_summary(member_a.id)
-        right_queue_summary = get_player_queue_stats_summary(member_b.id)
+    (left_stats, left_worth, left_tier), (right_stats, right_worth, right_tier) = await asyncio.gather(
+        _fetch_member_data(member_a, token_a),
+        _fetch_member_data(member_b, token_b),
+    )
 
-        image_buffer = await asyncio.to_thread(
-            generate_compare_image,
-            member_a.name,
-            left_stats,
-            left_worth if left_stats is not None else None,
-            left_queue_summary,
-            member_b.name,
-            right_stats,
-            right_worth if right_stats is not None else None,
-            right_queue_summary,
-            left_tier,
-            right_tier,
-        )
-        file = discord.File(image_buffer, filename=f"compare_{member_a.id}_{member_b.id}.png")
-        return f"Compare {member_a.name} vs {member_b.name}", file, None
+    left_queue_summary = get_player_queue_stats_summary(member_a.id)
+    right_queue_summary = get_player_queue_stats_summary(member_b.id)
+
+    image_buffer = await asyncio.to_thread(
+        generate_compare_image,
+        member_a.name,
+        left_stats,
+        left_worth if left_stats is not None else None,
+        left_queue_summary,
+        member_b.name,
+        right_stats,
+        right_worth if right_stats is not None else None,
+        right_queue_summary,
+        left_tier,
+        right_tier,
+    )
+    file = discord.File(image_buffer, filename=f"compare_{member_a.id}_{member_b.id}.png")
+    return f"Compare {member_a.name} vs {member_b.name}", file, None
 
 
 def format_squad_tier_field(tier: dict | None, error: str | None) -> str:
@@ -222,16 +219,43 @@ def format_squad_tier_field(tier: dict | None, error: str | None) -> str:
     return " · ".join(parts)
 
 
-async def build_profile_payload(target: discord.abc.User, access_token: str | None):
-    """Returns (embed, None), or (None, message) when there is nothing to show for this player yet."""
+PROFILE_HISTORY_LIMIT = 10
+
+
+def _history_alt_text(display_name: str, rows: list[dict]) -> str:
+    """Text alternative for the history card (Discord caps attachment descriptions at 1024 characters)."""
+    alt_lines = [f"Last {len(rows)} queues for {display_name}:"]
+    for r in rows:
+        won_str = "Won" if r.get("won") is True else "Lost" if r.get("won") is False else "Undecided"
+        kills_str = f"{r.get('kills')} kills" if r.get("kills") is not None else ""
+        dmg_str = f"{r.get('avg_damage', 0):,.0f} avg dmg"
+        imp_str = f"impact {int(r['impact'] + 0.5)}" if r.get("impact") is not None else ""
+        parts = [p for p in (kills_str, dmg_str, imp_str) if p]
+        alt_lines.append(f"Queue #{r['match_id']} ({won_str}): {', '.join(parts)}")
+    return " ".join(alt_lines)[:1000]
+
+
+async def build_profile_payload(
+    target: discord.abc.User,
+    access_token: str | None,
+    guild_id: int | None = None,
+    metric: str = "damage",
+):
+    """/profile: the queue stat fields and Squad tier, plus (inside a server) the player's history card for their
+    last 10 queues there, with its trend chart showing `metric`.
+
+    Returns (embed, file, metric, None), where file is None when there is no history card to show, or
+    (None, None, metric, message) when there is nothing to show for this player yet."""
+    metric = normalize_history_metric(metric)
     summary = get_player_queue_stats_summary(target.id)
     tier, tier_error = (None, None)
     if access_token:
         tier, tier_error = await get_squad_tier(target.id, access_token)
+    history_rows = get_player_queue_history(guild_id, target.id, limit=PROFILE_HISTORY_LIMIT) if guild_id is not None else []
 
     has_queues = summary["matches"] > 0
-    if not has_queues and tier is None:
-        return None, f"No cached NeatQueue results found for {target.display_name} yet."
+    if not has_queues and tier is None and not history_rows:
+        return None, None, metric, f"No cached NeatQueue results found for {target.display_name} yet."
 
     embed = discord.Embed(
         title=f"{target.display_name}'s NeatQueue stats",
@@ -283,57 +307,32 @@ async def build_profile_payload(target: discord.abc.User, access_token: str | No
         embed.add_field(name="survev.de Squad Tier", value=format_squad_tier_field(tier, tier_error), inline=False)
         footer += " Tier comes from survev.de."
     embed.set_footer(text=footer)
-    return embed, None
 
-
-async def build_history_payload(guild_id: int | None, target: discord.abc.User, metric: str = "damage"):
-    """Builds (embed, file, normalized_metric, None) for a player's last 10 queues in the guild,
-    or (None, None, normalized_metric, error_message) when no history exists.
-    """
-    metric = normalize_history_metric(metric)
-    if guild_id is None:
-        return None, None, metric, "Queue history is only available within a server."
-
-    rows = get_player_queue_history(guild_id, target.id, limit=10)
-    if not rows:
-        return None, None, metric, f"No cached NeatQueue history found for {target.display_name} in this server yet."
-
-    image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, rows, metric)
-    filename = f"history_{guild_id}_{target.id}_{metric}.png"
-
-    alt_lines = [f"Last {len(rows)} queues for {target.display_name}:"]
-    for r in rows:
-        won_str = "Won" if r.get("won") is True else "Lost" if r.get("won") is False else "Undecided"
-        kills_str = f"{r.get('kills')} kills" if r.get("kills") is not None else ""
-        dmg_str = f"{r.get('avg_damage', 0):,.0f} avg dmg"
-        imp_str = f"impact {int(r['impact'] + 0.5)}" if r.get("impact") is not None else ""
-        parts = [p for p in (kills_str, dmg_str, imp_str) if p]
-        alt_lines.append(f"Queue #{r['match_id']} ({won_str}): {', '.join(parts)}")
-    alt_text = " ".join(alt_lines)[:1000]
-
-    file = discord.File(image_buffer, filename=filename, description=alt_text)
-
-    wins = sum(1 for r in rows if r.get("won") is True)
-    losses = sum(1 for r in rows if r.get("won") is False)
-    n = len(rows)
-
-    metric_names = {
-        "damage": "Average Damage",
-        "impact": "Average Impact",
-        "kills": "Total Kills",
-    }
-    metric_name = metric_names.get(metric, "Damage")
-
-    embed = discord.Embed(
-        title=f"{target.display_name}'s Queue History",
-        description=f"Showing last **{n}** queues ({wins}W - {losses}L) · Trend: **{metric_name}**",
-        color=discord.Color.blurple(),
-    )
-    embed.set_image(url=f"attachment://{filename}")
-    footer_text = "Toggle the trend chart above with the buttons below."
-    embed.set_footer(text=footer_text)
-
+    file = None
+    if history_rows:
+        image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, history_rows, metric)
+        filename = f"history_{guild_id}_{target.id}_{metric}.png"
+        file = discord.File(image_buffer, filename=filename, description=_history_alt_text(target.display_name, history_rows))
+        embed.set_image(url=f"attachment://{filename}")
     return embed, file, metric, None
+
+
+async def _cached_timeframe_stats(discord_id: int, token: str, days: int, from_ms: int, to_ms: int) -> dict | None:
+    """One player's /leaderboard stats for the last `days` days, reused for LEADERBOARD_CACHE_TTL_SECONDS.
+    Only complete fetches are cached, so a player missed by a rate limit is retried on the next click."""
+    now = time.monotonic()
+    cached = _timeframe_cache.get((discord_id, days))
+    if cached is not None and now - cached[0] < LEADERBOARD_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    fetch_diagnostics: dict = {}
+    stats = await fetch_player_timeframe_stats(http_session, token, from_ms, to_ms, diagnostics=fetch_diagnostics)
+    if fetch_diagnostics.get("pagination_complete"):
+        for key, (cached_at, _) in list(_timeframe_cache.items()):
+            if now - cached_at >= LEADERBOARD_CACHE_TTL_SECONDS:
+                del _timeframe_cache[key]
+        _timeframe_cache[(discord_id, days)] = (now, stats)
+    return stats
 
 
 async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kills"):
@@ -346,18 +345,12 @@ async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kil
     from_ms = int((now - timedelta(days=days)).timestamp() * 1000)
 
     users = get_all_users()
-    sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
-
-    async def _fetch_one(session: aiohttp.ClientSession, discord_id: int, token: str):
-        async with sem:
-            stats = await fetch_player_timeframe_stats(session, token, from_ms, to_ms)
-            if stats and stats["games"] > 0:
-                return {"discord_id": discord_id, "stats": stats}
-            return None
-
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*(_fetch_one(session, did, tok) for did, tok in users))
-    leaderboard_data = [entry for entry in results if entry is not None]
+    results = await asyncio.gather(*(_cached_timeframe_stats(did, tok, days, from_ms, to_ms) for did, tok in users))
+    leaderboard_data = [
+        {"discord_id": discord_id, "stats": stats}
+        for (discord_id, _token), stats in zip(users, results)
+        if stats and stats["games"] > 0
+    ]
 
     leaderboard_data.sort(key=lambda x: x["stats"][sort_key], reverse=True)
 
@@ -410,9 +403,23 @@ def _parse_season_month(month: str | None) -> tuple[datetime, datetime]:
 
 SEASON_PAGE_SIZE = 10  # keeps one page inside the 1024-character embed field limit
 
+# /leaderboard_season stat picker: key -> (label, emoji, description, value format). "damage" is the default.
+SEASON_STATS = {
+    "damage": ("Avg Damage", "💥", "average damage per game", "{:,.0f}"),
+    "impact": ("Avg Impact", "⚡", "average survev.de impact score per game", "{:,.0f}"),
+    "kills": ("Avg Kills", "⚔️", "average kills per game", "{:,.1f}"),
+}
 
-async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = None, page: int = 0):
-    """Returns (embed, month_key, page, total_pages) for one page of a month's leaderboard; page is clamped."""
+
+def normalize_season_stat(stat: str | None) -> str:
+    return stat if stat in SEASON_STATS else "damage"
+
+
+async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = None, page: int = 0, stat: str = "damage"):
+    """Returns (embed, month_key, page, total_pages) for one page of a month's leaderboard ranked by `stat`
+    (see SEASON_STATS); page is clamped."""
+    stat = normalize_season_stat(stat)
+    label, emoji, description, value_format = SEASON_STATS[stat]
     month_start, next_month_start = _parse_season_month(month)
     month_key = month_start.strftime("%Y-%m")
     month_label = month_start.strftime("%B %Y")
@@ -420,14 +427,15 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
         guild_id,
         int(month_start.timestamp() * 1000),
         int(next_month_start.timestamp() * 1000),
+        stat,
     )
 
     total_pages = max(1, -(-len(stats) // SEASON_PAGE_SIZE))
     page = max(0, min(page, total_pages - 1))
 
     embed = discord.Embed(
-        title=f"🏆 {month_label} 4v4 Avg Damage Leaderboard",
-        description="Ranked by average damage per game in 4v4 queues only.",
+        title=f"🏆 {month_label} 4v4 {label} Leaderboard",
+        description=f"Ranked by {description} in 4v4 queues only.",
         color=discord.Color.gold(),
     )
     if not stats:
@@ -442,13 +450,15 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
         rank = rank_emojis[index] if index < len(rank_emojis) else f"`#{index + 1}`"
         leaderboard_text += (
             f"{rank} <@{entry['discord_id']}>\n"
-            f"💥 Avg Damage: **{entry['avg_damage']:,.0f}** "
+            f"{emoji} {label}: **{value_format.format(entry['value'])}** "
             f"({entry['games']:,} games)\n\n"
         )
 
     field_name = "Top Players" if page == 0 else f"Ranks {first_index + 1}-{first_index + len(page_stats)}"
     embed.add_field(name=field_name, value=leaderboard_text[:1024], inline=False)
     footer = "Zero-damage queue entries are excluded."
+    if stat == "impact":
+        footer = "Only queues survev.de scored for impact count. " + footer
     if total_pages > 1:
         footer = f"Page {page + 1} of {total_pages} • {footer}"
     embed.set_footer(text=footer)
@@ -460,20 +470,16 @@ async def build_leaderboard_fries_embed():
     if not users:
         return None, "No verified users found."
 
-    sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
+    async def _fetch_one(discord_id: int, token: str):
+        market_data, error = await fetch_user_market(http_session, token)
+        if error or not market_data:
+            return None
+        balance = market_data.get("balance")
+        if balance is None:
+            return None
+        return {"discord_id": discord_id, "balance": balance}
 
-    async def _fetch_one(session: aiohttp.ClientSession, discord_id: int, token: str):
-        async with sem:
-            market_data, error = await fetch_user_market(session, token)
-            if error or not market_data:
-                return None
-            balance = market_data.get("balance")
-            if balance is None:
-                return None
-            return {"discord_id": discord_id, "balance": balance}
-
-    async with aiohttp.ClientSession() as session:
-        results = await asyncio.gather(*(_fetch_one(session, did, tok) for did, tok in users))
+    results = await asyncio.gather(*(_fetch_one(did, tok) for did, tok in users))
     leaderboard_data = [entry for entry in results if entry is not None]
 
     if not leaderboard_data:

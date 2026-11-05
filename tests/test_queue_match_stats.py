@@ -396,6 +396,31 @@ class SubstituteAndGameSelectionTests(unittest.IsolatedAsyncioTestCase):
                   for index, team in enumerate(result["teams"]) for e in team if e["username"] == "Player"]
         self.assertEqual(sorted(guests), [(0, 1, 150), (1, 1, 250)])
 
+    async def test_same_name_guests_on_one_team_are_numbered_in_join_order(self):
+        # Two logged-out "Player"s on Team 1 in the same games. survev.de's player_id gives each game's join order.
+        world = three_game_world(boards={
+            "g1": lobby("A", 1, 2) + [player(None, "Player", 1, 1, 1, 100, player_id=7),
+                                      player(None, "Player", 1, 1, 0, 300, player_id=3)],
+            "g2": lobby("B", 1, 2) + [player(None, "player", 1, 2, 2, 50, player_id=2),
+                                      player(None, "Player", 1, 2, 0, 70, player_id=9)],
+            "g3": lobby("A", 1, 2) + [player(None, "Player", 1, 1, 4, 400, player_id=5)],
+        })
+        result, _ = await calculate(**world)
+
+        guests = {e["username"]: (e["stats"]["games"], e["stats"]["damage"])
+                  for e in result["teams"][0] if e["username"].lower().startswith("player")}
+        # The first joiner keeps the plain name in every game; the second is "Player (2)".
+        self.assertEqual(guests, {"Player": (3, 750), "Player (2)": (2, 170)})
+        self.assertEqual(result["total_games_played"], 3)
+        first_game = {row["identity"]: row["damage_dealt"] for row in result["individual_games"][0]["players"]}
+        self.assertEqual((first_game["player"], first_game["player (2)"]), (300, 100))
+
+    async def test_numbering_only_applies_to_unlinked_teammates_sharing_a_name(self):
+        board = [player(None, "Player", 1, 1, 0, 0, player_id=4), player(None, "Player", 2, 2, 0, 0, player_id=1),
+                 player("someone", "Player", 1, 1, 0, 0, player_id=2), player(None, "Player", 1, 999, 0, 0, player_id=1),
+                 player(None, "Player", 1, 1, 0, 0)]
+        self.assertEqual(neatqueue_client.number_same_name_guests(board, {1: 0, 2: 1}), {4: "Player (2)"})
+
 
 class ImpactScoreTests(unittest.IsolatedAsyncioTestCase):
     IMPACTS = {

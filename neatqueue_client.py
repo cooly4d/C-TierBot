@@ -11,7 +11,6 @@ import aiohttp
 import discord
 
 from bot_config import (
-    API_CONCURRENCY_LIMIT,
     NEATQUEUE_API_BASE,
     NEATQUEUE_API_TOKEN,
     NEATQUEUE_BOT_ID,
@@ -19,6 +18,7 @@ from bot_config import (
     bot,
 )
 from db import get_guild_queue_channels, get_discord_id_by_slug, get_user_token
+from http_client import http_session
 from survev_client import fetch_player_matches_in_window, fetch_public_match_data, get_match_history_timestamp
 
 
@@ -331,6 +331,30 @@ def parse_rank(raw) -> int | None:
         return None
 
 
+def number_same_name_guests(board: list[dict], sides: dict) -> dict[int, str]:
+    """Names for unlinked players who share a name with a teammate in one game (often survev.de's default
+    "Player"). Nothing identifies a logged-out player from one game to the next, so they are numbered in the order
+    they joined that game (survev.de's per-game player_id): "Player", "Player (2)", ... Across games, the Nth one is
+    assumed to be the same person. Returns {index in board: new name} for the renamed rows only."""
+    groups: dict[tuple[int, str], list[int]] = {}
+    for index, row in enumerate(board):
+        name = (row.get("username") or "").strip()
+        side = sides.get(row.get("team_id"))
+        if row.get("slug") or not name or side is None or parse_rank(row.get("rank")) == SURVEV_SPECTATOR_RANK:
+            continue
+        groups.setdefault((side, name.lower()), []).append(index)
+
+    def join_order(index: int):
+        player_id = board[index].get("player_id")
+        return (not isinstance(player_id, int), player_id if isinstance(player_id, int) else 0, index)
+
+    renamed = {}
+    for indices in groups.values():
+        for number, index in enumerate(sorted(indices, key=join_order)[1:], start=2):
+            renamed[index] = f"{board[index]['username'].strip()} ({number})"
+    return renamed
+
+
 def resolve_round_sides(board: list[dict], roster_side) -> tuple[dict | None, str, dict]:
     """Which survev.de team_id was NeatQueue's Team 1 and Team 2 in one game, as ({team_id: side}, "accepted", details),
     or (None, reason, details) when the game isn't one of this queue's. survev.de renumbers teams every game, so this is
@@ -416,366 +440,365 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         "round_selection": [],
     })
     window = diagnostics["window"]
-    async with aiohttp.ClientSession() as session:
-        nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
-        entries = extract_neatqueue_entries(nq_data) if nq_data else []
-        match = entries[0] if entries else None
-        history_teams = collect_neatqueue_teams(match)
+    session = http_session
+    nq_data, error = await fetch_neatqueue_history(session, guild_id, match_id)
+    entries = extract_neatqueue_entries(nq_data) if nq_data else []
+    match = entries[0] if entries else None
+    history_teams = collect_neatqueue_teams(match)
 
-        # NeatQueue can return winner=-2 while a series is still running. Treat it as
-        # pending so live lookups end at "now", rather than a finished-match fallback.
-        winner = get_nested_value(match, "winner")
-        is_finished = match is not None and winner not in (None, -2)
-        diagnostics["neatqueue"] = {
-            "history_lookup_failed": error is not None,
-            "entry_count": len(entries),
-            "selected_game_number": get_match_game_number(match),
-            "winner": winner,
-            "winner_message_id": get_nested_value(match, "winner_message"),
-            "winner_channel_id": get_nested_value(match, "winner_channel"),
-            "history_start_ms": get_match_start_ms(match),
-            "history_end_ms": parse_neatqueue_time(get_nested_value(match, "end_time_ms")),
-            "history_players_per_team": [len(team) for team in history_teams],
-        }
-        diagnostics["is_final"] = is_finished
-        diagnostics["finality_reason"] = (
-            "history_winner_is_not_null_or_pending" if is_finished else
-            "history_winner_is_pending" if winner == -2 else
-            "history_winner_is_null" if match is not None else "no_history_entry"
-        )
+    # NeatQueue can return winner=-2 while a series is still running. Treat it as
+    # pending so live lookups end at "now", rather than a finished-match fallback.
+    winner = get_nested_value(match, "winner")
+    is_finished = match is not None and winner not in (None, -2)
+    diagnostics["neatqueue"] = {
+        "history_lookup_failed": error is not None,
+        "entry_count": len(entries),
+        "selected_game_number": get_match_game_number(match),
+        "winner": winner,
+        "winner_message_id": get_nested_value(match, "winner_message"),
+        "winner_channel_id": get_nested_value(match, "winner_channel"),
+        "history_start_ms": get_match_start_ms(match),
+        "history_end_ms": parse_neatqueue_time(get_nested_value(match, "end_time_ms")),
+        "history_players_per_team": [len(team) for team in history_teams],
+    }
+    diagnostics["is_final"] = is_finished
+    diagnostics["finality_reason"] = (
+        "history_winner_is_not_null_or_pending" if is_finished else
+        "history_winner_is_pending" if winner == -2 else
+        "history_winner_is_null" if match is not None else "no_history_entry"
+    )
 
-        if is_finished:
-            is_final = True
-            # NeatQueue returns the requested match as the first entry in the result.
+    if is_finished:
+        is_final = True
+        # NeatQueue returns the requested match as the first entry in the result.
 
+        start_ms = get_match_start_ms(match)
+        if start_ms is None:
+            return None, "NeatQueue match entry is missing a recognizable start time."
+
+        window["start_source"] = "neatqueue_history"
+        end_ms = await get_match_end_ms(match, start_ms, diagnostics=window)
+
+        teams = history_teams
+        diagnostics["roster_source"] = "neatqueue_history"
+        if not teams:
+            return None, "NeatQueue match entry contains no player roster."
+    else:
+        is_final = False
+        # Keep using the live panel when available. A pending history entry can also
+        # supply the roster and start if the panel is absent or unreadable.
+        panel_message = await find_queue_panel_message(guild_id, match_id)
+        diagnostics["panel"] = {"found": panel_message is not None}
+        teams = None
+        if panel_message is not None:
+            diagnostics["panel"].update({
+                "message_id": getattr(panel_message, "id", None),
+                "channel_id": getattr(getattr(panel_message, "channel", None), "id", None),
+                "created_at_utc": panel_message.created_at.isoformat(),
+            })
+            for embed in panel_message.embeds:
+                parsed = parse_teams_from_panel_embed(embed)
+                if any(parsed):
+                    teams = parsed
+                    break
+            diagnostics["panel"]["roster_readable"] = bool(teams)
+
+        if teams:
+            start_ms = int(panel_message.created_at.timestamp() * 1000)
+            window["start_source"] = "panel_created_at"
+            diagnostics["roster_source"] = "discord_panel"
+        elif match is not None:
             start_ms = get_match_start_ms(match)
             if start_ms is None:
-                return None, "NeatQueue match entry is missing a recognizable start time."
-
-            window["start_source"] = "neatqueue_history"
-            end_ms = await get_match_end_ms(match, start_ms, diagnostics=window)
-
+                return None, "NeatQueue history entry is missing a recognizable start time, and no readable queue panel was found."
+            if not any(history_teams):
+                return None, "NeatQueue history entry contains no player roster, and no readable queue panel was found."
             teams = history_teams
+            window["start_source"] = "neatqueue_history"
             diagnostics["roster_source"] = "neatqueue_history"
-            if not teams:
-                return None, "NeatQueue match entry contains no player roster."
+        elif panel_message is not None:
+            return None, "Couldn't read the player roster from NeatQueue's message for this queue."
         else:
-            is_final = False
-            # Keep using the live panel when available. A pending history entry can also
-            # supply the roster and start if the panel is absent or unreadable.
-            panel_message = await find_queue_panel_message(guild_id, match_id)
-            diagnostics["panel"] = {"found": panel_message is not None}
-            teams = None
-            if panel_message is not None:
-                diagnostics["panel"].update({
-                    "message_id": getattr(panel_message, "id", None),
-                    "channel_id": getattr(getattr(panel_message, "channel", None), "id", None),
-                    "created_at_utc": panel_message.created_at.isoformat(),
-                })
-                for embed in panel_message.embeds:
-                    parsed = parse_teams_from_panel_embed(embed)
-                    if any(parsed):
-                        teams = parsed
-                        break
-                diagnostics["panel"]["roster_readable"] = bool(teams)
+            return None, error or "No NeatQueue history entry or readable queue panel was found for this queue."
 
-            if teams:
-                start_ms = int(panel_message.created_at.timestamp() * 1000)
-                window["start_source"] = "panel_created_at"
-                diagnostics["roster_source"] = "discord_panel"
-            elif match is not None:
-                start_ms = get_match_start_ms(match)
-                if start_ms is None:
-                    return None, "NeatQueue history entry is missing a recognizable start time, and no readable queue panel was found."
-                if not any(history_teams):
-                    return None, "NeatQueue history entry contains no player roster, and no readable queue panel was found."
-                teams = history_teams
-                window["start_source"] = "neatqueue_history"
-                diagnostics["roster_source"] = "neatqueue_history"
-            elif panel_message is not None:
-                return None, "Couldn't read the player roster from NeatQueue's message for this queue."
-            else:
-                return None, error or "No NeatQueue history entry or readable queue panel was found for this queue."
+        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        window["end_source"] = "lookup_current_time"
 
-            end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-            window["end_source"] = "lookup_current_time"
+    window.update({
+        "from_ms": start_ms,
+        "to_ms": end_ms,
+        "from_utc": datetime.fromtimestamp(start_ms / 1000, timezone.utc).isoformat(),
+        "to_utc": datetime.fromtimestamp(end_ms / 1000, timezone.utc).isoformat(),
+    })
 
-        window.update({
-            "from_ms": start_ms,
-            "to_ms": end_ms,
-            "from_utc": datetime.fromtimestamp(start_ms / 1000, timezone.utc).isoformat(),
-            "to_utc": datetime.fromtimestamp(end_ms / 1000, timezone.utc).isoformat(),
+    # NeatQueue's team index per rostered discord_id: each game's survev.de teams are mapped onto these.
+    neatqueue_team_index_by_discord_id: dict[int, int] = {}
+    for i, team_players in enumerate(teams):
+        for player in team_players:
+            try:
+                neatqueue_team_index_by_discord_id[int(player.get("id"))] = i
+            except (TypeError, ValueError):
+                continue
+
+    # Step 1: at least one verified player is needed as an "anchor" — pull their own scoped match
+    # history and use its guids to pin down exactly which survev.de match(es) this queue played.
+    # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
+    anchor_candidates: list[tuple[int, str]] = []
+    for team_players in teams:
+        for player in team_players:
+            try:
+                discord_id = int(player.get("id"))
+            except (TypeError, ValueError):
+                continue
+            token = get_user_token(discord_id)
+            if token:
+                anchor_candidates.append((discord_id, token))
+
+    async def _fetch_anchor(discord_id: int, token: str):
+        anchor_diagnostics = {"discord_id": discord_id}
+        # survev.de requests are limited bot-wide inside the fetchers (http_client.api_slot).
+        own_matches = await fetch_player_matches_in_window(
+            session, token, start_ms, end_ms, diagnostics=anchor_diagnostics)
+        anchor_diagnostics["matches"] = [
+            {"guid": m.get("guid"), "timestamp_ms": get_match_history_timestamp(m)}
+            for m in own_matches
+        ]
+        anchor_diagnostics["returned_count"] = len(own_matches)
+        return discord_id, own_matches, anchor_diagnostics
+
+    anchor_results = await asyncio.gather(*(_fetch_anchor(did, tok) for did, tok in anchor_candidates))
+    anchor_guid_sets = []
+    anchor_matches_by_discord: dict[int, list[dict]] = {}
+    for discord_id, own_matches, anchor_diagnostics in anchor_results:
+        diagnostics["anchors"].append(anchor_diagnostics)
+        guids = {m.get("guid") for m in own_matches if m.get("guid")}
+        if guids:
+            anchor_guid_sets.append(guids)
+            anchor_matches_by_discord[discord_id] = own_matches
+
+    if not anchor_guid_sets:
+        return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
+
+    # Every game any linked player played in the window is a candidate, and each one is then checked against the
+    # roster (resolve_round_sides). Requiring every linked player to have played a game dropped real games
+    # whenever a linked substitute joined late or someone logged in partway through the series.
+    candidate_guids = set.union(*anchor_guid_sets)
+    diagnostics["selection_strategy"] = "validated_union"
+    diagnostics["candidate_guids"] = sorted(candidate_guids)
+
+    guid_timestamps: dict[str, int] = {}
+    for own_matches in anchor_matches_by_discord.values():
+        for own_match in own_matches:
+            guid = own_match.get("guid")
+            if guid is None or guid not in candidate_guids:
+                continue
+            timestamp = get_match_history_timestamp(own_match) or 0
+            if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
+                guid_timestamps[guid] = timestamp
+
+    ordered_candidate_guids: list[str] = sorted(
+        candidate_guids,
+        key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
+    )
+
+    # Step 2: pull the public scoreboard for every candidate game.
+    scoreboard_diagnostics = {}
+
+    async def _fetch_board(guid: str):
+        scoreboard_diagnostics[guid] = {}
+        return guid, await fetch_public_match_data(session, guid, diagnostics=scoreboard_diagnostics[guid])
+
+    boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_candidate_guids)))
+
+    # NeatQueue keeps only the final roster (a substitute replaces the player who left), so it can place the
+    # linked players still listed in it; everyone else is placed by whom they played alongside in each game.
+    discord_id_by_slug: dict[str, int | None] = {}
+
+    def lookup_discord_id(slug: str) -> int | None:
+        if slug not in discord_id_by_slug:
+            discord_id_by_slug[slug] = get_discord_id_by_slug(slug)
+        return discord_id_by_slug[slug]
+
+    def roster_side(slug: str | None) -> int | None:
+        discord_id = lookup_discord_id(slug) if slug else None
+        side = neatqueue_team_index_by_discord_id.get(discord_id) if discord_id is not None else None
+        return side if side is not None and side < QUEUE_TEAM_COUNT else None
+
+    def row_identity(row: dict) -> str:
+        return player_identity(row.get("slug"), (row.get("username") or "").strip())
+
+    resolved = {guid: resolve_round_sides(board, roster_side) for guid, board in boards_by_guid.items() if board}
+
+    # In games where both teams had linked roster players, everyone's side is certain. A game where only one
+    # team had any is then kept only if the other team includes someone seen on the opposing side, so a side
+    # game against strangers isn't counted, while a linked opponent replaced by an unlinked sub still is. With
+    # no such game at all (e.g. nobody on one team is linked), the other playing team is trusted as before.
+    confirmed_sides: dict[str, set[int]] = {}
+    for guid, (sides, _reason, details) in resolved.items():
+        if sides is None or "inferred_team_id" in details:
+            continue
+        for row in boards_by_guid[guid]:
+            if parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK and row.get("team_id") in sides:
+                confirmed_sides.setdefault(row_identity(row), set()).add(sides[row["team_id"]])
+    if confirmed_sides:
+        for guid, (sides, _reason, details) in list(resolved.items()):
+            if sides is None or "inferred_team_id" not in details:
+                continue
+            inferred_team_id = details["inferred_team_id"]
+            opponents = {row_identity(row) for row in boards_by_guid[guid]
+                         if row.get("team_id") == inferred_team_id
+                         and parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK}
+            if not any(confirmed_sides.get(key) == {sides[inferred_team_id]} for key in opponents):
+                resolved[guid] = (None, "opponent_not_in_queue", details)
+
+    # Step 3: aggregate per (side, survev.de player) over the accepted games. Sides are NeatQueue's own team
+    # indices, so Team 1/Team 2 always match NeatQueue, and a substitute counts for the side they actually
+    # played on in each game rather than whatever team_id they first appeared under.
+    players: dict[tuple[int, str], dict] = {}
+    selected_guids: list[str] = []
+    round_winner_display_indices: list[int | None] = []
+    game_rows_by_guid: dict[str, list[dict]] = {}
+    for guid in ordered_candidate_guids:
+        board = boards_by_guid.get(guid)
+        decision = {
+            "guid": guid,
+            "timestamp_ms": guid_timestamps.get(guid),
+            "scoreboard_requested": True,
+            "scoreboard_player_count": len(board) if board else 0,
+            "scoreboard_available": bool(board),
+            "scoreboard_fetch": scoreboard_diagnostics.get(guid),
+        }
+        diagnostics["round_selection"].append(decision)
+        if not board:
+            decision.update({"included": False, "reason": "scoreboard_unavailable"})
+            continue
+        sides, reason, details = resolved[guid]
+        decision.update(details)
+        decision.update({"included": sides is not None, "reason": reason})
+        if sides is None:
+            continue
+
+        selected_guids.append(guid)
+        game_rows = game_rows_by_guid.setdefault(guid, [])
+        best_rank_by_side: dict[int, int] = {}
+        renamed_guests = number_same_name_guests(board, sides)
+        for board_index, p in enumerate(board):
+            username = renamed_guests.get(board_index) or (p.get("username") or "").strip()
+            slug = p.get("slug")
+            key = player_identity(slug, username)
+            if not key:
+                continue
+
+            parsed_rank = parse_rank(p.get("rank"))
+            impact = parse_impact_score(p.get("impact_score"))
+            # None for spectators and for anyone outside the queue's two teams: logged, never counted.
+            side = None if parsed_rank == SURVEV_SPECTATOR_RANK else sides.get(p.get("team_id"))
+            game_rows.append({
+                "identity": key,
+                "username": username,
+                "slug": slug,
+                "team_id": p.get("team_id"),
+                "rank": parsed_rank,
+                "kills": p.get("kills", 0),
+                "damage_dealt": p.get("damage_dealt", 0),
+                "impact_score": impact,
+                "display_team_index": side,
+            })
+            if side is None:
+                continue
+            if parsed_rank is not None:
+                best_rank_by_side[side] = min(best_rank_by_side.get(side, parsed_rank), parsed_rank)
+
+            agg = players.setdefault((side, key), {
+                "username": username, "slug": slug,
+                "games": 0, "wins": 0, "kills": 0, "damage": 0,
+                "impact_total": 0, "impact_games": 0,
+            })
+            agg["games"] += 1
+            agg["wins"] += 1 if parsed_rank == 1 else 0
+            agg["kills"] += p.get("kills", 0)
+            agg["damage"] += p.get("damage_dealt", 0)
+            if impact is not None:
+                agg["impact_total"] += impact
+                agg["impact_games"] += 1
+
+        # The game goes to whichever queue team placed better (even if a lobby stranger finished above both);
+        # a tie for the best placing leaves it undecided.
+        best = min(best_rank_by_side.values(), default=None)
+        leaders = [side for side, rank in best_rank_by_side.items() if rank == best]
+        round_winner_display_indices.append(leaders[0] if len(leaders) == 1 else None)
+    diagnostics["selected_guids"] = selected_guids
+
+    if not players:
+        if any(boards_by_guid.values()):
+            return None, "None of the linked players' survev.de games in this queue's time window were between its two teams."
+        return None, "survev.de returned no player data for this queue's match(es)."
+
+    result_teams: list[list[dict]] = [[] for _ in range(QUEUE_TEAM_COUNT)]
+    for (side, _key), p in players.items():
+        discord_id = lookup_discord_id(p["slug"]) if p["slug"] else None
+        result_teams[side].append({
+            "discord_id": discord_id,
+            "username": p["username"],
+            "slug": p["slug"],
+            "guest": discord_id is None,
+            "stats": {
+                "games": p["games"], "wins": p["wins"], "kills": p["kills"], "damage": p["damage"],
+                # Mean over the games survev.de actually scored (None when it scored none of them).
+                "impact": round(p["impact_total"] / p["impact_games"], 1) if p["impact_games"] else None,
+            },
         })
 
-        # NeatQueue's team index per rostered discord_id: each game's survev.de teams are mapped onto these.
-        neatqueue_team_index_by_discord_id: dict[int, int] = {}
-        for i, team_players in enumerate(teams):
-            for player in team_players:
-                try:
-                    neatqueue_team_index_by_discord_id[int(player.get("id"))] = i
-                except (TypeError, ValueError):
-                    continue
+    for team in result_teams:
+        team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
 
-        # Step 1: at least one verified player is needed as an "anchor" — pull their own scoped match
-        # history and use its guids to pin down exactly which survev.de match(es) this queue played.
-        # This is far more reliable than any time-window guess (handles Best-of-N cleanly).
-        sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
-        anchor_candidates: list[tuple[int, str]] = []
-        for team_players in teams:
-            for player in team_players:
-                try:
-                    discord_id = int(player.get("id"))
-                except (TypeError, ValueError):
-                    continue
-                token = get_user_token(discord_id)
-                if token:
-                    anchor_candidates.append((discord_id, token))
+    # Authoritative series score/winner should come from the actual round-by-round winners,
+    # not from a teammate's aggregate win count. That keeps the displayed result aligned with
+    # the queue's real series outcome when a team has multiple players or mixed standings.
+    team_round_wins = derive_team_round_wins_from_round_winners(round_winner_display_indices, len(result_teams))
+    if not any(team_round_wins):
+        team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
 
-        async def _fetch_anchor(discord_id: int, token: str):
-            anchor_diagnostics = {"discord_id": discord_id}
-            async with sem:
-                own_matches = await fetch_player_matches_in_window(
-                    session, token, start_ms, end_ms, diagnostics=anchor_diagnostics)
-                anchor_diagnostics["matches"] = [
-                    {"guid": m.get("guid"), "timestamp_ms": get_match_history_timestamp(m)}
-                    for m in own_matches
-                ]
-                anchor_diagnostics["returned_count"] = len(own_matches)
-                return discord_id, own_matches, anchor_diagnostics
+    winning_team_index = None
+    if team_round_wins:
+        max_wins = max(team_round_wins)
+        if max_wins > 0 and team_round_wins.count(max_wins) == 1:
+            winning_team_index = team_round_wins.index(max_wins)
 
-        anchor_results = await asyncio.gather(*(_fetch_anchor(did, tok) for did, tok in anchor_candidates))
-        anchor_guid_sets = []
-        anchor_matches_by_discord: dict[int, list[dict]] = {}
-        for discord_id, own_matches, anchor_diagnostics in anchor_results:
-            diagnostics["anchors"].append(anchor_diagnostics)
-            guids = {m.get("guid") for m in own_matches if m.get("guid")}
-            if guids:
-                anchor_guid_sets.append(guids)
-                anchor_matches_by_discord[discord_id] = own_matches
-
-        if not anchor_guid_sets:
-            return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
-
-        # Every game any linked player played in the window is a candidate, and each one is then checked against the
-        # roster (resolve_round_sides). Requiring every linked player to have played a game dropped real games
-        # whenever a linked substitute joined late or someone logged in partway through the series.
-        candidate_guids = set.union(*anchor_guid_sets)
-        diagnostics["selection_strategy"] = "validated_union"
-        diagnostics["candidate_guids"] = sorted(candidate_guids)
-
-        guid_timestamps: dict[str, int] = {}
-        for own_matches in anchor_matches_by_discord.values():
-            for own_match in own_matches:
-                guid = own_match.get("guid")
-                if guid is None or guid not in candidate_guids:
-                    continue
-                timestamp = get_match_history_timestamp(own_match) or 0
-                if guid not in guid_timestamps or timestamp < guid_timestamps[guid]:
-                    guid_timestamps[guid] = timestamp
-
-        ordered_candidate_guids: list[str] = sorted(
-            candidate_guids,
-            key=lambda guid: (guid_timestamps.get(guid, 0), str(guid))
-        )
-
-        # Step 2: pull the public scoreboard for every candidate game.
-        scoreboard_diagnostics = {}
-
-        async def _fetch_board(guid: str):
-            scoreboard_diagnostics[guid] = {}
-            async with sem:
-                return guid, await fetch_public_match_data(session, guid, diagnostics=scoreboard_diagnostics[guid])
-
-        boards_by_guid = dict(await asyncio.gather(*(_fetch_board(guid) for guid in ordered_candidate_guids)))
-
-        # NeatQueue keeps only the final roster (a substitute replaces the player who left), so it can place the
-        # linked players still listed in it; everyone else is placed by whom they played alongside in each game.
-        discord_id_by_slug: dict[str, int | None] = {}
-
-        def lookup_discord_id(slug: str) -> int | None:
-            if slug not in discord_id_by_slug:
-                discord_id_by_slug[slug] = get_discord_id_by_slug(slug)
-            return discord_id_by_slug[slug]
-
-        def roster_side(slug: str | None) -> int | None:
-            discord_id = lookup_discord_id(slug) if slug else None
-            side = neatqueue_team_index_by_discord_id.get(discord_id) if discord_id is not None else None
-            return side if side is not None and side < QUEUE_TEAM_COUNT else None
-
-        def row_identity(row: dict) -> str:
-            return player_identity(row.get("slug"), (row.get("username") or "").strip())
-
-        resolved = {guid: resolve_round_sides(board, roster_side) for guid, board in boards_by_guid.items() if board}
-
-        # In games where both teams had linked roster players, everyone's side is certain. A game where only one
-        # team had any is then kept only if the other team includes someone seen on the opposing side, so a side
-        # game against strangers isn't counted, while a linked opponent replaced by an unlinked sub still is. With
-        # no such game at all (e.g. nobody on one team is linked), the other playing team is trusted as before.
-        confirmed_sides: dict[str, set[int]] = {}
-        for guid, (sides, _reason, details) in resolved.items():
-            if sides is None or "inferred_team_id" in details:
-                continue
-            for row in boards_by_guid[guid]:
-                if parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK and row.get("team_id") in sides:
-                    confirmed_sides.setdefault(row_identity(row), set()).add(sides[row["team_id"]])
-        if confirmed_sides:
-            for guid, (sides, _reason, details) in list(resolved.items()):
-                if sides is None or "inferred_team_id" not in details:
-                    continue
-                inferred_team_id = details["inferred_team_id"]
-                opponents = {row_identity(row) for row in boards_by_guid[guid]
-                             if row.get("team_id") == inferred_team_id
-                             and parse_rank(row.get("rank")) != SURVEV_SPECTATOR_RANK}
-                if not any(confirmed_sides.get(key) == {sides[inferred_team_id]} for key in opponents):
-                    resolved[guid] = (None, "opponent_not_in_queue", details)
-
-        # Step 3: aggregate per (side, survev.de player) over the accepted games. Sides are NeatQueue's own team
-        # indices, so Team 1/Team 2 always match NeatQueue, and a substitute counts for the side they actually
-        # played on in each game rather than whatever team_id they first appeared under.
-        players: dict[tuple[int, str], dict] = {}
-        selected_guids: list[str] = []
-        round_winner_display_indices: list[int | None] = []
-        game_rows_by_guid: dict[str, list[dict]] = {}
-        for guid in ordered_candidate_guids:
-            board = boards_by_guid.get(guid)
-            decision = {
-                "guid": guid,
-                "timestamp_ms": guid_timestamps.get(guid),
-                "scoreboard_requested": True,
-                "scoreboard_player_count": len(board) if board else 0,
-                "scoreboard_available": bool(board),
-                "scoreboard_fetch": scoreboard_diagnostics.get(guid),
-            }
-            diagnostics["round_selection"].append(decision)
-            if not board:
-                decision.update({"included": False, "reason": "scoreboard_unavailable"})
-                continue
-            sides, reason, details = resolved[guid]
-            decision.update(details)
-            decision.update({"included": sides is not None, "reason": reason})
-            if sides is None:
-                continue
-
-            selected_guids.append(guid)
-            game_rows = game_rows_by_guid.setdefault(guid, [])
-            best_rank_by_side: dict[int, int] = {}
-            for p in board:
-                username = (p.get("username") or "").strip()
-                slug = p.get("slug")
-                key = player_identity(slug, username)
-                if not key:
-                    continue
-
-                parsed_rank = parse_rank(p.get("rank"))
-                impact = parse_impact_score(p.get("impact_score"))
-                # None for spectators and for anyone outside the queue's two teams: logged, never counted.
-                side = None if parsed_rank == SURVEV_SPECTATOR_RANK else sides.get(p.get("team_id"))
-                game_rows.append({
-                    "identity": key,
-                    "username": username,
-                    "slug": slug,
-                    "team_id": p.get("team_id"),
-                    "rank": parsed_rank,
-                    "kills": p.get("kills", 0),
-                    "damage_dealt": p.get("damage_dealt", 0),
-                    "impact_score": impact,
-                    "display_team_index": side,
-                })
-                if side is None:
-                    continue
-                if parsed_rank is not None:
-                    best_rank_by_side[side] = min(best_rank_by_side.get(side, parsed_rank), parsed_rank)
-
-                agg = players.setdefault((side, key), {
-                    "username": username, "slug": slug,
-                    "games": 0, "wins": 0, "kills": 0, "damage": 0,
-                    "impact_total": 0, "impact_games": 0,
-                })
-                agg["games"] += 1
-                agg["wins"] += 1 if parsed_rank == 1 else 0
-                agg["kills"] += p.get("kills", 0)
-                agg["damage"] += p.get("damage_dealt", 0)
-                if impact is not None:
-                    agg["impact_total"] += impact
-                    agg["impact_games"] += 1
-
-            # The game goes to whichever queue team placed better (even if a lobby stranger finished above both);
-            # a tie for the best placing leaves it undecided.
-            best = min(best_rank_by_side.values(), default=None)
-            leaders = [side for side, rank in best_rank_by_side.items() if rank == best]
-            round_winner_display_indices.append(leaders[0] if len(leaders) == 1 else None)
-        diagnostics["selected_guids"] = selected_guids
-
-        if not players:
-            if any(boards_by_guid.values()):
-                return None, "None of the linked players' survev.de games in this queue's time window were between its two teams."
-            return None, "survev.de returned no player data for this queue's match(es)."
-
-        result_teams: list[list[dict]] = [[] for _ in range(QUEUE_TEAM_COUNT)]
-        for (side, _key), p in players.items():
-            discord_id = lookup_discord_id(p["slug"]) if p["slug"] else None
-            result_teams[side].append({
-                "discord_id": discord_id,
-                "username": p["username"],
-                "slug": p["slug"],
-                "guest": discord_id is None,
-                "stats": {
-                    "games": p["games"], "wins": p["wins"], "kills": p["kills"], "damage": p["damage"],
-                    # Mean over the games survev.de actually scored (None when it scored none of them).
-                    "impact": round(p["impact_total"] / p["impact_games"], 1) if p["impact_games"] else None,
-                },
-            })
-
-        for team in result_teams:
-            team.sort(key=lambda x: x["stats"]["damage"], reverse=True)
-
-        # Authoritative series score/winner should come from the actual round-by-round winners,
-        # not from a teammate's aggregate win count. That keeps the displayed result aligned with
-        # the queue's real series outcome when a team has multiple players or mixed standings.
-        team_round_wins = derive_team_round_wins_from_round_winners(round_winner_display_indices, len(result_teams))
-        if not any(team_round_wins):
-            team_round_wins = [max((entry["stats"].get("wins", 0) for entry in team), default=0) for team in result_teams]
-
-        winning_team_index = None
-        if team_round_wins:
-            max_wins = max(team_round_wins)
-            if max_wins > 0 and team_round_wins.count(max_wins) == 1:
-                winning_team_index = team_round_wins.index(max_wins)
-
-        individual_games: list[dict] = []
-        for game_index, guid in enumerate(selected_guids, start=1):
-            players_for_game = game_rows_by_guid[guid]
-            players_for_game.sort(
-                key=lambda player: (
-                    player.get("rank") is None,
-                    player.get("rank") if player.get("rank") is not None else 999,
-                    -(player.get("damage_dealt") or 0),
-                )
+    individual_games: list[dict] = []
+    for game_index, guid in enumerate(selected_guids, start=1):
+        players_for_game = game_rows_by_guid[guid]
+        players_for_game.sort(
+            key=lambda player: (
+                player.get("rank") is None,
+                player.get("rank") if player.get("rank") is not None else 999,
+                -(player.get("damage_dealt") or 0),
             )
-            individual_games.append({
-                "game_number": game_index,
-                "guid": guid,
-                "winning_display_team_index": round_winner_display_indices[game_index - 1],
-                "players": players_for_game,
-            })
+        )
+        individual_games.append({
+            "game_number": game_index,
+            "guid": guid,
+            "winning_display_team_index": round_winner_display_indices[game_index - 1],
+            "players": players_for_game,
+        })
 
-        match_history: list[bool | None] = []
-        for winner_idx in round_winner_display_indices:
-            if winner_idx is None or winning_team_index is None:
-                match_history.append(None)
-            else:
-                match_history.append(winner_idx == winning_team_index)
+    match_history: list[bool | None] = []
+    for winner_idx in round_winner_display_indices:
+        if winner_idx is None or winning_team_index is None:
+            match_history.append(None)
+        else:
+            match_history.append(winner_idx == winning_team_index)
 
-        return {
-            "teams": result_teams,
-            "winning_team_index": winning_team_index,
-            "match_history": match_history,
-            "team_round_wins": team_round_wins,
-            "total_games_played": len(selected_guids),
-            "duration_ms": max(0, end_ms - start_ms),
-            "match_start_ms": start_ms,
-            "match_end_ms": end_ms,
-            "is_final": is_final,
-            "individual_games": individual_games,
-            "diagnostics": diagnostics,
-        }, None
+    return {
+        "teams": result_teams,
+        "winning_team_index": winning_team_index,
+        "match_history": match_history,
+        "team_round_wins": team_round_wins,
+        "total_games_played": len(selected_guids),
+        "duration_ms": max(0, end_ms - start_ms),
+        "match_start_ms": start_ms,
+        "match_end_ms": end_ms,
+        "is_final": is_final,
+        "individual_games": individual_games,
+        "diagnostics": diagnostics,
+    }, None

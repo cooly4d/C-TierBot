@@ -166,15 +166,44 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["diagnostics"], result["diagnostics"])
         self.assertEqual(len(payload["individual_games"]), 3)
 
-    def write_log(self, result, error):
-        interaction = SimpleNamespace(guild_id=999, channel_id=123, user=None)
+    def write_log(self, result, error, **context):
+        context = {"trigger": "queue_stats_command", "guild_id": 999, "channel_id": 123, **context}
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(queue_stats_service, "QUEUE_STATS_LOG_DIR", directory):
-                queue_stats_service.write_queue_stats_command_log(interaction, "3674", result, error)
-            return json.loads(next(Path(directory).glob("*.json")).read_text(encoding="utf-8"))
+                queue_stats_service.write_queue_stats_log("3674", result, error, **context)
+            path = next(Path(directory).glob("*.json"))
+            return {**json.loads(path.read_text(encoding="utf-8")), "_file_name": path.name}
+
+    async def test_automatic_lookups_are_logged_with_their_trigger(self):
+        result, _ = await calculate(**three_game_world())
+        for trigger in ("auto_post", "catch_up"):
+            with self.subTest(trigger=trigger):
+                payload = self.write_log(result, None, trigger=trigger)
+                self.assertEqual(payload["event"], trigger)
+                self.assertIsNone(payload["requested_by"])
+                self.assertRegex(payload["_file_name"], rf"^queue_stats_\d{{8}}T[\d.]+Z_g999_{trigger}_m3674\.json$")
+
+    def test_requester_is_recorded_for_command_and_queue_channel_logs(self):
+        class Asker:
+            id, display_name = 55, "Asker"
+
+            def __str__(self):
+                return "asker"
+
+        user = Asker()
+        payload = self.write_log(None, "boom", trigger="queue_channel_reply", requested_by=user)
+        self.assertEqual(payload["event"], "queue_channel_reply")
+        self.assertEqual(payload["requested_by"]["discord_id"], 55)
+        self.assertEqual(payload["requested_by"]["display_name"], "Asker")
+        self.assertEqual(payload["requested_by"]["username"], "asker")
+        self.assertIn("_u55_m3674.json", payload["_file_name"])
+
+    async def test_a_failed_log_write_never_raises(self):
+        with patch.object(queue_stats_service, "write_queue_stats_log", side_effect=OSError("disk full")), \
+                self.assertLogs("queue_stats_service", level="WARNING"):
+            await queue_stats_service.save_queue_stats_log("3674", None, None, trigger="auto_post", guild_id=1, channel_id=2)
 
     def test_write_log_prunes_oldest_files_above_max_limit(self):
-        interaction = SimpleNamespace(guild_id=999, channel_id=123, user=None)
         with tempfile.TemporaryDirectory() as directory:
             for idx in range(4):
                 (Path(directory) / f"queue_stats_2026010{idx + 1}T000000.000000Z_g999_uNone_m{idx}.json").write_text(
@@ -183,7 +212,8 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
             (Path(directory) / "unrelated.txt").write_text("keep", encoding="utf-8")
             with patch.object(queue_stats_service, "QUEUE_STATS_LOG_DIR", directory), \
                     patch.object(queue_stats_service, "QUEUE_STATS_LOG_MAX_FILES", 3):
-                queue_stats_service.write_queue_stats_command_log(interaction, "3674", None, "boom")
+                queue_stats_service.write_queue_stats_log(
+                    "3674", None, "boom", trigger="queue_stats_command", guild_id=999, channel_id=123)
             remaining_json = sorted(p.name for p in Path(directory).glob("queue_stats_*.json"))
             self.assertEqual(len(remaining_json), 3)
             self.assertNotIn("queue_stats_20260101T000000.000000Z_g999_uNone_m0.json", remaining_json)

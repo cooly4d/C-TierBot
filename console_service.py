@@ -408,36 +408,36 @@ async def _handle_winrate(bot: commands.Bot, raw_args: str):
         return
 
     print(f"[Console] Fetching NeatQueue history for guild {guild_id}...")
-    import aiohttp
+    from http_client import http_session
     from neatqueue_client import fetch_neatqueue_history
 
     t1, t2, other, total = 0, 0, 0, 0
     page = 1
-    async with aiohttp.ClientSession() as session:
-        while True:
-            data, error = await fetch_neatqueue_history(session, guild_id, extra_params={"page_size": "1000", "page": str(page)})
-            if error or not data:
-                if page == 1 and error:
-                    print(f"[Console Error] Failed to fetch NeatQueue data: {error}")
-                    return
-                break
-            matches = data.get("data", [])
-            if not matches:
-                break
-            for m in matches:
-                w = m.get("winner")
-                if w == 0:
-                    t1 += 1
-                elif w == 1:
-                    t2 += 1
-                else:
-                    other += 1
-                total += 1
-            pagination = data.get("pagination") or {}
-            total_pages = pagination.get("total_pages", 1)
-            if page >= total_pages:
-                break
-            page += 1
+    session = http_session
+    while True:
+        data, error = await fetch_neatqueue_history(session, guild_id, extra_params={"page_size": "1000", "page": str(page)})
+        if error or not data:
+            if page == 1 and error:
+                print(f"[Console Error] Failed to fetch NeatQueue data: {error}")
+                return
+            break
+        matches = data.get("data", [])
+        if not matches:
+            break
+        for m in matches:
+            w = m.get("winner")
+            if w == 0:
+                t1 += 1
+            elif w == 1:
+                t2 += 1
+            else:
+                other += 1
+            total += 1
+        pagination = data.get("pagination") or {}
+        total_pages = pagination.get("total_pages", 1)
+        if page >= total_pages:
+            break
+        page += 1
 
     decided = t1 + t2
     print(f"\n[Console] === NeatQueue Team Winrates (Guild: {guild_id}) ===")

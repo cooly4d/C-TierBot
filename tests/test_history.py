@@ -375,77 +375,136 @@ class HistoryImageRenderingTests(unittest.TestCase):
                 self.assertEqual(img.width, image_utils.QUEUE_IMG_WIDTH)
 
 
-class HistoryPayloadAndRoutingTests(unittest.IsolatedAsyncioTestCase):
-    @patch("leaderboard_service.get_player_queue_history")
-    async def test_build_history_payload_success(self, mock_get_history):
-        mock_get_history.return_value = [
-            {
-                "match_id": "3674",
-                "team_index": 0,
-                "winning_team_index": 0,
-                "team_round_wins": [3, 1],
-                "won": True,
-                "games": 3,
-                "kills": 12,
-                "total_damage": 4200,
-                "avg_damage": 1400.0,
-                "impact": 75.0,
-                "duration_ms": 600000,
-                "match_start_ms": 100,
-                "match_end_ms": 200,
-                "display_name": "Awang",
-                "username": "Awang",
-            }
-        ]
-        target = SimpleNamespace(id=101, display_name="Awang")
-        embed, file, norm_metric, error = await leaderboard_service.build_history_payload(10, target, "damage")
+HISTORY_ROW = {
+    "match_id": "3674",
+    "team_index": 0,
+    "winning_team_index": 0,
+    "team_round_wins": [3, 1],
+    "won": True,
+    "games": 3,
+    "kills": 12,
+    "total_damage": 4200,
+    "avg_damage": 1400.0,
+    "impact": 75.0,
+    "duration_ms": 600000,
+    "match_start_ms": 100,
+    "match_end_ms": 200,
+    "display_name": "Awang",
+    "username": "Awang",
+}
+PROFILE_SUMMARY = {
+    "matches": 1,
+    "total_duration_ms": 600000,
+    "all_time_avg_damage": 1400.0,
+    "monthly_avg_damage": None,
+    "all_time_avg_impact": 75.0,
+    "monthly_avg_impact": None,
+}
 
-        self.assertIsNone(error)
-        self.assertEqual(norm_metric, "damage")
-        self.assertIn("Awang's Queue History", embed.title)
-        self.assertIn("Average Damage", embed.description)
-        self.assertEqual(file.filename, "history_10_101_damage.png")
+
+class ProfileHistoryTests(unittest.IsolatedAsyncioTestCase):
+    """/profile shows the queue history card that used to be /history."""
+
+    def _patches(self, history_rows, summary=PROFILE_SUMMARY):
+        return (
+            patch.object(leaderboard_service, "get_player_queue_history", return_value=history_rows),
+            patch.object(leaderboard_service, "get_player_queue_stats_summary", return_value=summary),
+        )
+
+    async def test_profile_in_a_server_adds_the_history_card_below_the_stat_fields(self):
+        history_patch, summary_patch = self._patches([HISTORY_ROW])
+        target = SimpleNamespace(id=101, display_name="Awang")
+        with history_patch as get_history, summary_patch:
+            embed, file, norm_metric, message = await leaderboard_service.build_profile_payload(target, None, 10, "impact")
+
+        self.assertIsNone(message)
+        self.assertEqual(norm_metric, "impact")
+        get_history.assert_called_once_with(10, 101, limit=10)
+        self.assertEqual(embed.title, "Awang's NeatQueue stats")
+        self.assertEqual(embed.fields[0].name, "4v4 Play Time")  # the locked field layout is unchanged
+        self.assertEqual(file.filename, "history_10_101_impact.png")
+        self.assertEqual(embed.image.url, "attachment://history_10_101_impact.png")
         self.assertIn("Queue #3674 (Won)", file.description)
-        self.assertEqual(embed.footer.text, "Toggle the trend chart above with the buttons below.")
         self.assertNotIn("Impact is survev.de", embed.footer.text)
 
-    @patch("leaderboard_service.get_player_queue_history", return_value=[])
-    async def test_build_history_payload_empty_results(self, _mock_history):
-        target = SimpleNamespace(id=101, display_name="Awang")
-        embed, file, norm_metric, error = await leaderboard_service.build_history_payload(10, target, "damage")
+    async def test_profile_without_server_history_has_no_card(self):
+        for guild_id, rows in ((10, []), (None, [HISTORY_ROW])):
+            history_patch, summary_patch = self._patches(rows)
+            target = SimpleNamespace(id=101, display_name="Awang")
+            with self.subTest(guild_id=guild_id), history_patch as get_history, summary_patch:
+                embed, file, _metric, message = await leaderboard_service.build_profile_payload(target, None, guild_id)
 
-        self.assertIsNone(embed)
-        self.assertIsNone(file)
-        self.assertIn("No cached NeatQueue history found", error)
+                self.assertIsNone(message)
+                self.assertIsNone(file)
+                self.assertIsNone(embed.image.url)
+                if guild_id is None:
+                    get_history.assert_not_called()
 
-    async def test_build_history_payload_no_guild(self):
-        target = SimpleNamespace(id=101, display_name="Awang")
-        embed, file, norm_metric, error = await leaderboard_service.build_history_payload(None, target, "damage")
+    async def test_unknown_metric_falls_back_to_damage(self):
+        history_patch, summary_patch = self._patches([HISTORY_ROW])
+        with history_patch, summary_patch:
+            _embed, file, norm_metric, _message = await leaderboard_service.build_profile_payload(
+                SimpleNamespace(id=101, display_name="Awang"), None, 10, "bogus")
 
-        self.assertIsNone(embed)
-        self.assertIn("only available within a server", error)
+        self.assertEqual(norm_metric, "damage")
+        self.assertEqual(file.filename, "history_10_101_damage.png")
 
     def test_parse_history_metric_id(self):
         metric, guild_id, discord_id = discord_ui.parse_history_metric_id("history_metric:impact:12345:67890")
         self.assertEqual((metric, guild_id, discord_id), ("impact", 12345, 67890))
 
-    async def test_history_metric_view_button_styles(self):
-        view = discord_ui.HistoryMetricView(12345, 67890, active_metric="impact")
+    async def test_profile_metric_view_button_styles(self):
+        view = discord_ui.ProfileMetricView(12345, 67890, active_metric="impact")
         buttons = {c.label: (c.style, c.custom_id) for c in view.children}
         self.assertEqual(buttons["Damage"][0], discord.ButtonStyle.secondary)
         self.assertEqual(buttons["Impact"][0], discord.ButtonStyle.primary)
         self.assertEqual(buttons["Kills"][0], discord.ButtonStyle.secondary)
         self.assertEqual(buttons["Impact"][1], "history_metric:impact:12345:67890")
 
-    async def test_log_interaction_routes_history_metric_click(self):
+    async def test_log_interaction_routes_metric_clicks_to_the_profile(self):
+        # Buttons on old /history messages use the same custom_id, so they now open the profile view too.
         interaction = MagicMock()
         interaction.type = discord.InteractionType.component
         interaction.data = {"custom_id": "history_metric:kills:10:101"}
 
-        with patch("leaderboard_bot.refresh_history_message", new=AsyncMock()) as refresh:
+        with patch("leaderboard_bot.refresh_profile_message", new=AsyncMock()) as refresh:
             await leaderboard_bot.log_interaction(interaction)
 
         refresh.assert_awaited_once_with(interaction, "kills", 10, 101)
+
+    async def test_refresh_redraws_the_profile_for_the_clicked_player_with_the_new_metric(self):
+        member = SimpleNamespace(id=101, display_name="Server Nick")
+        interaction = MagicMock()
+        interaction.response.is_done.return_value = False
+        interaction.response.defer = AsyncMock()
+        interaction.message.edit = AsyncMock()
+        interaction.guild.get_member.return_value = member
+        payload = AsyncMock(return_value=(discord.Embed(title="t"), MagicMock(), "kills", None))
+
+        with patch.object(discord_ui, "build_profile_payload", new=payload), \
+                patch.object(discord_ui, "get_user_token", return_value="tok"):
+            await discord_ui.refresh_profile_message(interaction, "kills", 10, 101)
+
+        payload.assert_awaited_once_with(member, "tok", 10, "kills")
+        view = interaction.message.edit.await_args.kwargs["view"]
+        self.assertEqual(view.active_metric, "kills")
+
+    async def test_refresh_never_shows_the_clicker_when_the_player_is_gone(self):
+        interaction = MagicMock()
+        interaction.response.is_done.return_value = True
+        interaction.followup.send = AsyncMock()
+        interaction.message.edit = AsyncMock()
+        interaction.guild.get_member.return_value = None
+        interaction.client.get_user.return_value = None
+        interaction.client.fetch_user = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+        payload = AsyncMock()
+
+        with patch.object(discord_ui, "build_profile_payload", new=payload):
+            await discord_ui.refresh_profile_message(interaction, "kills", 10, 101)
+
+        payload.assert_not_awaited()
+        interaction.message.edit.assert_not_awaited()
+        self.assertTrue(interaction.followup.send.await_args.kwargs["ephemeral"])
 
 
 if __name__ == "__main__":

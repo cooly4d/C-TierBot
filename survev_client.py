@@ -2,26 +2,30 @@
 timeframe stats, inventory, and market/shop data.
 """
 import asyncio
+import logging
 import time
 from datetime import datetime, timezone
 
 import aiohttp
 import discord
 
-from bot_config import API_CONCURRENCY_LIMIT, SURVEV_CLIENT_ID, SURVEV_CLIENT_SECRET, VERIFICATION_TIMEOUT_SECONDS
+from bot_config import SURVEV_CLIENT_ID, SURVEV_CLIENT_SECRET, VERIFICATION_TIMEOUT_SECONDS
 from db import save_token, get_user_token, get_users_missing_slug, update_user_slug
+from http_client import api_slot, http_session
+
+log = logging.getLogger(__name__)
 
 
 async def fetch_discord_link(session: aiohttp.ClientSession, access_token: str):
     """Returns (slug, username) for a survev.de access token, or (None, None) on failure."""
     try:
         headers = {"Authorization": f"Bearer {access_token}"}
-        async with session.post("https://survev.de/api/external/discord_link", headers=headers) as resp:
+        async with api_slot(), session.post("https://survev.de/api/external/discord_link", headers=headers) as resp:
             if resp.status != 200:
                 return None, None
             data = await resp.json()
             return data.get("slug"), data.get("username")
-    except aiohttp.ClientError:
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         return None, None
 
 
@@ -32,16 +36,12 @@ async def backfill_missing_slugs():
     if not missing:
         return
 
-    sem = asyncio.Semaphore(API_CONCURRENCY_LIMIT)
+    async def _backfill_one(discord_id: int, access_token: str):
+        slug, username = await fetch_discord_link(http_session, access_token)
+        if slug:
+            update_user_slug(discord_id, slug, username)
 
-    async def _backfill_one(session: aiohttp.ClientSession, discord_id: int, access_token: str):
-        async with sem:
-            slug, username = await fetch_discord_link(session, access_token)
-            if slug:
-                update_user_slug(discord_id, slug, username)
-
-    async with aiohttp.ClientSession() as session:
-        await asyncio.gather(*(_backfill_one(session, did, tok) for did, tok in missing))
+    await asyncio.gather(*(_backfill_one(did, tok) for did, tok in missing))
 
 
 # Statuses that mean "survev.de is busy/hiccuping", not "the user did something wrong" — retried instead of
@@ -84,7 +84,7 @@ async def _notify_all(senders: list, **kwargs):
         try:
             await send_update(**kwargs)
         except discord.HTTPException as exc:
-            print(f"DEBUG - verification update could not be delivered: {exc!r}")
+            log.info("Verification update could not be delivered: %r", exc)
 
 
 async def _fetch_discord_link_with_retry(session: aiohttp.ClientSession, access_token: str):
@@ -137,112 +137,113 @@ async def _run_verification_flow(discord_user_id: int, state: dict):
         "scope": ["read:discord", "read:stats", "read:inventory", "read:market"]
     }
 
-    async with aiohttp.ClientSession() as session:
-        data = None
-        for attempt in range(DEVICE_CODE_ATTEMPTS):
-            is_last_attempt = attempt == DEVICE_CODE_ATTEMPTS - 1
-            delay = 2 * (attempt + 1)
-            try:
-                async with session.post(device_url, json=payload) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        break
-                    error_details = (await resp.text())[:500]
-                    print(f"DEBUG - Survev Error Code {resp.status}: {error_details}")
-                    if resp.status not in TRANSIENT_HTTP_STATUSES or is_last_attempt:
-                        if resp.status == 429:
-                            message = "survev.de is rate limiting the bot right now. Please try `/verify` again in a minute."
-                        else:
-                            message = f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`"
-                        await _notify_all(senders, content=message)
-                        return
-                    delay = _retry_after_seconds(resp, delay)
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-                if is_last_attempt:
-                    await _notify_all(senders, content=f"Failed to contact survev.de for authorization: `{exc}`")
+    # The OAuth endpoints aren't the rate-limited external API, so these requests don't take an api_slot().
+    session = http_session
+    data = None
+    for attempt in range(DEVICE_CODE_ATTEMPTS):
+        is_last_attempt = attempt == DEVICE_CODE_ATTEMPTS - 1
+        delay = 2 * (attempt + 1)
+        try:
+            async with session.post(device_url, json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    break
+                error_details = (await resp.text())[:500]
+                log.warning("survev.de device-code request failed with HTTP %s", resp.status)
+                if resp.status not in TRANSIENT_HTTP_STATUSES or is_last_attempt:
+                    if resp.status == 429:
+                        message = "survev.de is rate limiting the bot right now. Please try `/verify` again in a minute."
+                    else:
+                        message = f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`"
+                    await _notify_all(senders, content=message)
                     return
-            await asyncio.sleep(delay)
+                delay = _retry_after_seconds(resp, delay)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            if is_last_attempt:
+                await _notify_all(senders, content=f"Failed to contact survev.de for authorization: `{exc}`")
+                return
+        await asyncio.sleep(delay)
 
-        if not isinstance(data, dict):
-            await _notify_all(senders, content="Failed to start authorization: survev.de sent an unexpected response.")
+    if not isinstance(data, dict):
+        await _notify_all(senders, content="Failed to start authorization: survev.de sent an unexpected response.")
+        return
+
+    device_code = data["deviceCode"]
+    user_code = data["userCode"]
+    verification_uri = data["verificationUriComplete"]
+    interval = max(1, int(data.get("interval", 5)))
+    expires_in = min(int(data.get("expiresIn", VERIFICATION_TIMEOUT_SECONDS)), VERIFICATION_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + expires_in
+
+    state["uri"], state["code"], state["deadline"] = verification_uri, user_code, deadline
+    await _notify_all(senders, embed=_verification_embed(verification_uri, user_code, deadline))
+
+    token_payload = {
+        "grantType": "device_code",
+        "clientId": SURVEV_CLIENT_ID,
+        "clientSecret": SURVEV_CLIENT_SECRET,
+        "deviceCode": device_code
+    }
+
+    extra_delay = 0.0
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval + extra_delay)
+        extra_delay = 0.0
+        try:
+            async with session.post(token_url, json=token_payload) as t_resp:
+                status = t_resp.status
+                if status in TRANSIENT_HTTP_STATUSES:
+                    # Rate limited / server hiccup — not the user's fault, so keep waiting for them.
+                    log.info("Verification poll for %s got HTTP %s, retrying", discord_user_id, status)
+                    extra_delay = _retry_after_seconds(t_resp, 5)
+                    continue
+                t_data = await t_resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            continue
+        if not isinstance(t_data, dict):
+            continue
+
+        if status == 200:
+            access_token = t_data["accessToken"]
+            slug, username = await _fetch_discord_link_with_retry(session, access_token)
+            save_token(discord_user_id, access_token, slug, username)
+            if slug:
+                await _notify_all(senders, content="✅ **Account Linked!**")
+            else:
+                # Saved without a slug: backfill_missing_slugs fills it in on its next periodic run.
+                await _notify_all(
+                    senders,
+                    content="✅ **Account Linked!**\n"
+                            "-# survev.de didn't return your profile just now, so match cards may show you as a "
+                            "guest for a little while. The bot will fill it in automatically."
+                )
             return
 
-        device_code = data["deviceCode"]
-        user_code = data["userCode"]
-        verification_uri = data["verificationUriComplete"]
-        interval = max(1, int(data.get("interval", 5)))
-        expires_in = min(int(data.get("expiresIn", VERIFICATION_TIMEOUT_SECONDS)), VERIFICATION_TIMEOUT_SECONDS)
-        deadline = time.monotonic() + expires_in
-
-        state["uri"], state["code"], state["deadline"] = verification_uri, user_code, deadline
-        await _notify_all(senders, embed=_verification_embed(verification_uri, user_code, deadline))
-
-        token_payload = {
-            "grantType": "device_code",
-            "clientId": SURVEV_CLIENT_ID,
-            "clientSecret": SURVEV_CLIENT_SECRET,
-            "deviceCode": device_code
-        }
-
-        extra_delay = 0.0
-        while time.monotonic() < deadline:
-            await asyncio.sleep(interval + extra_delay)
-            extra_delay = 0.0
-            try:
-                async with session.post(token_url, json=token_payload) as t_resp:
-                    status = t_resp.status
-                    if status in TRANSIENT_HTTP_STATUSES:
-                        # Rate limited / server hiccup — not the user's fault, so keep waiting for them.
-                        print(f"DEBUG - verification poll for {discord_user_id} got HTTP {status}, retrying")
-                        extra_delay = _retry_after_seconds(t_resp, 5)
-                        continue
-                    t_data = await t_resp.json(content_type=None)
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-                continue
-            if not isinstance(t_data, dict):
-                continue
-
-            if status == 200:
-                access_token = t_data["accessToken"]
-                slug, username = await _fetch_discord_link_with_retry(session, access_token)
-                save_token(discord_user_id, access_token, slug, username)
-                if slug:
-                    await _notify_all(senders, content="✅ **Account Linked!**")
-                else:
-                    # Saved without a slug: backfill_missing_slugs fills it in on its next periodic run.
-                    await _notify_all(
-                        senders,
-                        content="✅ **Account Linked!**\n"
-                                "-# survev.de didn't return your profile just now, so match cards may show you as a "
-                                "guest for a little while. The bot will fill it in automatically."
-                    )
-                return
-
-            error = t_data.get("error")
-            if error == "authorization_pending":
-                continue
-            elif error == "slow_down":
-                # RFC 8628: on slow_down, permanently increase the polling interval by 5 seconds.
-                interval = min(interval + 5, MAX_POLL_INTERVAL_SECONDS)
-            elif error == "access_denied":
-                await _notify_all(senders, content="❌ Authorization was declined on survev.de. Run `/verify` again if that was a mistake.")
-                return
-            elif error == "expired_token":
-                await _notify_all(senders, content="⌛ That code expired. Please run `/verify` again when you are ready.")
-                return
-            else:
-                await _notify_all(senders, content=f"❌ Authorization failed: `{error or f'HTTP {status}'}`")
-                return
-
-        if get_user_token(discord_user_id):
-            # e.g. an already-linked player re-ran /verify and didn't finish — their existing link still stands.
-            await _notify_all(
-                senders,
-                content="⌛ Verification timed out, but your survev.de account is already linked, so nothing changed. "
-                        "Run `/verify` again only if you want to link a different account."
-            )
+        error = t_data.get("error")
+        if error == "authorization_pending":
+            continue
+        elif error == "slow_down":
+            # RFC 8628: on slow_down, permanently increase the polling interval by 5 seconds.
+            interval = min(interval + 5, MAX_POLL_INTERVAL_SECONDS)
+        elif error == "access_denied":
+            await _notify_all(senders, content="❌ Authorization was declined on survev.de. Run `/verify` again if that was a mistake.")
+            return
+        elif error == "expired_token":
+            await _notify_all(senders, content="⌛ That code expired. Please run `/verify` again when you are ready.")
+            return
         else:
-            await _notify_all(senders, content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
+            await _notify_all(senders, content=f"❌ Authorization failed: `{error or f'HTTP {status}'}`")
+            return
+
+    if get_user_token(discord_user_id):
+        # e.g. an already-linked player re-ran /verify and didn't finish — their existing link still stands.
+        await _notify_all(
+            senders,
+            content="⌛ Verification timed out, but your survev.de account is already linked, so nothing changed. "
+                    "Run `/verify` again only if you want to link a different account."
+        )
+    else:
+        await _notify_all(senders, content="⌛ Verification timed out. Please run `/verify` again when you are ready.")
 
 
 async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int,
@@ -269,7 +270,7 @@ async def fetch_player_matches_in_window(session: aiohttp.ClientSession, access_
         }
 
         try:
-            async with session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
+            async with api_slot(), session.post("https://survev.de/api/external/match_history", headers=headers, json=payload) as resp:
                 page["http_status"] = resp.status
                 if resp.status != 200:
                     page["error"] = "http_error"
@@ -324,9 +325,11 @@ def get_match_history_timestamp(match: dict) -> int | None:
     return None
 
 
-async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int):
-    """Aggregates a verified player's own matches within the timeframe. Used by the leaderboard."""
-    all_matches = await fetch_player_matches_in_window(session, access_token, from_ms, to_ms)
+async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_token: str, from_ms: int, to_ms: int,
+                                       diagnostics: dict | None = None):
+    """Aggregates a verified player's own matches within the timeframe. Used by the leaderboard. Pass
+    `diagnostics` to learn whether every page was fetched (its "pagination_complete")."""
+    all_matches = await fetch_player_matches_in_window(session, access_token, from_ms, to_ms, diagnostics)
 
     if not all_matches:
         return {"games": 0, "wins": 0, "kills": 0, "damage": 0}
@@ -339,66 +342,43 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
     }
 
 
-async def fetch_user_inventory(session: aiohttp.ClientSession, access_token: str):
-    """Fetches a survev.de user's inventory with their OAuth access token."""
-    headers = {"Authorization": f"Bearer {access_token}"}
-    try:
-        async with session.post("https://survev.de/api/external/inventory", headers=headers) as resp:
-            if resp.status == 200:
-                return await resp.json(), None
-
-            if resp.status == 401:
-                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
-            if resp.status == 403:
-                return None, "Your survev.de token does not have inventory access. Please re-run /verify to grant read:inventory."
-
-            text = await resp.text()
-            return None, f"survev.de inventory request failed ({resp.status}): {text}"
-    except aiohttp.ClientError as exc:
-        return None, f"survev.de inventory request failed: {exc}"
-
-
-async def fetch_user_market(session: aiohttp.ClientSession, access_token: str):
-    """Fetches a survev.de user's current market/shop data with their OAuth access token."""
-    headers = {"Authorization": f"Bearer {access_token}"}
-    try:
-        async with session.post("https://survev.de/api/external/market", headers=headers) as resp:
-            if resp.status == 200:
-                return await resp.json(), None
-
-            if resp.status == 401:
-                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
-            if resp.status == 403:
-                return None, "Your survev.de token does not have market access. Please re-run /verify to grant read:market."
-
-            text = await resp.text()
-            return None, f"survev.de market request failed ({resp.status}): {text}"
-    except aiohttp.ClientError as exc:
-        return None, f"survev.de market request failed: {exc}"
-
-
 SQUAD_TEAM_MODE = 4  # survev.de TeamMode.Squad, the mode 4v4 queues are played in
 
 
-async def fetch_user_stats(session: aiohttp.ClientSession, access_token: str):
-    """Fetches a verified player's all-time survev.de stats (per-mode games, rating and tier)."""
+async def _fetch_external(session: aiohttp.ClientSession, access_token: str, endpoint: str, scope: str,
+                          payload: dict | None = None):
+    """POSTs to a survev.de external API endpoint with a player's token. Returns (data, None) or (None, error),
+    where error is a short message safe to show in Discord (never the raw response body)."""
     headers = {"Authorization": f"Bearer {access_token}"}
-    payload = {"interval": "alltime", "mapIdFilter": "-1"}  # "-1" = every map
     try:
-        async with session.post("https://survev.de/api/external/stats", headers=headers, json=payload) as resp:
+        async with api_slot(), session.post(f"https://survev.de/api/external/{endpoint}", headers=headers, json=payload) as resp:
             if resp.status == 200:
                 return await resp.json(), None
-
             if resp.status == 401:
                 return None, "Your survev.de token is invalid or revoked. Please run /verify again."
             if resp.status == 403:
-                return None, "Your survev.de token does not have stats access. Please re-run /verify to grant read:stats."
+                return None, f"Your survev.de token does not have {endpoint} access. Please re-run /verify to grant {scope}."
             if resp.status == 429:
                 return None, "survev.de is rate limiting the bot right now. Try again in a minute."
+            return None, f"survev.de {endpoint} request failed ({resp.status})."
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+        return None, f"survev.de {endpoint} request failed: {exc or type(exc).__name__}"
 
-            return None, f"survev.de stats request failed ({resp.status})."
-    except (aiohttp.ClientError, ValueError) as exc:
-        return None, f"survev.de stats request failed: {exc}"
+
+async def fetch_user_inventory(session: aiohttp.ClientSession, access_token: str):
+    """A survev.de user's inventory, as (data, error)."""
+    return await _fetch_external(session, access_token, "inventory", "read:inventory")
+
+
+async def fetch_user_market(session: aiohttp.ClientSession, access_token: str):
+    """A survev.de user's current shop offers and Golden Fries balance, as (data, error)."""
+    return await _fetch_external(session, access_token, "market", "read:market")
+
+
+async def fetch_user_stats(session: aiohttp.ClientSession, access_token: str):
+    """A verified player's all-time survev.de stats (per-mode games, rating and tier), as (data, error)."""
+    return await _fetch_external(session, access_token, "stats", "read:stats",
+                                 {"interval": "alltime", "mapIdFilter": "-1"})  # "-1" = every map
 
 
 def extract_squad_tier(stats: dict | None) -> dict | None:
@@ -428,7 +408,7 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str,
     if diagnostics is None:
         diagnostics = {}
     try:
-        async with session.post("https://survev.de/api/match_data", json={"gameId": guid}) as resp:
+        async with api_slot(), session.post("https://survev.de/api/match_data", json={"gameId": guid}) as resp:
             diagnostics["http_status"] = resp.status
             if resp.status != 200:
                 diagnostics["error"] = "http_error"

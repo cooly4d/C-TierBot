@@ -75,8 +75,8 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 | Discord Color | Hex | Applied Commands / Views |
 |---|---|---|
 | `discord.Color.blurple()` | `#5865F2` | `/profile` (incl. the `survev.de Squad Tier` field), `/inventory`, `/market`, Game breakdown embeds |
-| `discord.Color.gold()` | `#F1C40F` | `/leaderboard_weekly`, `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
-| `discord.Color.purple()` | `#9B59B6` | `/leaderboard_monthly` |
+| `discord.Color.gold()` | `#F1C40F` | `/leaderboard` (Weekly), `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
+| `discord.Color.purple()` | `#9B59B6` | `/leaderboard` (Monthly) |
 
 ---
 
@@ -248,11 +248,12 @@ Rendered in a strict 5-layer painter's order per team panel so corners and borde
 5. **Outer Card Border:** Final `rounded_rectangle` (`radius=18`, `outline=team_color`, `width=2`) drawn last on top of the banner and card fill to prevent inner fills from clipping the border stroke.
 
 ### 5.3 Discord Interactive Views (`discord_ui.py`)
-- **Centralized Dispatch Pattern:** All interactive component clicks and select changes are routed through `log_interaction` in [`leaderboard_bot.py`](file:///c:/Users/Awang/local/C-TierBot/leaderboard_bot.py#L87-L178) via `custom_id` matching (`queue_result_verify`, `queue_result_games`, `qgame_prev:*`, `qgame_next:*`, `leaderboard_weekly`, `leaderboard_monthly`, `leaderboard_sort`, `season_prev:*`, `season_next:*`, `inventory_prev`, `inventory_next`, `inventory_rarity`, `market_prev`, `market_next`, `market_mode_*`).
+- **Centralized Dispatch Pattern:** All interactive component clicks and select changes are routed through `log_interaction` in [`leaderboard_bot.py`](file:///c:/Users/Awang/local/C-TierBot/leaderboard_bot.py#L87-L178) via `custom_id` matching (`queue_result_verify`, `queue_result_games`, `qgame_prev:*`, `qgame_next:*`, `leaderboard_weekly`, `leaderboard_monthly`, `leaderboard_sort`, `season_prev:*`, `season_next:*`, `season_stat:*`, `inv_prev:*`, `inv_next:*`, `inv_rarity:*`, `mkt_prev:*`, `mkt_next:*`, `mkt_mode:*`, `history_metric:*`). Paged views carry their state in the `custom_id` (whose data, filter or mode, and target page), so they keep working after a restart; the pre-2026-11-05 `/inventory` and `/market` ids (`inventory_prev`, `market_mode_daily`, …) now answer privately that the menu expired.
 - **Button Hierarchy:**
   - Active filter/tab toggle (`Weekly` vs `Monthly`, `Daily` vs `Weekly` vs `All`) uses `discord.ButtonStyle.primary` (Blurple); inactive tabs use `discord.ButtonStyle.secondary` (Grey).
   - Pagination controls (`◀ Previous`, `Next ▶`) use `discord.ButtonStyle.primary` and disable automatically at boundary pages (`current_page <= 0` or `current_page >= total_pages - 1`).
   - Queue results (`QueueResultView`): finished queues show a primary `Game breakdown` button (`custom_id="queue_result_games"`) **before** the single persistent `discord.ButtonStyle.secondary` verification CTA (`label="Account unlinked?  Verify here for a gf."`, `custom_id="queue_result_verify"`). Unfinished queues only show the verification CTA. Both variants are shared singletons (`get_queue_result_view(include_breakdown)`), not one view per message.
+  - `/leaderboard_season` (`SeasonalLeaderboardView`): Previous/Next (only when there is more than one page, `season_prev:{month}:{stat}:{page}`) above a `Rank by` select (`season_stat:{month}`) offering Avg Damage (default), Avg Impact and Avg Kills; picking a stat returns to page 1. The two-line entry format is kept (`{emoji} {label}: **value** (N games)`).
   - Game breakdown paging (`QueueGamesPagerView`) follows the same pagination rule with the queue number and target page carried in the `custom_id` (`qgame_prev:{match_id}:{page}`, `qgame_next:{match_id}:{page}`), a finite `900s` timeout (these live in ephemeral messages) and clicks handled in `log_interaction`.
 - **Rank Formatting in Embeds:** Top 3 positions use medal emojis (`🥇`, `🥈`, `🥉`); rank 4+ uses inline code backticks (`` `#4` `` .. `` `#10` ``).
 
@@ -264,7 +265,7 @@ One game of a finished queue, opened by the `Game breakdown` button as an **ephe
 - **Empty state:** a missing, expired or unreadable snapshot answers privately with what happened and the exact `/queue_stats {match_id}` command that rebuilds it.
 
 ### 5.5 Player History Card (`generate_history_image`)
-A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues in the current server, paired with interactive metric toggle buttons (`Damage`, `Impact`, `Kills`) in Discord.
+A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues in the current server, paired with interactive metric toggle buttons (`Damage`, `Impact`, `Kills`) in Discord. Since 2026-11-05 it is the image of the `/profile` embed (below the unchanged stat fields and Squad tier); the separate `/history` command was removed.
 - **Top Header Banner (`1600 x 210`, `_draw_header_gradient`):**
   - **Left Column:** Title (`62px` bold `QUEUE_IMG_TEXT`) `f"{player_name}'s History"` at `y = 28`; Subtitle (`38px` bold) `Last N Queues · XW - YL` colored `QUEUE_IMG_WIN` / `QUEUE_IMG_LOSE` / `QUEUE_IMG_MUTED`; Meta line (`22px` bold `QUEUE_IMG_MUTED` at `y = 152`) `Win Rate: {win_rate}% · {tot_gms} Game(s) Played` (or `{tot_gms} Game(s) Played` when undecided).
   - **Right 3-Stat Summary Box (`x = 940..1556, y = 32..178`, `radius=20`):** Displays `AVG DAMAGE`, `AVG IMPACT`, and `TOTAL KILLS` side-by-side (`20px` bold label over `38px` bold value), highlighting the active metric's value in `QUEUE_IMG_ACCENT` (`#FFA532`) and label in `QUEUE_IMG_TEXT` (inactive labels in `QUEUE_IMG_MUTED`, inactive values in `QUEUE_IMG_TEXT`).
@@ -278,8 +279,8 @@ A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues 
   - Column header strip at `48px` height with labels `["Queue", "Result", "Kills", "Avg Dmg", "Impact"]` at ratios `[0.0, 0.22, 0.48, 0.68, 0.84]`, highlighting the active metric's column header in `QUEUE_IMG_ACCENT`.
   - Ordered **newest-first** with alternating even-row `QUEUE_IMG_ROW_ALT` pills (`radius=10`, `12px` X-inset).
   - Cells: `Queue` (`#3674`), `Result` (`W · 3 - 1` in green / `L · 1 - 3` in red / `-` in muted), `Kills` (regular body), `Avg Dmg` (bold accent `#FFA532`), `Impact` (bold text `0–100`, or `-` in muted).
-- **Discord Interaction (`HistoryMetricView`):**
-  - Stateless button row: `Damage`, `Impact`, `Kills` with `custom_id="history_metric:{metric}:{guild_id}:{discord_id}"`.
+- **Discord Interaction (`ProfileMetricView`):**
+  - Stateless button row: `Damage`, `Impact`, `Kills` with `custom_id="history_metric:{metric}:{guild_id}:{discord_id}"` (the id format predates the merge, so buttons on old `/history` messages redraw them as `/profile` messages).
   - Active button is `discord.ButtonStyle.primary` (Blurple); inactive buttons are `discord.ButtonStyle.secondary` (Grey).
 
 

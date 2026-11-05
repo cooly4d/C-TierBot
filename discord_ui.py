@@ -1,48 +1,69 @@
-"""Discord UI components: persistent Views/Selects for the leaderboard, queue-result
-verify and Game breakdown buttons, and inventory/shop pagination, plus the message-refresh handlers they trigger.
+"""Discord UI components: persistent Views/Selects for the leaderboards, queue-result
+verify and Game breakdown buttons, /profile's trend buttons, and inventory/shop paging, plus the
+message-refresh handlers they trigger.
 
 Note: the actual click/select dispatch lives in `log_interaction` (leaderboard_bot.py) —
-these views' own callbacks are mostly no-ops (see the comment on QueueResultView).
+these views' own callbacks are no-ops. Paged views carry their state (whose data, which page or filter) in
+each component's custom_id, so their buttons keep working after a restart.
 """
 import discord
 
 from bot_config import LEADERBOARD_SORT_CONFIG
+from db import get_user_token
 from image_utils import (
     INVENTORY_RARITY_FILTERS,
     normalize_history_metric,
     normalize_inventory_rarity_filter,
 )
 from leaderboard_service import (
-    build_history_payload,
+    SEASON_STATS,
     build_inventory_image_payload,
+    build_profile_payload,
     build_seasonal_leaderboard_payload,
     build_shop_image_payload,
     generate_leaderboard_embed,
+    normalize_season_stat,
 )
 from queue_stats_service import build_queue_game_payload, parse_queue_match_id, queue_games_unavailable
 
-MAX_PAGINATION_STATE_ENTRIES = 200
-
-# Store pagination state: msg_id -> (target_user, access_token, mode/rarity, current_page, total_pages)
-inventory_pagination_state: dict[int, tuple[discord.User, str, str, int, int]] = {}
-market_pagination_state: dict[int, tuple[discord.User, str, str, int, int]] = {}
-
-
-def store_pagination_state(state_dict: dict, msg_id: int, value: tuple):
-    """Stores pagination state for msg_id while evicting oldest entries above MAX_PAGINATION_STATE_ENTRIES."""
-    state_dict.pop(msg_id, None)
-    state_dict[msg_id] = value
-    while len(state_dict) > MAX_PAGINATION_STATE_ENTRIES:
-        oldest_key = next(iter(state_dict))
-        state_dict.pop(oldest_key, None)
+MARKET_MODES = ("daily", "weekly", "all")
+# custom_ids used by /inventory and /market messages sent before paging state moved into the custom_id.
+LEGACY_PAGINATION_IDS = {
+    "inventory_prev": "/inventory", "inventory_next": "/inventory", "inventory_rarity": "/inventory",
+    "market_prev": "/market", "market_next": "/market",
+    "market_mode_daily": "/market", "market_mode_weekly": "/market", "market_mode_all": "/market",
+}
 
 
-async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int, sort_by: str = "kills"):
+async def _defer_update(interaction: discord.Interaction):
     if not interaction.response.is_done():
         try:
             await interaction.response.defer()
         except discord.HTTPException:
             pass
+
+
+async def _resolve_user(interaction: discord.Interaction, user_id: int) -> discord.abc.User | None:
+    """The member (for their server nickname) or user with this ID, or None if Discord no longer knows them."""
+    member = interaction.guild.get_member(user_id) if interaction.guild is not None else None
+    if member is not None:
+        return member
+    user = interaction.client.get_user(user_id)
+    if user is not None:
+        return user
+    try:
+        return await interaction.client.fetch_user(user_id)
+    except discord.HTTPException:
+        return None
+
+
+async def send_expired_menu_notice(interaction: discord.Interaction, command: str):
+    """Old /inventory or /market messages carry no paging state; point the clicker at a fresh command."""
+    await interaction.response.send_message(f"This menu has expired. Run `{command}` again.", ephemeral=True)
+
+
+async def refresh_leaderboard_message(interaction: discord.Interaction, period: str, days: int, sort_by: str = "kills"):
+    await _defer_update(interaction)
     embed = await generate_leaderboard_embed(period=period, days=days, sort_by=sort_by)
     await interaction.message.edit(embed=embed, view=LeaderboardView(period, sort_by))
 
@@ -93,38 +114,56 @@ class LeaderboardView(discord.ui.View):
 
 
 class SeasonalLeaderboardView(discord.ui.View):
-    """Prev/Next paging for /leaderboard_season; clicks are handled in log_interaction."""
-    def __init__(self, month: str, page: int, total_pages: int):
+    """Stat picker plus Prev/Next paging for /leaderboard_season; clicks are handled in log_interaction."""
+    def __init__(self, month: str, page: int, total_pages: int, stat: str = "damage"):
         super().__init__(timeout=None)
-        # custom_id carries the month and target page, so paging keeps working after a restart.
-        self.add_item(discord.ui.Button(
-            label="◀ Previous",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"season_prev:{month}:{max(0, page - 1)}",
-            disabled=page <= 0,
+        stat = normalize_season_stat(stat)
+        # custom_ids carry the month, stat and target page, so the controls keep working after a restart.
+        if total_pages > 1:
+            self.add_item(discord.ui.Button(
+                label="◀ Previous",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"season_prev:{month}:{stat}:{max(0, page - 1)}",
+                disabled=page <= 0,
+                row=0,
+            ))
+            self.add_item(discord.ui.Button(
+                label="Next ▶",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"season_next:{month}:{stat}:{min(total_pages - 1, page + 1)}",
+                disabled=page >= total_pages - 1,
+                row=0,
+            ))
+        self.add_item(discord.ui.Select(
+            placeholder="Rank by",
+            options=[
+                discord.SelectOption(label=label, value=key, emoji=emoji, default=(key == stat))
+                for key, (label, emoji, _description, _format) in SEASON_STATS.items()
+            ],
+            custom_id=f"season_stat:{month}",
+            row=1,
         ))
-        self.add_item(discord.ui.Button(
-            label="Next ▶",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"season_next:{month}:{min(total_pages - 1, page + 1)}",
-            disabled=page >= total_pages - 1,
-        ))
 
 
-async def build_seasonal_leaderboard_message(guild_id: int, month: str | None = None, page: int = 0):
-    """Returns (embed, view); view is None when the whole leaderboard fits on one page."""
-    embed, month_key, page, total_pages = await build_seasonal_leaderboard_payload(guild_id, month, page)
-    view = SeasonalLeaderboardView(month_key, page, total_pages) if total_pages > 1 else None
-    return embed, view
+def parse_season_page_id(custom_id: str) -> tuple[str, str, int]:
+    """(month, stat, page) from "season_prev:{month}:{stat}:{page}" (or "season_next:..."). Messages sent before
+    the stat picker existed use "season_prev:{month}:{page}", which ranks by damage."""
+    parts = custom_id.split(":")
+    if len(parts) == 3:
+        return parts[1], "damage", int(parts[2])
+    _, month, stat, page = parts
+    return month, normalize_season_stat(stat), int(page)
 
 
-async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction, month: str, page: int):
-    if not interaction.response.is_done():
-        try:
-            await interaction.response.defer()
-        except discord.HTTPException:
-            pass
-    embed, view = await build_seasonal_leaderboard_message(interaction.guild_id, month, page)
+async def build_seasonal_leaderboard_message(guild_id: int, month: str | None = None, page: int = 0, stat: str = "damage"):
+    """Returns (embed, view) for one page of a month's leaderboard ranked by `stat`."""
+    embed, month_key, page, total_pages = await build_seasonal_leaderboard_payload(guild_id, month, page, stat)
+    return embed, SeasonalLeaderboardView(month_key, page, total_pages, stat)
+
+
+async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction, month: str, page: int, stat: str = "damage"):
+    await _defer_update(interaction)
+    embed, view = await build_seasonal_leaderboard_message(interaction.guild_id, month, page, stat)
     await interaction.message.edit(embed=embed, view=view)
 
 
@@ -146,19 +185,6 @@ class QueueResultView(discord.ui.View):
     async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Handled by log_interaction (deferring here too would race it on the same interaction)
         pass
-
-    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
-        # discord.py's default View.on_error just logs to stderr, which is easy to miss — surface it
-        # to the clicking user too so a failure is never silent.
-        print(f"ERROR - QueueResultView item {item} failed: {error!r}")
-        message = f"❌ Something went wrong: `{error}`"
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
-        except discord.HTTPException:
-            pass
 
 
 _queue_result_views: dict[bool, QueueResultView] = {}
@@ -236,7 +262,7 @@ async def refresh_queue_game_message(interaction: discord.Interaction, match_id:
 
 
 class InventoryRaritySelect(discord.ui.Select):
-    def __init__(self, selected_rarity: str = "all", rarity_counts: dict[str, int] | None = None):
+    def __init__(self, target_id: int, selected_rarity: str = "all", rarity_counts: dict[str, int] | None = None):
         rarity_key = normalize_inventory_rarity_filter(selected_rarity)
         counts = rarity_counts or {key: 0 for key in INVENTORY_RARITY_FILTERS}
         options = [
@@ -252,7 +278,8 @@ class InventoryRaritySelect(discord.ui.Select):
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="inventory_rarity"
+            custom_id=f"inv_rarity:{target_id}",
+            row=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -261,130 +288,152 @@ class InventoryRaritySelect(discord.ui.Select):
 
 
 class InventoryPaginationView(discord.ui.View):
-    """Persistent view for paginating through inventory items."""
-    def __init__(self, total_pages: int, rarity_filter: str = "all", rarity_counts: dict[str, int] | None = None):
+    """Previous/Next and a rarity filter for /inventory. custom_ids carry whose inventory, the filter and the
+    target page ("inv_next:{user_id}:{rarity}:{page}", "inv_rarity:{user_id}")."""
+    def __init__(self, target_id: int, page: int, total_pages: int, rarity_filter: str = "all",
+                 rarity_counts: dict[str, int] | None = None):
         super().__init__(timeout=None)
-        self.total_pages = total_pages
-        self.rarity_filter = normalize_inventory_rarity_filter(rarity_filter)
-        self.rarity_counts = rarity_counts or {key: 0 for key in INVENTORY_RARITY_FILTERS}
-        self.add_item(InventoryRaritySelect(self.rarity_filter, self.rarity_counts))
+        rarity_key = normalize_inventory_rarity_filter(rarity_filter)
+        self.add_item(discord.ui.Button(
+            label="◀ Previous",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"inv_prev:{target_id}:{rarity_key}:{max(0, page - 1)}",
+            disabled=page <= 0,
+            row=0,
+        ))
+        self.add_item(discord.ui.Button(
+            label="Next ▶",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"inv_next:{target_id}:{rarity_key}:{min(total_pages - 1, page + 1)}",
+            disabled=page >= total_pages - 1,
+            row=0,
+        ))
+        self.add_item(InventoryRaritySelect(target_id, rarity_key, rarity_counts))
 
-    def update_button_states(self, current_page: int):
-        self.prev_button.disabled = current_page <= 0
-        self.next_button.disabled = current_page >= self.total_pages - 1
 
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="inventory_prev")
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="inventory_next")
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
+def parse_inventory_page_id(custom_id: str) -> tuple[int, str, int]:
+    """(user_id, rarity, page) from "inv_prev:{user_id}:{rarity}:{page}" or "inv_next:..."."""
+    _, user_id, rarity, page = custom_id.split(":")
+    return int(user_id), normalize_inventory_rarity_filter(rarity), int(page)
 
 
 class ShopPaginationView(discord.ui.View):
-    """Persistent view for toggling Daily/Weekly/All shop offers and paginating through them."""
-    def __init__(self, total_pages: int, mode: str = "all"):
+    """Daily/Weekly/All toggles and paging for /market. custom_ids carry whose shop, the mode and the target page
+    ("mkt_mode:{user_id}:{mode}", "mkt_next:{user_id}:{mode}:{page}")."""
+    def __init__(self, target_id: int, page: int, total_pages: int, mode: str = "all"):
         super().__init__(timeout=None)
-        self.total_pages = total_pages
-        self.mode = mode if mode in ("daily", "weekly", "all") else "all"
-        self._update_mode_button_styles(self.mode)
-
-    def _update_mode_button_styles(self, mode: str):
-        self.daily_button.style = discord.ButtonStyle.primary if mode == "daily" else discord.ButtonStyle.secondary
-        self.weekly_button.style = discord.ButtonStyle.primary if mode == "weekly" else discord.ButtonStyle.secondary
-        self.all_button.style = discord.ButtonStyle.primary if mode == "all" else discord.ButtonStyle.secondary
-
-    def update_button_states(self, current_page: int, mode: str | None = None):
-        if mode in ("daily", "weekly", "all"):
-            self.mode = mode
-        self._update_mode_button_styles(self.mode)
-        self.prev_button.disabled = current_page <= 0
-        self.next_button.disabled = current_page >= self.total_pages - 1
-
-    @discord.ui.button(label="Daily", style=discord.ButtonStyle.secondary, custom_id="market_mode_daily", row=0)
-    async def daily_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
-
-    @discord.ui.button(label="Weekly", style=discord.ButtonStyle.secondary, custom_id="market_mode_weekly", row=0)
-    async def weekly_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
-
-    @discord.ui.button(label="All", style=discord.ButtonStyle.primary, custom_id="market_mode_all", row=0)
-    async def all_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
-
-    @discord.ui.button(label="◀ Previous", style=discord.ButtonStyle.primary, custom_id="market_prev", row=1)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
-
-    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, custom_id="market_next", row=1)
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Handled by log_interaction
-        pass
+        mode = mode if mode in MARKET_MODES else "all"
+        for key in MARKET_MODES:
+            self.add_item(discord.ui.Button(
+                label=key.capitalize(),
+                style=discord.ButtonStyle.primary if key == mode else discord.ButtonStyle.secondary,
+                custom_id=f"mkt_mode:{target_id}:{key}",
+                row=0,
+            ))
+        self.add_item(discord.ui.Button(
+            label="◀ Previous",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"mkt_prev:{target_id}:{mode}:{max(0, page - 1)}",
+            disabled=page <= 0,
+            row=1,
+        ))
+        self.add_item(discord.ui.Button(
+            label="Next ▶",
+            style=discord.ButtonStyle.primary,
+            custom_id=f"mkt_next:{target_id}:{mode}:{min(total_pages - 1, page + 1)}",
+            disabled=page >= total_pages - 1,
+            row=1,
+        ))
 
 
-async def refresh_market_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, mode: str, page: int, msg_id: int):
-    """Refresh the market message with a new mode or page using cached market data when available."""
-    await interaction.response.defer()
-    content, file, filename, error_text, total_pages = await build_shop_image_payload(
-        target_user, access_token, mode=mode, page=page, use_cache=True
-    )
-    if error_text or not file:
-        await interaction.followup.send("Failed to reload shop offers.")
-        return
-
-    clamped_page = max(0, min(page, total_pages - 1))
-    store_pagination_state(market_pagination_state, msg_id, (target_user, access_token, mode, clamped_page, total_pages))
-
-    embed = discord.Embed(title=content, color=discord.Color.blurple())
-    embed.set_image(url=f"attachment://{filename}")
-    embed.set_footer(text=f"Page {clamped_page + 1} of {total_pages}")
-
-    view = ShopPaginationView(total_pages, mode=mode)
-    view.update_button_states(clamped_page, mode=mode)
-
-    await interaction.message.edit(attachments=[file], embed=embed, view=view)
+def parse_market_id(custom_id: str) -> tuple[int, str, int]:
+    """(user_id, mode, page) from "mkt_prev/mkt_next:{user_id}:{mode}:{page}" or "mkt_mode:{user_id}:{mode}"
+    (a mode switch always opens page 0)."""
+    parts = custom_id.split(":")
+    mode = parts[2] if parts[2] in MARKET_MODES else "all"
+    page = int(parts[3]) if len(parts) > 3 else 0
+    return int(parts[1]), mode, page
 
 
-async def refresh_inventory_message(interaction: discord.Interaction, target_user: discord.User, access_token: str, rarity_filter: str, page: int, msg_id: int):
-    """Refresh the inventory message with a new rarity or page using cached inventory data when available."""
-    await interaction.response.defer()
+async def build_inventory_message(target_user: discord.abc.User, access_token: str, rarity_filter: str = "all",
+                                  page: int = 0, use_cache: bool = False):
+    """Returns (embed, file, view, None) for one page of a player's inventory, or (None, None, None, error_text)."""
     rarity_key = normalize_inventory_rarity_filter(rarity_filter)
     content, file, error_text, total_pages, filename, rarity_counts = await build_inventory_image_payload(
-        target_user, access_token, page=page, rarity_filter=rarity_key, use_cache=True
+        target_user, access_token, page=page, rarity_filter=rarity_key, use_cache=use_cache
     )
     if error_text or not file:
-        await interaction.followup.send("Failed to reload inventory.")
-        return
+        return None, None, None, error_text or "Failed to load inventory."
 
     total_pages = total_pages or 1
-    clamped_page = max(0, min(page, total_pages - 1))
-    store_pagination_state(
-        inventory_pagination_state,
-        msg_id,
-        (target_user, access_token, rarity_key, clamped_page, total_pages),
-    )
-
-    rarity_label_text = INVENTORY_RARITY_FILTERS[rarity_key]
-    embed = discord.Embed(title=f"{content} ({rarity_label_text})", color=discord.Color.blurple())
+    page = max(0, min(page, total_pages - 1))
+    embed = discord.Embed(title=f"{content} ({INVENTORY_RARITY_FILTERS[rarity_key]})", color=discord.Color.blurple())
     embed.set_image(url=f"attachment://{filename}")
-    embed.set_footer(text=f"Page {clamped_page + 1} of {total_pages}")
+    embed.set_footer(text=f"Page {page + 1} of {total_pages}")
+    return embed, file, InventoryPaginationView(target_user.id, page, total_pages, rarity_key, rarity_counts), None
 
-    view = InventoryPaginationView(total_pages, rarity_key, rarity_counts)
-    view.update_button_states(clamped_page)
 
+async def build_market_message(target_user: discord.abc.User, access_token: str, mode: str = "all", page: int = 0,
+                               use_cache: bool = False):
+    """Returns (embed, file, view, None) for one page of a player's shop offers, or (None, None, None, error_text)."""
+    mode = mode if mode in MARKET_MODES else "all"
+    content, file, filename, error_text, total_pages = await build_shop_image_payload(
+        target_user, access_token, mode=mode, page=page, use_cache=use_cache
+    )
+    if error_text or not file:
+        return None, None, None, error_text or "Failed to load shop offers."
+
+    page = max(0, min(page, total_pages - 1))
+    embed = discord.Embed(title=content, color=discord.Color.blurple())
+    embed.set_image(url=f"attachment://{filename}")
+    embed.set_footer(text=f"Page {page + 1} of {total_pages}")
+    return embed, file, ShopPaginationView(target_user.id, page, total_pages, mode), None
+
+
+async def _paged_target(interaction: discord.Interaction, target_id: int):
+    """(user, token) for the player a paged message belongs to, after telling the clicker if either is gone."""
+    access_token = get_user_token(target_id)
+    if not access_token:
+        await interaction.followup.send("That player's survev.de account is no longer linked.", ephemeral=True)
+        return None, None
+    target = await _resolve_user(interaction, target_id)
+    if target is None:
+        await interaction.followup.send("Couldn't find that player anymore.", ephemeral=True)
+        return None, None
+    return target, access_token
+
+
+async def refresh_market_message(interaction: discord.Interaction, target_id: int, mode: str, page: int):
+    """Shows another mode or page of a /market message, reusing the cached shop data when available."""
+    await interaction.response.defer()
+    target_user, access_token = await _paged_target(interaction, target_id)
+    if target_user is None:
+        return
+    embed, file, view, error_text = await build_market_message(target_user, access_token, mode, page, use_cache=True)
+    if error_text:
+        await interaction.followup.send("Failed to reload shop offers.")
+        return
     await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
-class HistoryMetricView(discord.ui.View):
-    """View with 3 metric toggle buttons (Damage, Impact, Kills) for /history."""
+async def refresh_inventory_message(interaction: discord.Interaction, target_id: int, rarity_filter: str, page: int):
+    """Shows another rarity or page of an /inventory message, reusing the cached inventory when available."""
+    await interaction.response.defer()
+    target_user, access_token = await _paged_target(interaction, target_id)
+    if target_user is None:
+        return
+    embed, file, view, error_text = await build_inventory_message(
+        target_user, access_token, rarity_filter, page, use_cache=True
+    )
+    if error_text:
+        await interaction.followup.send("Failed to reload inventory.")
+        return
+    await interaction.message.edit(attachments=[file], embed=embed, view=view)
+
+
+class ProfileMetricView(discord.ui.View):
+    """Damage / Impact / Kills buttons that switch the trend chart on /profile's history card.
+    The custom_id format predates /profile absorbing /history, so old /history messages route here too."""
     def __init__(self, guild_id: int, discord_id: int, active_metric: str = "damage"):
         super().__init__(timeout=None)
         self.guild_id = guild_id
@@ -411,25 +460,19 @@ def parse_history_metric_id(custom_id: str) -> tuple[str, int, int]:
     return metric, int(guild_id), int(discord_id)
 
 
-async def refresh_history_message(interaction: discord.Interaction, metric: str, guild_id: int, discord_id: int):
-    """Updates the /history message with a different trend line metric."""
-    if not interaction.response.is_done():
-        try:
-            await interaction.response.defer()
-        except discord.HTTPException:
-            pass
+async def refresh_profile_message(interaction: discord.Interaction, metric: str, guild_id: int, discord_id: int):
+    """Redraws a /profile message (or an old /history one) with a different trend chart metric."""
+    await _defer_update(interaction)
 
-    target = interaction.client.get_user(discord_id)
+    target = await _resolve_user(interaction, discord_id)
     if target is None:
-        try:
-            target = await interaction.client.fetch_user(discord_id)
-        except Exception:
-            target = interaction.user
-
-    embed, file, norm_metric, error = await build_history_payload(guild_id, target, metric=metric)
-    if error or not file:
-        await interaction.followup.send(error or "Failed to load history.", ephemeral=True)
+        await interaction.followup.send("Couldn't find that player anymore.", ephemeral=True)
         return
 
-    view = HistoryMetricView(guild_id, discord_id, active_metric=norm_metric)
+    embed, file, norm_metric, message = await build_profile_payload(target, get_user_token(discord_id), guild_id, metric)
+    if message or file is None:
+        await interaction.followup.send(message or "Failed to load history.", ephemeral=True)
+        return
+
+    view = ProfileMetricView(guild_id, discord_id, active_metric=norm_metric)
     await interaction.message.edit(embed=embed, attachments=[file], view=view)

@@ -205,7 +205,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_player_with_queues_gets_the_tier_below_the_queue_stats(self):
         summary_patch, tier_patch = self._patches(QUEUE_SUMMARY)
         with summary_patch, tier_patch as get_tier:
-            embed, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
 
         self.assertIsNone(message)
         month = datetime.now(timezone.utc).strftime("%B")
@@ -233,7 +233,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_verified_player_without_queues_still_sees_the_tier(self):
         summary_patch, tier_patch = self._patches(NO_QUEUES)
         with summary_patch, tier_patch:
-            embed, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
 
         self.assertIsNone(message)
         self.assertEqual([f.name for f in embed.fields], ["survev.de Squad Tier"])
@@ -242,7 +242,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_unranked_player_without_queues_gets_the_usual_message(self):
         summary_patch, tier_patch = self._patches(NO_QUEUES, tier=None)
         with summary_patch, tier_patch:
-            embed, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
 
         self.assertIsNone(embed)
         self.assertEqual(message, "No cached NeatQueue results found for Awang yet.")
@@ -250,7 +250,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_unverified_player_never_triggers_a_tier_lookup(self):
         summary_patch, tier_patch = self._patches(QUEUE_SUMMARY)
         with summary_patch, tier_patch as get_tier:
-            embed, _ = await leaderboard_service.build_profile_payload(self.target, None)
+            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, None)
 
         get_tier.assert_not_awaited()
         self.assertEqual(len(embed.fields), 7)
@@ -259,7 +259,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_lookup_errors_are_shown_instead_of_hiding_the_queue_stats(self):
         summary_patch, tier_patch = self._patches(QUEUE_SUMMARY, tier=None, tier_error="survev.de is rate limiting the bot right now.")
         with summary_patch, tier_patch:
-            embed, _ = await leaderboard_service.build_profile_payload(self.target, "tok")
+            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, "tok")
 
         self.assertEqual(len(embed.fields), 8)
         self.assertEqual(embed.fields[-1].value, "survev.de is rate limiting the bot right now.")
@@ -269,7 +269,7 @@ class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
         summary_no_impact = {**QUEUE_SUMMARY, "all_time_avg_impact": None, "monthly_avg_impact": None}
         summary_patch, tier_patch = self._patches(summary_no_impact)
         with summary_patch, tier_patch:
-            embed, _ = await leaderboard_service.build_profile_payload(self.target, "tok")
+            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, "tok")
 
         self.assertEqual(embed.fields[4].value, "N/A")
         self.assertEqual(embed.fields[5].value, "N/A")

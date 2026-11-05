@@ -71,7 +71,7 @@ class SeasonalQueueStatsTests(unittest.TestCase):
         self.db_path_patch.stop()
         self.temp_dir.cleanup()
 
-    def _insert_row(self, guild_id, match_id, discord_id, damage, average, games, end_ms):
+    def _insert_row(self, guild_id, match_id, discord_id, damage, average, games, end_ms, kills=None, impact=None):
         connection = sqlite_connect(self.db_path)
         try:
             connection.execute(
@@ -79,11 +79,11 @@ class SeasonalQueueStatsTests(unittest.TestCase):
                 INSERT INTO player_queue_stats (
                     guild_id, match_id, player_key, discord_id, display_name, username, slug,
                     team_index, total_damage, avg_damage, games, duration_ms, match_start_ms,
-                    match_end_ms, cached_at
-                ) VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, 1, NULL, ?, 'test')
+                    match_end_ms, cached_at, kills, impact
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, 1, NULL, ?, 'test', ?, ?)
                 """,
                 (guild_id, match_id, f"discord:{discord_id}", discord_id, f"Player {discord_id}",
-                 f"player{discord_id}", damage, average, games, end_ms),
+                 f"player{discord_id}", damage, average, games, end_ms, kills, impact),
             )
             connection.commit()
         finally:
@@ -104,6 +104,20 @@ class SeasonalQueueStatsTests(unittest.TestCase):
         self.assertEqual(rows[0]["games"], 4)
         self.assertEqual(rows[0]["total_damage"], 700)
         self.assertEqual(rows[0]["avg_damage"], 175.0)
+
+    def test_impact_and_kills_are_game_weighted_and_skip_rows_without_the_stat(self):
+        start_ms = 1_759_276_800_000
+        self._insert_row(10, "a", 1, 100, 100.0, 1, start_ms, kills=2, impact=40.0)
+        self._insert_row(10, "b", 1, 300, 100.0, 3, start_ms, kills=9, impact=60.0)
+        self._insert_row(10, "c", 1, 200, 100.0, 2, start_ms)  # legacy row: no kills or impact stored
+        self._insert_row(10, "d", 2, 100, 100.0, 1, start_ms, kills=1, impact=90.0)
+
+        impact = db.get_seasonal_queue_stats(10, start_ms, start_ms + 1, "impact")
+        kills = db.get_seasonal_queue_stats(10, start_ms, start_ms + 1, "kills")
+
+        self.assertEqual([(r["discord_id"], r["games"], r["value"]) for r in impact], [(2, 1, 90.0), (1, 4, 55.0)])
+        self.assertEqual([(r["discord_id"], r["games"], r["value"]) for r in kills], [(1, 4, 2.75), (2, 1, 1.0)])
+        self.assertNotIn("avg_damage", kills[0])
 
     def test_legacy_positive_damage_row_infers_game_count(self):
         start_ms = 1_759_276_800_000
@@ -174,9 +188,13 @@ class SeasonalQueueStatsTests(unittest.TestCase):
 def _fake_leaderboard_rows(count):
     return [
         {"discord_id": 1000 + i, "display_name": f"P{i}", "username": f"p{i}",
-         "total_damage": 2000 - i, "games": 2, "avg_damage": float(1000 - i)}
+         "total_damage": 2000 - i, "games": 2, "avg_damage": float(1000 - i), "value": float(1000 - i)}
         for i in range(count)
     ]
+
+
+def _buttons(view):
+    return [c for c in view.children if isinstance(c, discord.ui.Button)]
 
 
 class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
@@ -200,14 +218,16 @@ class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(embed.fields[0].name, "Top Players")
         self.assertEqual(embed.fields[0].value.count("<@"), 10)
-        self.assertEqual([c.custom_id for c in view.children], ["season_prev:2026-09:0", "season_next:2026-09:1"])
-        self.assertEqual([c.disabled for c in view.children], [True, False])
+        self.assertIn("💥 Avg Damage: **1,000** (2 games)", embed.fields[0].value)
+        self.assertEqual([c.custom_id for c in _buttons(view)], ["season_prev:2026-09:damage:0", "season_next:2026-09:damage:1"])
+        self.assertEqual([c.disabled for c in _buttons(view)], [True, False])
 
-    async def test_single_page_and_empty_results_have_no_buttons(self):
+    async def test_single_page_and_empty_results_have_only_the_stat_picker(self):
         for row_count in (0, 10):
             with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(row_count)):
                 _, view = await build_seasonal_leaderboard_message(10, "2026-09")
-            self.assertIsNone(view)
+            self.assertEqual(_buttons(view), [])
+            self.assertEqual([c.custom_id for c in view.children], ["season_stat:2026-09"])
 
     async def test_refresh_edits_message_with_requested_page(self):
         interaction = MagicMock()
@@ -223,18 +243,48 @@ class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
         edit_kwargs = interaction.message.edit.await_args.kwargs
         self.assertEqual(edit_kwargs["embed"].fields[0].name, "Ranks 21-23")
         view = edit_kwargs["view"]
-        self.assertEqual([c.custom_id for c in view.children], ["season_prev:2026-09:1", "season_next:2026-09:2"])
-        self.assertEqual([c.disabled for c in view.children], [False, True])
+        self.assertEqual([c.custom_id for c in _buttons(view)], ["season_prev:2026-09:damage:1", "season_next:2026-09:damage:2"])
+        self.assertEqual([c.disabled for c in _buttons(view)], [False, True])
 
     async def test_paging_button_click_routes_to_refresh(self):
+        # Messages sent before the stat picker have 3-part ids, which rank by damage.
+        for custom_id, expected in (("season_next:2026-09:kills:2", ("2026-09", 2, "kills")),
+                                    ("season_next:2026-09:2", ("2026-09", 2, "damage"))):
+            interaction = MagicMock()
+            interaction.type = discord.InteractionType.component
+            interaction.data = {"custom_id": custom_id}
+
+            with self.subTest(custom_id=custom_id), \
+                    patch("leaderboard_bot.refresh_seasonal_leaderboard_message", new=AsyncMock()) as refresh:
+                await leaderboard_bot.log_interaction(interaction)
+
+            refresh.assert_awaited_once_with(interaction, *expected)
+
+    async def test_stat_picker_restarts_on_page_one_with_the_chosen_stat(self):
         interaction = MagicMock()
         interaction.type = discord.InteractionType.component
-        interaction.data = {"custom_id": "season_next:2026-09:2"}
+        interaction.data = {"custom_id": "season_stat:2026-09", "values": ["impact"]}
 
         with patch("leaderboard_bot.refresh_seasonal_leaderboard_message", new=AsyncMock()) as refresh:
             await leaderboard_bot.log_interaction(interaction)
 
-        refresh.assert_awaited_once_with(interaction, "2026-09", 2)
+        refresh.assert_awaited_once_with(interaction, "2026-09", 0, "impact")
+
+    async def test_each_stat_has_its_own_title_line_format_and_query(self):
+        expectations = {
+            "impact": ("4v4 Avg Impact Leaderboard", "⚡ Avg Impact: **1,000** (2 games)"),
+            "kills": ("4v4 Avg Kills Leaderboard", "⚔️ Avg Kills: **1,000.0** (2 games)"),
+        }
+        for stat, (title, line) in expectations.items():
+            with self.subTest(stat=stat), patch("leaderboard_service.get_seasonal_queue_stats",
+                                                return_value=_fake_leaderboard_rows(3)) as query:
+                embed, view = await build_seasonal_leaderboard_message(10, "2026-09", 0, stat)
+
+                self.assertIn(title, embed.title)
+                self.assertIn(line, embed.fields[0].value)
+                self.assertEqual(query.call_args.args[3], stat)
+                picker = view.children[-1]
+                self.assertEqual([o.value for o in picker.options if o.default], [stat])
 
 
 if __name__ == "__main__":

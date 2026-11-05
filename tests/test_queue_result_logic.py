@@ -196,17 +196,6 @@ class SnapshotSavingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):
-    def test_store_pagination_state_evicts_oldest_entries(self):
-        from discord_ui import MAX_PAGINATION_STATE_ENTRIES, store_pagination_state
-
-        state = {}
-        for i in range(MAX_PAGINATION_STATE_ENTRIES + 5):
-            store_pagination_state(state, i, ("user", "tok", "all", 0, 1))
-
-        self.assertEqual(len(state), MAX_PAGINATION_STATE_ENTRIES)
-        self.assertNotIn(0, state)
-        self.assertIn(MAX_PAGINATION_STATE_ENTRIES + 4, state)
-
     @patch("leaderboard_service.fetch_player_timeframe_stats", new_callable=AsyncMock)
     @patch("leaderboard_service.get_all_users", return_value=[(101, "tok1"), (202, "tok2")])
     async def test_generate_leaderboard_embed_concurrent_fetch(self, _mock_users, mock_fetch):
@@ -224,13 +213,13 @@ class RefactoredHelpersTests(unittest.IsolatedAsyncioTestCase):
         import discord
         from discord_ui import ShopPaginationView
 
-        view = ShopPaginationView(2, "weekly")
-        view.update_button_states(0, "weekly")
-        self.assertEqual(view.daily_button.style, discord.ButtonStyle.secondary)
-        self.assertEqual(view.weekly_button.style, discord.ButtonStyle.primary)
-        self.assertEqual(view.all_button.style, discord.ButtonStyle.secondary)
-        self.assertTrue(view.prev_button.disabled)
-        self.assertFalse(view.next_button.disabled)
+        view = ShopPaginationView(42, 0, 2, "weekly")
+        buttons = {c.label: c for c in view.children}
+        self.assertEqual(buttons["Daily"].style, discord.ButtonStyle.secondary)
+        self.assertEqual(buttons["Weekly"].style, discord.ButtonStyle.primary)
+        self.assertEqual(buttons["All"].style, discord.ButtonStyle.secondary)
+        self.assertTrue(buttons["◀ Previous"].disabled)
+        self.assertFalse(buttons["Next ▶"].disabled)
 
     @patch("leaderboard_service.generate_shop_image")
     @patch("leaderboard_service.fetch_user_market", new_callable=AsyncMock)

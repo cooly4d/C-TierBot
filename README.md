@@ -36,18 +36,16 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/leaderboard_weekly` | Top players over the last 7 days. Switch period or stat (kills, wins, games, damage) with the buttons and dropdown. |
-| `/leaderboard_monthly` | Same, over the last 30 days. |
-| `/leaderboard_season [month]` | Average damage in 4v4 queues for a calendar month (`YYYY-MM`, defaults to the current month). Use the Previous/Next buttons to page through everyone, 10 per page. |
+| `/leaderboard` | Top players over the last 7 days. Switch to the last 30 days with the Weekly/Monthly buttons, and pick the stat (kills, wins, games, damage) from the dropdown. Results are reused for 5 minutes, so switching back and forth is instant. |
+| `/leaderboard_season [month]` | 4v4 queue leaderboard for a calendar month (`YYYY-MM`, defaults to the current month), ranked by average damage, impact, or kills per game (pick from the dropdown). Use the Previous/Next buttons to page through everyone, 10 per page. |
 | `/leaderboard_fries` | Ranks linked players by Golden Fries balance. |
 
 ### Players
 
 | Command | What it does |
 | :--- | :--- |
-| `/profile [member]` | Cached NeatQueue stats: 4v4 play time, average damage, and average impact (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). The tier needs a linked account. |
+| `/profile [member]` | Cached NeatQueue stats: 4v4 play time, average damage, and average impact (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). In a server it also shows their last 10 finished queues there as a history card, with a trend chart and buttons to switch between Damage, Impact, and Kills. The tier needs a linked account. |
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
-| `/history [member]` | Recent 4v4 queue history card (last 10 finished queues) with a trend chart and buttons to switch between Damage, Impact, and Kills. |
 | `/inventory [member]` | Paged inventory image with a rarity filter. |
 | `/goldenfries [member]` | Golden Fries balance. |
 | `/market [member]` | Shop offers image with buttons to switch between Daily, Weekly, and All. |
@@ -141,7 +139,8 @@ Optional settings:
 | `NEATQUEUE_BOT_ID` | `857633321064595466` | The NeatQueue bot's user ID, used to recognize its result messages. |
 | `QUEUE_RESULT_FETCH_DELAY_SECONDS` | `5` | Wait before fetching stats after a queue ends, so survev.de has time to save the games. |
 | `QUEUE_MATCH_FALLBACK_DURATION_MINUTES` | `10` | Last-resort match window when NeatQueue gives no usable end time. |
-| `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of `/queue_stats` diagnostic JSON logs retained in `log/`. |
+| `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of queue lookup diagnostic JSON logs retained in `log/`. |
+| `LOG_LEVEL` | `INFO` | Console log level. `DEBUG` also logs every button and menu click. |
 | `LEADERBOARD_BANNER_URL` | a Giphy GIF | Banner image on the weekly and monthly leaderboards. |
 | `QUEUE_FONT_PATH` / `QUEUE_FONT_BOLD_PATH` | auto-detected | Custom fonts for the generated images. |
 
@@ -153,7 +152,7 @@ Optional settings:
 python leaderboard_bot.py
 ```
 
-Slash commands are synced on startup. The SQLite database (`leaderboard.db`) and a `log/` folder are created automatically in the working directory. Each `/queue_stats` run writes a diagnostic JSON log to `log/` (without tokens or raw API payloads) to help troubleshoot live vs. final score lookups.
+Slash commands are synced on startup. The SQLite database (`leaderboard.db`) and a `log/` folder are created automatically in the working directory. Every queue lookup (`/queue_stats`, automatic result posts, restart catch-up, and `score?` or mention replies) writes a diagnostic JSON log to `log/` (without tokens or raw API payloads) to help troubleshoot live vs. final score lookups. Each log's `event` field says which of these started it.
 
 Then, in Discord, run `/setup` in your NeatQueue results channel and ask players to `/verify`.
 
@@ -167,6 +166,7 @@ While the bot is running in a terminal, you can type commands straight into it t
 | :--- | :--- |
 | `leaderboard_bot.py` | Entry point: slash commands, event handlers, startup. |
 | `bot_config.py` | Environment variables, constants, and the shared bot instance. |
+| `http_client.py` | The one shared HTTP session and the bot-wide survev.de request limit. |
 | `db.py` | SQLite schema and every read/write helper. |
 | `survev_client.py` | survev.de API calls and the account-linking flow. |
 | `neatqueue_client.py` | NeatQueue API calls and the logic that matches a queue to its survev.de games. |

@@ -25,6 +25,7 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         self.mark = self.enterContext(patch.object(app, "try_mark_match_processed"))
         self.updated = self.enterContext(patch.object(app, "update_guild_last_updated"))
         self.channels = self.enterContext(patch.object(app, "get_guild_queue_channels", return_value=[]))
+        self.save_log = self.enterContext(patch.object(app, "save_queue_stats_log", new_callable=AsyncMock))
 
     def message(self, name="queue-4607", content="<@123>", channel_id=55):
         channel = SimpleNamespace(id=channel_id, name=name, typing=MagicMock(return_value=AsyncMock()))
@@ -38,6 +39,8 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         message = self.message(content="<@123> how are we doing?")
         await app.on_message(message)
         self.payload.assert_awaited_once_with("4607", 10)
+        self.assertEqual(self.save_log.await_args.kwargs["trigger"], "queue_channel_reply")
+        self.assertIs(self.save_log.await_args.kwargs["requested_by"], message.author)
         sent = message.reply.await_args.kwargs
         self.assertEqual(sent["file"].filename, "queue_stats_4607.png")
         self.assertEqual([item.custom_id for item in sent["view"].children], ["queue_result_verify"])

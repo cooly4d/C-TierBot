@@ -3,6 +3,7 @@ result image, and per-command JSON logging.
 """
 import asyncio
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -33,6 +34,7 @@ from image_utils import (
 )
 from neatqueue_client import calculate_queue_match_stats, player_identity, resolve_queue_user_display_names
 
+log = logging.getLogger(__name__)
 QUEUE_SNAPSHOT_VERSION = 1
 # The result image's filename carries the queue number, which is how the Game breakdown button knows which queue
 # a result message belongs to (see parse_queue_match_id).
@@ -85,34 +87,44 @@ def prune_queue_stats_logs(log_dir: str | None = None, max_files: int | None = N
     return removed
 
 
-def write_queue_stats_command_log(
-    interaction: discord.Interaction,
+# What started a queue lookup, as recorded in its diagnostic log's "event".
+QUEUE_LOG_TRIGGERS = ("queue_stats_command", "auto_post", "catch_up", "queue_channel_reply")
+
+
+def write_queue_stats_log(
     match_id: str,
     match_result: dict | None,
     error_text: str | None,
+    *,
+    trigger: str,
+    guild_id: int | None,
+    channel_id: int | None,
+    requested_by: discord.abc.User | None = None,
 ):
-    """Write one JSON log entry per /queue_stats command execution."""
+    """Write one JSON diagnostic log for a queue lookup: /queue_stats, an automatic result post, a startup
+    catch-up, or a mention/`score?` reply in a queue channel (`trigger`, one of QUEUE_LOG_TRIGGERS). Never
+    includes tokens or raw API responses."""
     os.makedirs(QUEUE_STATS_LOG_DIR, exist_ok=True)
 
     now_utc = datetime.now(timezone.utc)
     timestamp = now_utc.strftime("%Y%m%dT%H%M%S.%fZ")
     safe_match_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(match_id))
-    guild_id = interaction.guild_id
-    user_id = interaction.user.id if interaction.user else None
-    file_name = f"queue_stats_{timestamp}_g{guild_id}_u{user_id}_m{safe_match_id}.json"
+    user_id = requested_by.id if requested_by is not None else None
+    source = f"u{user_id}" if user_id is not None else trigger
+    file_name = f"queue_stats_{timestamp}_g{guild_id}_{source}_m{safe_match_id}.json"
     file_path = os.path.join(QUEUE_STATS_LOG_DIR, file_name)
 
     payload = {
-        "event": "queue_stats_command",
+        "event": trigger,
         "requested_at_utc": now_utc.isoformat(),
         "match_id": str(match_id),
         "guild_id": guild_id,
-        "channel_id": interaction.channel_id,
+        "channel_id": channel_id,
         "requested_by": {
             "discord_id": user_id,
-            "username": str(interaction.user) if interaction.user else None,
-            "display_name": getattr(interaction.user, "display_name", None),
-        },
+            "username": str(requested_by),
+            "display_name": getattr(requested_by, "display_name", None),
+        } if requested_by is not None else None,
         "status": "error" if error_text else "ok",
         "error": error_text,
         "result_summary": None,
@@ -140,6 +152,15 @@ def write_queue_stats_command_log(
         json.dump(payload, log_file, ensure_ascii=True, indent=2)
 
     prune_queue_stats_logs(QUEUE_STATS_LOG_DIR)
+
+
+async def save_queue_stats_log(match_id: str, match_result: dict | None, error_text: str | None, **context):
+    """write_queue_stats_log off the event loop. A failed write is logged and swallowed, so it never stops a
+    result from being posted."""
+    try:
+        await asyncio.to_thread(write_queue_stats_log, match_id, match_result, error_text, **context)
+    except (OSError, TypeError, ValueError) as exc:
+        log.warning("Could not write the diagnostic log for Queue#%s: %r", match_id, exc)
 
 
 def check_queue_hall_of_fame_records(
@@ -287,7 +308,7 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
             save_queue_result(guild_id, match_id, build_queue_snapshot(match_id, match_result))
         except (sqlite3.Error, TypeError, ValueError) as exc:
             # The result must still be posted; the Game breakdown button just reports it as unavailable.
-            print(f"[Queue] Could not save the game breakdown for Queue#{match_id}: {exc!r}")
+            log.warning("Could not save the game breakdown for Queue#%s: %r", match_id, exc)
     return content, file, None, match_result
 
 

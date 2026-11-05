@@ -524,6 +524,10 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         discord_ui._queue_result_views.clear()
         self.addCleanup(discord_ui._queue_result_views.clear)
+        # Every send site writes a diagnostic log; keep it out of the repo's log/ folder.
+        log_patch = patch("leaderboard_bot.save_queue_stats_log", new_callable=AsyncMock)
+        self.save_log = log_patch.start()
+        self.addCleanup(log_patch.stop)
 
     @staticmethod
     def button_ids(view):
@@ -540,10 +544,11 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
             interaction.response.defer = AsyncMock()
             interaction.followup.send = AsyncMock()
             with self.subTest(is_final=is_final), \
-                    patch("leaderboard_bot.build_queue_stats_payload", new=self.payload(is_final)), \
-                    patch("leaderboard_bot.write_queue_stats_command_log"):
+                    patch("leaderboard_bot.build_queue_stats_payload", new=self.payload(is_final)):
                 await leaderboard_bot.queue_stats.callback(interaction, "3674")
                 self.assertEqual(self.button_ids(interaction.followup.send.await_args.kwargs["view"]), expected)
+                self.assertEqual(self.save_log.await_args.kwargs["trigger"], "queue_stats_command")
+                self.assertIs(self.save_log.await_args.kwargs["requested_by"], interaction.user)
 
     async def test_automatic_post_for_a_finished_queue(self):
         message = MagicMock()
@@ -558,6 +563,9 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.button_ids(message.reply.await_args.kwargs["view"]),
                          ["queue_result_games", "queue_result_verify"])
+        self.save_log.assert_awaited_once()
+        self.assertEqual(self.save_log.await_args.args[:3], ("3674", {"is_final": True}, None))
+        self.assertEqual(self.save_log.await_args.kwargs["trigger"], "auto_post")
 
     async def test_automatic_post_for_an_unfinished_queue(self):
         message = MagicMock()
@@ -575,6 +583,8 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
     async def test_catch_up_posts_after_a_restart(self):
         channel = MagicMock()
         channel.send = AsyncMock()
+        # Hand-made entry: real NeatQueue entries carry the number as "game_num", which catch-up doesn't read yet
+        # (known bug, see the expected failures in test_neatqueue_fixture.py).
         matches = [{"game_number": 3674, "winner_channel": "55"}]
         with patch("leaderboard_bot.get_all_guild_settings", return_value=[(10, 55, "2026-10-01T00:00:00+00:00")]), \
                 patch("leaderboard_bot.fetch_neatqueue_matches_since", new=AsyncMock(return_value=(matches, None))), \
@@ -587,6 +597,8 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
         sent = channel.send.await_args.kwargs
         self.assertEqual(sent["content"], "*(Catching up)* content")
         self.assertEqual(self.button_ids(sent["view"]), ["queue_result_games", "queue_result_verify"])
+        self.assertEqual(self.save_log.await_args.kwargs["trigger"], "catch_up")
+        self.assertEqual(self.save_log.await_args.kwargs["channel_id"], 55)
 
 
 if __name__ == "__main__":
