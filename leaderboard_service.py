@@ -235,85 +235,70 @@ def _history_alt_text(display_name: str, rows: list[dict]) -> str:
     return " ".join(alt_lines)[:1000]
 
 
-async def build_profile_payload(
-    target: discord.abc.User,
-    access_token: str | None,
-    guild_id: int | None = None,
-    metric: str = "damage",
-):
-    """/profile: the queue stat fields and Squad tier, plus (inside a server) the player's history card for their
-    last 10 queues there, with its trend chart showing `metric`.
+def _profile_number(value) -> str:
+    return f"**{value:,.0f}**" if value is not None else "N/A"
 
-    Returns (embed, file, metric, None), where file is None when there is no history card to show, or
-    (None, None, metric, message) when there is nothing to show for this player yet."""
-    metric = normalize_history_metric(metric)
+
+async def build_profile_overview(target: discord.abc.User, access_token: str | None, guild_id: int | None = None):
+    """/profile's Overview: the player's queue averages and Squad tier as a few short lines.
+
+    Returns (embed, has_history, None), where has_history says whether this server has a history card for them, or
+    (None, False, message) when there is nothing to show for this player yet."""
     summary = get_player_queue_stats_summary(target.id)
     tier, tier_error = (None, None)
     if access_token:
         tier, tier_error = await get_squad_tier(target.id, access_token)
-    history_rows = get_player_queue_history(guild_id, target.id, limit=PROFILE_HISTORY_LIMIT) if guild_id is not None else []
+    has_history = guild_id is not None and bool(get_player_queue_history(guild_id, target.id, limit=1))
 
     has_queues = summary["matches"] > 0
-    if not has_queues and tier is None and not history_rows:
-        return None, None, metric, f"No cached NeatQueue results found for {target.display_name} yet."
+    if not has_queues and tier is None and not has_history:
+        return None, False, f"No cached NeatQueue results found for {target.display_name} yet."
+
+    lines = []
+    if has_queues:
+        month_name = datetime.now(timezone.utc).strftime("%B")
+        monthly_avg = summary["monthly_avg_damage"]
+        monthly_impact = summary.get("monthly_avg_impact")
+        if monthly_avg is None:
+            monthly_damage_text = monthly_impact_text = "no queues yet"
+        else:
+            monthly_damage_text = _profile_number(monthly_avg)
+            monthly_impact_text = _profile_number(monthly_impact)
+        lines += [
+            f"⏱️ **{format_duration_ms(summary['total_duration_ms'])}** played in 4v4 queues",
+            f"💥 Avg damage {_profile_number(summary['all_time_avg_damage'])} · {month_name} {monthly_damage_text}",
+            f"⚡ Avg impact {_profile_number(summary.get('all_time_avg_impact'))} · {month_name} {monthly_impact_text}",
+        ]
+    else:
+        lines.append("No cached NeatQueue results yet.")
+    if access_token:
+        lines.append(f"🏅 Squad tier {format_squad_tier_field(tier, tier_error)}")
 
     embed = discord.Embed(
         title=f"{target.display_name}'s NeatQueue stats",
+        description="\n".join(lines),
         color=discord.Color.blurple(),
-        description=(
-            ""
-            if has_queues else "No cached NeatQueue results yet."
-        ),
     )
-    if has_queues:
-        month_name = datetime.now(timezone.utc).strftime("%B")
-        all_time_avg = summary["all_time_avg_damage"]
-        monthly_avg = summary["monthly_avg_damage"]
-        all_time_avg_impact = summary.get("all_time_avg_impact")
-        monthly_avg_impact = summary.get("monthly_avg_impact")
+    embed.set_footer(text="NeatQueue 4v4s · tier from survev.de" if access_token else "NeatQueue 4v4s")
+    return embed, has_history, None
 
-        if monthly_avg_impact is not None:
-            monthly_impact_val = f"{monthly_avg_impact:,.0f}"
-        elif monthly_avg is None:
-            monthly_impact_val = "No queues this month"
-        else:
-            monthly_impact_val = "N/A"
 
-        embed.add_field(name="4v4 Play Time", value=format_duration_ms(summary["total_duration_ms"]), inline=False)
-        embed.add_field(
-            name="All-Time Avg Damage",
-            value=f"{all_time_avg:,.0f}" if all_time_avg is not None else "N/A",
-            inline=True,
-        )
-        embed.add_field(
-            name=f"{month_name} Avg Damage",
-            value=f"{monthly_avg:,.0f}" if monthly_avg is not None else "No queues this month",
-            inline=True,
-        )
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-        embed.add_field(
-            name="All-Time Avg Impact",
-            value=f"{all_time_avg_impact:,.0f}" if all_time_avg_impact is not None else "N/A",
-            inline=True,
-        )
-        embed.add_field(
-            name=f"{month_name} Avg Impact",
-            value=monthly_impact_val,
-            inline=True,
-        )
-        embed.add_field(name="\u200b", value="\u200b", inline=True)
-    footer = "Stats from NeatQueue 4v4s only."
-    if access_token:
-        embed.add_field(name="survev.de Squad Tier", value=format_squad_tier_field(tier, tier_error), inline=False)
-        footer += " Tier comes from survev.de."
-    embed.set_footer(text=footer)
+async def build_profile_history(target: discord.abc.User, guild_id: int | None, metric: str = "damage"):
+    """/profile's History: the card with the player's last 10 queues in this server, its trend chart showing `metric`.
+    The card carries the player's name, so the embed has no title.
 
-    file = None
-    if history_rows:
-        image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, history_rows, metric)
-        filename = f"history_{guild_id}_{target.id}_{metric}.png"
-        file = discord.File(image_buffer, filename=filename, description=_history_alt_text(target.display_name, history_rows))
-        embed.set_image(url=f"attachment://{filename}")
+    Returns (embed, file, metric, None), or (None, None, metric, message) when there is no history to show."""
+    metric = normalize_history_metric(metric)
+    rows = get_player_queue_history(guild_id, target.id, limit=PROFILE_HISTORY_LIMIT) if guild_id is not None else []
+    if not rows:
+        return None, None, metric, f"No cached NeatQueue history found for {target.display_name} in this server yet."
+
+    image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, rows, metric)
+    filename = f"history_{guild_id}_{target.id}_{metric}.png"
+    file = discord.File(image_buffer, filename=filename, description=_history_alt_text(target.display_name, rows))
+    embed = discord.Embed(color=discord.Color.blurple())
+    embed.set_image(url=f"attachment://{filename}")
+    embed.set_footer(text="NeatQueue 4v4s · last 10 finished queues in this server")
     return embed, file, metric, None
 
 

@@ -1108,7 +1108,7 @@ def generate_compare_image(
 
 def generate_history_image(player_name: str, history_rows: list[dict], metric: str = "damage") -> BytesIO:
     """Generates a 1600px-wide card displaying a player's last 10 queues:
-    a gradient header with a 3-stat summary box, a minimalist sparkline panel for the selected metric,
+    a gradient header (name, last-N record, win rate), a minimalist sparkline panel for the selected metric,
     and a newest-first table of queues with result, kills, avg damage, and impact.
     """
     metric = normalize_history_metric(metric)
@@ -1128,11 +1128,8 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
     image = Image.new("RGB", (QUEUE_IMG_WIDTH * S, height * S), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(62 * S, "bold")
     subtitle_font = load_font(38 * S, "bold")
     header_font = load_font(30 * S, "bold")
-    stat_label_font = load_font(20 * S, "bold")
-    stat_value_font = load_font(38 * S, "bold")
     spark_axis_font = load_font(22 * S, "bold")
     spark_val_font = load_font(23 * S, "bold")
     body_font = load_font(35 * S)
@@ -1143,13 +1140,17 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
     # 1. Header gradient
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
 
-    summary_box_w = 616
-    summary_box_h = 146
-    summary_box_x = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - summary_box_w
-    summary_box_y = 32
-
-    max_title_width = (summary_box_x - QUEUE_IMG_PADDING - 28) * S
-    title_text = truncate_to_width(draw, f"{player_name}'s History", title_font, max_title_width)
+    # Title: shrink a long name before shortening it, and always keep "'s History" readable.
+    title_suffix = "'s History"
+    max_title_width = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2) * S
+    for title_size in (62, 56, 50, 46):
+        title_font = load_font(title_size * S, "bold")
+        title_text = f"{player_name}{title_suffix}"
+        if draw.textbbox((0, 0), title_text, font=title_font)[2] <= max_title_width:
+            break
+    else:
+        suffix_width = draw.textbbox((0, 0), title_suffix, font=title_font)[2]
+        title_text = truncate_to_width(draw, player_name, title_font, max_title_width - suffix_width) + title_suffix
     draw.text((QUEUE_IMG_PADDING * S, 28 * S), title_text, font=title_font, fill=QUEUE_IMG_TEXT)
 
     wins = sum(1 for r in history_rows if r.get("won") is True)
@@ -1164,17 +1165,7 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
     subtitle_text = f"Last {n} {'Queue' if n == 1 else 'Queues'} · {wins}W - {losses}L"
     draw.text((QUEUE_IMG_PADDING * S, 96 * S), subtitle_text, font=subtitle_font, fill=subtitle_color)
 
-    tot_dmg = sum(r.get("total_damage") or 0 for r in history_rows)
     tot_gms = sum(r.get("games") or 1 for r in history_rows)
-    overall_avg_dmg = (tot_dmg / tot_gms) if tot_gms > 0 else 0.0
-
-    impact_scores = [r["impact"] for r in history_rows if r.get("impact") is not None]
-    overall_impact = f"{sum(impact_scores) / len(impact_scores):.0f}" if impact_scores else "-"
-
-    has_any_kills = any(r.get("kills") is not None for r in history_rows)
-    tot_kills = sum(r.get("kills") or 0 for r in history_rows)
-    kills_str = f"{tot_kills:,}" if has_any_kills else "-"
-
     decided = wins + losses
     if decided > 0:
         win_rate = round(100 * wins / decided)
@@ -1182,49 +1173,6 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
     else:
         meta_text = f"{tot_gms} {'Game' if tot_gms == 1 else 'Games'} Played"
     draw.text((QUEUE_IMG_PADDING * S, 152 * S), meta_text, font=duration_font, fill=QUEUE_IMG_MUTED)
-
-    # Header Right Summary Box (mirrors MATCH TIMELINE container geometry)
-    draw.rounded_rectangle(
-        [
-            summary_box_x * S,
-            summary_box_y * S,
-            (summary_box_x + summary_box_w) * S,
-            (summary_box_y + summary_box_h) * S,
-        ],
-        radius=20 * S,
-        fill=(28, 40, 64),
-        outline=QUEUE_IMG_ROW_DIVIDER,
-        width=2 * S,
-    )
-
-    summary_stats = [
-        ("damage", "AVG DAMAGE", f"{overall_avg_dmg:,.0f}"),
-        ("impact", "AVG IMPACT", overall_impact),
-        ("kills", "TOTAL KILLS", kills_str),
-    ]
-    stat_col_w = summary_box_w / len(summary_stats)
-    for s_idx, (s_key, s_label, s_val) in enumerate(summary_stats):
-        col_x0 = (summary_box_x + s_idx * stat_col_w) * S
-        col_cx = col_x0 + (stat_col_w * S) / 2
-        if s_idx > 0:
-            draw.line(
-                [(col_x0, (summary_box_y + 22) * S), (col_x0, (summary_box_y + summary_box_h - 22) * S)],
-                fill=QUEUE_IMG_ROW_DIVIDER,
-                width=1 * S,
-            )
-        is_active_stat = s_key == metric
-        lbl_fill = QUEUE_IMG_TEXT if is_active_stat else QUEUE_IMG_MUTED
-        val_fill = QUEUE_IMG_ACCENT if is_active_stat else QUEUE_IMG_TEXT
-
-        lbl_bbox = draw.textbbox((0, 0), s_label, font=stat_label_font)
-        lbl_x = col_cx - (lbl_bbox[2] - lbl_bbox[0]) / 2 - lbl_bbox[0]
-        lbl_y = _vcenter_y(draw, stat_label_font, (summary_box_y + 20) * S, (summary_box_y + 56) * S)
-        draw.text((lbl_x, lbl_y), s_label, font=stat_label_font, fill=lbl_fill)
-
-        val_bbox = draw.textbbox((0, 0), s_val, font=stat_value_font)
-        val_x = col_cx - (val_bbox[2] - val_bbox[0]) / 2 - val_bbox[0]
-        val_y = _vcenter_y(draw, stat_value_font, (summary_box_y + 62) * S, (summary_box_y + 126) * S)
-        draw.text((val_x, val_y), s_val, font=stat_value_font, fill=val_fill)
 
     # 2. Sparkline Panel
     card_x0 = QUEUE_IMG_PADDING

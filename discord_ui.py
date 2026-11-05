@@ -18,7 +18,8 @@ from image_utils import (
 from leaderboard_service import (
     SEASON_STATS,
     build_inventory_image_payload,
-    build_profile_payload,
+    build_profile_history,
+    build_profile_overview,
     build_seasonal_leaderboard_payload,
     build_shop_image_payload,
     generate_leaderboard_embed,
@@ -431,27 +432,38 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_id:
     await interaction.message.edit(attachments=[file], embed=embed, view=view)
 
 
-class ProfileMetricView(discord.ui.View):
-    """Damage / Impact / Kills buttons that switch the trend chart on /profile's history card.
-    The custom_id format predates /profile absorbing /history, so old /history messages route here too."""
-    def __init__(self, guild_id: int, discord_id: int, active_metric: str = "damage"):
-        super().__init__(timeout=None)
-        self.guild_id = guild_id
-        self.discord_id = discord_id
-        self.active_metric = normalize_history_metric(active_metric)
+PROFILE_TABS = ("overview", "history")
 
-        metrics = [
-            ("damage", "Damage"),
-            ("impact", "Impact"),
-            ("kills", "Kills"),
-        ]
-        for key, label in metrics:
-            is_active = (key == self.active_metric)
+
+class ProfileView(discord.ui.View):
+    """/profile's Overview / History buttons, plus Damage / Impact / Kills on the History view to switch its trend
+    chart. Every custom_id carries the server and player, so the buttons keep working after a restart. The metric ids
+    ("history_metric:{metric}:{guild_id}:{discord_id}") predate the merge, so buttons on old /history messages work too."""
+    def __init__(self, guild_id: int, discord_id: int, tab: str = "overview", metric: str = "damage"):
+        super().__init__(timeout=None)
+        self.tab = tab if tab in PROFILE_TABS else "overview"
+        self.active_metric = normalize_history_metric(metric)
+        for key, label in (("overview", "Overview"), ("history", "History")):
             self.add_item(discord.ui.Button(
                 label=label,
-                style=discord.ButtonStyle.primary if is_active else discord.ButtonStyle.secondary,
-                custom_id=f"history_metric:{key}:{guild_id}:{discord_id}",
+                style=discord.ButtonStyle.primary if key == self.tab else discord.ButtonStyle.secondary,
+                custom_id=f"profile_tab:{key}:{guild_id}:{discord_id}",
+                row=0,
             ))
+        if self.tab == "history":
+            for key, label in (("damage", "Damage"), ("impact", "Impact"), ("kills", "Kills")):
+                self.add_item(discord.ui.Button(
+                    label=label,
+                    style=discord.ButtonStyle.primary if key == self.active_metric else discord.ButtonStyle.secondary,
+                    custom_id=f"history_metric:{key}:{guild_id}:{discord_id}",
+                    row=1,
+                ))
+
+
+def parse_profile_tab_id(custom_id: str) -> tuple[str, int, int]:
+    """Splits 'profile_tab:{tab}:{guild_id}:{discord_id}' into (tab, guild_id, discord_id)."""
+    _, tab, guild_id, discord_id = custom_id.split(":")
+    return (tab if tab in PROFILE_TABS else "overview"), int(guild_id), int(discord_id)
 
 
 def parse_history_metric_id(custom_id: str) -> tuple[str, int, int]:
@@ -460,8 +472,26 @@ def parse_history_metric_id(custom_id: str) -> tuple[str, int, int]:
     return metric, int(guild_id), int(discord_id)
 
 
-async def refresh_profile_message(interaction: discord.Interaction, metric: str, guild_id: int, discord_id: int):
-    """Redraws a /profile message (or an old /history one) with a different trend chart metric."""
+async def build_profile_message(target: discord.abc.User, guild_id: int | None, tab: str = "overview",
+                                metric: str = "damage"):
+    """Returns (embed, file, view, None) for one /profile view, or (None, None, None, message). file is only set on
+    the History view; view is None when there is no history to switch to (e.g. outside a server)."""
+    if tab == "history":
+        embed, file, metric, message = await build_profile_history(target, guild_id, metric)
+        if message:
+            return None, None, None, message
+        return embed, file, ProfileView(guild_id, target.id, "history", metric), None
+
+    embed, has_history, message = await build_profile_overview(target, get_user_token(target.id), guild_id)
+    if message:
+        return None, None, None, message
+    view = ProfileView(guild_id, target.id, "overview") if has_history else None
+    return embed, None, view, None
+
+
+async def refresh_profile_message(interaction: discord.Interaction, guild_id: int, discord_id: int,
+                                  tab: str = "overview", metric: str = "damage"):
+    """Switches a /profile message (or an old /history one) to another view or trend metric."""
     await _defer_update(interaction)
 
     target = await _resolve_user(interaction, discord_id)
@@ -469,10 +499,8 @@ async def refresh_profile_message(interaction: discord.Interaction, metric: str,
         await interaction.followup.send("Couldn't find that player anymore.", ephemeral=True)
         return
 
-    embed, file, norm_metric, message = await build_profile_payload(target, get_user_token(discord_id), guild_id, metric)
-    if message or file is None:
-        await interaction.followup.send(message or "Failed to load history.", ephemeral=True)
+    embed, file, view, message = await build_profile_message(target, guild_id, tab, metric)
+    if message:
+        await interaction.followup.send(message, ephemeral=True)
         return
-
-    view = ProfileMetricView(guild_id, discord_id, active_metric=norm_metric)
-    await interaction.message.edit(embed=embed, attachments=[file], view=view)
+    await interaction.message.edit(embed=embed, attachments=[file] if file else [], view=view)

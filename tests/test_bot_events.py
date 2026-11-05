@@ -97,33 +97,32 @@ class ProfileCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.followup.send = AsyncMock()
         return interaction
 
-    async def test_profile_with_server_history_sends_the_card_and_trend_buttons(self):
+    async def test_profile_opens_on_the_overview_with_a_history_button(self):
         interaction = self.interaction()
-        embed, file = discord.Embed(title="Awang's NeatQueue stats"), MagicMock()
-        payload = AsyncMock(return_value=(embed, file, "damage", None))
-        with patch.object(app, "build_profile_payload", new=payload), patch.object(app, "get_user_token", return_value="tok"):
+        embed = discord.Embed(title="Awang's NeatQueue stats")
+        with patch.object(discord_ui, "build_profile_overview", new=AsyncMock(return_value=(embed, True, None))) as build, \
+                patch.object(discord_ui, "get_user_token", return_value="tok"):
             await app.profile.callback(interaction, None)
 
-        payload.assert_awaited_once_with(interaction.user, "tok", 10)
+        build.assert_awaited_once_with(interaction.user, "tok", 10)
         sent = interaction.followup.send.await_args.kwargs
-        self.assertIs(sent["file"], file)
+        self.assertNotIn("file", sent)
         self.assertEqual([c.custom_id for c in sent["view"].children],
-                         ["history_metric:damage:10:101", "history_metric:impact:10:101", "history_metric:kills:10:101"])
-        self.assertIsInstance(sent["view"], discord_ui.ProfileMetricView)
+                         ["profile_tab:overview:10:101", "profile_tab:history:10:101"])
 
-    async def test_profile_without_history_sends_only_the_stat_fields(self):
+    async def test_profile_without_history_sends_only_the_overview(self):
         interaction = self.interaction(guild_id=None)
         embed = discord.Embed(title="Awang's NeatQueue stats")
-        with patch.object(app, "build_profile_payload", new=AsyncMock(return_value=(embed, None, "damage", None))), \
-                patch.object(app, "get_user_token", return_value=None):
+        with patch.object(discord_ui, "build_profile_overview", new=AsyncMock(return_value=(embed, False, None))), \
+                patch.object(discord_ui, "get_user_token", return_value=None):
             await app.profile.callback(interaction, None)
 
         self.assertEqual(interaction.followup.send.await_args.kwargs, {"embed": embed})
 
     async def test_nothing_to_show_sends_the_message(self):
         interaction = self.interaction()
-        with patch.object(app, "build_profile_payload", new=AsyncMock(return_value=(None, None, "damage", "No cached"))), \
-                patch.object(app, "get_user_token", return_value=None):
+        with patch.object(discord_ui, "build_profile_overview", new=AsyncMock(return_value=(None, False, "No cached"))), \
+                patch.object(discord_ui, "get_user_token", return_value=None):
             await app.profile.callback(interaction, None)
 
         interaction.followup.send.assert_awaited_once_with("No cached")

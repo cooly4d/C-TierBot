@@ -265,10 +265,10 @@ One game of a finished queue, opened by the `Game breakdown` button as an **ephe
 - **Empty state:** a missing, expired or unreadable snapshot answers privately with what happened and the exact `/queue_stats {match_id}` command that rebuilds it.
 
 ### 5.5 Player History Card (`generate_history_image`)
-A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues in the current server, paired with interactive metric toggle buttons (`Damage`, `Impact`, `Kills`) in Discord. Since 2026-11-05 it is the image of the `/profile` embed (below the unchanged stat fields and Squad tier); the separate `/history` command was removed.
+A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues in the current server, paired with interactive metric toggle buttons (`Damage`, `Impact`, `Kills`) in Discord. Since 2026-11-05 it is `/profile`'s **History** view (an embed with no title, since the card names the player); the separate `/history` command was removed. `/profile`'s **Overview** view is a text embed of short emoji-prefixed stat lines.
 - **Top Header Banner (`1600 x 210`, `_draw_header_gradient`):**
   - **Left Column:** Title (`62px` bold `QUEUE_IMG_TEXT`) `f"{player_name}'s History"` at `y = 28`; Subtitle (`38px` bold) `Last N Queues · XW - YL` colored `QUEUE_IMG_WIN` / `QUEUE_IMG_LOSE` / `QUEUE_IMG_MUTED`; Meta line (`22px` bold `QUEUE_IMG_MUTED` at `y = 152`) `Win Rate: {win_rate}% · {tot_gms} Game(s) Played` (or `{tot_gms} Game(s) Played` when undecided).
-  - **Right 3-Stat Summary Box (`x = 940..1556, y = 32..178`, `radius=20`):** Displays `AVG DAMAGE`, `AVG IMPACT`, and `TOTAL KILLS` side-by-side (`20px` bold label over `38px` bold value), highlighting the active metric's value in `QUEUE_IMG_ACCENT` (`#FFA532`) and label in `QUEUE_IMG_TEXT` (inactive labels in `QUEUE_IMG_MUTED`, inactive values in `QUEUE_IMG_TEXT`).
+  - **Right side:** empty since 2026-11-05 — the `AVG DAMAGE` / `AVG IMPACT` / `TOTAL KILLS` summary box was removed at the user's request. The title shrinks from `62px` to `46px` for long names before shortening the name with `…`, always keeping `'s History`.
 - **Minimalist Sparkline Panel (`256px` tall, `radius=18`, fill `QUEUE_IMG_CARD_BG`, border `QUEUE_IMG_ROW_DIVIDER`):**
   - Card header strip (`52px` tall): metric title on left (`AVG DAMAGE TREND`, `AVERAGE IMPACT TREND (0–100)`, or `TOTAL KILLS TREND` in `30px` bold `QUEUE_IMG_TEXT`), followed by a `1px` horizontal divider.
   - Chronological plot from left (oldest) to right (newest), with `#match_id` labels along the X-axis (`area_base_y + 4` to `sparkline_bottom - 6`, latest queue in bold `QUEUE_IMG_TEXT`) and vertical `5px` tick marks extending down from a continuous baseline rule (`area_base_y = sparkline_bottom - 50`).
@@ -279,7 +279,7 @@ A unified `1600px`-wide card displaying a player's last 10 finalized 4v4 queues 
   - Column header strip at `48px` height with labels `["Queue", "Result", "Kills", "Avg Dmg", "Impact"]` at ratios `[0.0, 0.22, 0.48, 0.68, 0.84]`, highlighting the active metric's column header in `QUEUE_IMG_ACCENT`.
   - Ordered **newest-first** with alternating even-row `QUEUE_IMG_ROW_ALT` pills (`radius=10`, `12px` X-inset).
   - Cells: `Queue` (`#3674`), `Result` (`W · 3 - 1` in green / `L · 1 - 3` in red / `-` in muted), `Kills` (regular body), `Avg Dmg` (bold accent `#FFA532`), `Impact` (bold text `0–100`, or `-` in muted).
-- **Discord Interaction (`ProfileMetricView`):**
+- **Discord Interaction (`ProfileView`):** `Overview` / `History` tab buttons (`profile_tab:{tab}:{guild_id}:{discord_id}`, active tab primary); the History view adds a second row:
   - Stateless button row: `Damage`, `Impact`, `Kills` with `custom_id="history_metric:{metric}:{guild_id}:{discord_id}"` (the id format predates the merge, so buttons on old `/history` messages redraw them as `/profile` messages).
   - Active button is `discord.ButtonStyle.primary` (Blurple); inactive buttons are `discord.ButtonStyle.secondary` (Grey).
 

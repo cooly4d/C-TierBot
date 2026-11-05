@@ -35,15 +35,16 @@ from db import (
 from discord_ui import (
     LEGACY_PAGINATION_IDS,
     LeaderboardView,
-    ProfileMetricView,
     build_inventory_message,
     build_market_message,
+    build_profile_message,
     build_seasonal_leaderboard_message,
     get_queue_result_view,
     parse_game_page_id,
     parse_history_metric_id,
     parse_inventory_page_id,
     parse_market_id,
+    parse_profile_tab_id,
     parse_season_page_id,
     refresh_inventory_message,
     refresh_leaderboard_message,
@@ -59,7 +60,6 @@ from leaderboard_service import (
     build_compare_payload,
     build_goldenfries_embed_payload,
     build_leaderboard_fries_embed,
-    build_profile_payload,
     generate_leaderboard_embed,
 )
 from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number, get_nested_value
@@ -187,10 +187,13 @@ async def log_interaction(interaction: discord.Interaction):
     elif custom_id and custom_id.startswith(("mkt_prev:", "mkt_next:", "mkt_mode:")):
         target_id, mode, page = parse_market_id(custom_id)
         await refresh_market_message(interaction, target_id, mode, page)
+    elif custom_id and custom_id.startswith("profile_tab:"):
+        tab, guild_id, target_discord_id = parse_profile_tab_id(custom_id)
+        await refresh_profile_message(interaction, guild_id, target_discord_id, tab)
     elif custom_id and custom_id.startswith("history_metric:"):
         # /profile's trend buttons (the id format comes from the old /history command, whose messages still work).
         metric, guild_id, target_discord_id = parse_history_metric_id(custom_id)
-        await refresh_profile_message(interaction, metric, guild_id, target_discord_id)
+        await refresh_profile_message(interaction, guild_id, target_discord_id, "history", metric)
     elif custom_id in LEGACY_PAGINATION_IDS:
         await send_expired_menu_notice(interaction, LEGACY_PAGINATION_IDS[custom_id])
 
@@ -275,15 +278,14 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
     target = member or interaction.user
     await interaction.response.defer()
 
-    embed, file, metric, message = await build_profile_payload(target, get_user_token(target.id), interaction.guild_id)
+    embed, _file, view, message = await build_profile_message(target, interaction.guild_id)
     if message:
         await interaction.followup.send(message)
         return
-    if file is None:  # no queue history in this server (or used outside one): just the stat fields
+    if view is None:  # nothing to switch to (no history in this server, or used outside one); send rejects view=None
         await interaction.followup.send(embed=embed)
         return
-    view = ProfileMetricView(interaction.guild_id, target.id, active_metric=metric)
-    await interaction.followup.send(embed=embed, file=file, view=view)
+    await interaction.followup.send(embed=embed, view=view)
 
 
 @bot.tree.command(name="hall_of_fame", description="View the best single-queue stats ever recorded.")

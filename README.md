@@ -44,7 +44,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/profile [member]` | Cached NeatQueue stats: 4v4 play time, average damage, and average impact (all-time and this month), plus the player's survev.de Squad tier (for example `A- · rating 72`). In a server it also shows their last 10 finished queues there as a history card, with a trend chart and buttons to switch between Damage, Impact, and Kills. The tier needs a linked account. |
+| `/profile [member]` | Opens on an **Overview**: 4v4 play time, average damage and impact (all-time and this month), and the player's survev.de Squad tier (for example `B- · rating 29 · EU`; needs a linked account). In a server, the **History** button shows their last 10 finished queues there as a card with a trend chart; switch the chart between Damage, Impact, and Kills with the buttons below it. |
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
 | `/inventory [member]` | Paged inventory image with a rarity filter. |
 | `/goldenfries [member]` | Golden Fries balance. |

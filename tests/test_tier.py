@@ -192,87 +192,79 @@ class TierFormattingTests(unittest.TestCase):
         self.assertEqual(field(None, "Please run /verify again."), "Please run /verify again.")
 
 
-class BuildProfilePayloadTests(unittest.IsolatedAsyncioTestCase):
+class BuildProfileOverviewTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.target = SimpleNamespace(id=7, display_name="Awang")
 
-    def _patches(self, summary, tier=RANKED, tier_error=None):
+    def _patches(self, summary, tier=RANKED, tier_error=None, history=()):
         return (
             patch.object(leaderboard_service, "get_player_queue_stats_summary", return_value=summary),
             patch.object(leaderboard_service, "get_squad_tier", AsyncMock(return_value=(tier, tier_error))),
+            patch.object(leaderboard_service, "get_player_queue_history", return_value=list(history)),
         )
 
-    async def test_verified_player_with_queues_gets_the_tier_below_the_queue_stats(self):
-        summary_patch, tier_patch = self._patches(QUEUE_SUMMARY)
-        with summary_patch, tier_patch as get_tier:
-            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+    async def overview(self, summary, token="tok", guild_id=None, **patches):
+        summary_patch, tier_patch, history_patch = self._patches(summary, **patches)
+        with summary_patch, tier_patch as get_tier, history_patch:
+            embed, has_history, message = await leaderboard_service.build_profile_overview(self.target, token, guild_id)
+        return embed, has_history, message, get_tier
+
+    async def test_stats_are_a_few_short_lines_with_the_tier_last(self):
+        embed, has_history, message, get_tier = await self.overview(QUEUE_SUMMARY)
 
         self.assertIsNone(message)
+        self.assertFalse(has_history)
         month = datetime.now(timezone.utc).strftime("%B")
-        self.assertEqual(
-            [f.name for f in embed.fields],
-            [
-                "4v4 Play Time",
-                "All-Time Avg Damage",
-                f"{month} Avg Damage",
-                "\u200b",
-                "All-Time Avg Impact",
-                f"{month} Avg Impact",
-                "\u200b",
-                "survev.de Squad Tier",
-            ],
-        )
-        self.assertFalse(embed.fields[0].inline)
-        self.assertEqual(embed.fields[4].value, "74")
-        self.assertEqual(embed.fields[5].value, "79")
-        self.assertEqual(embed.fields[-1].value, "**A-** · rating 72 · EU")
-        self.assertFalse(embed.fields[-1].inline)
-        self.assertIn("survev.de", embed.footer.text)
+        self.assertEqual(embed.title, "Awang's NeatQueue stats")
+        self.assertEqual(embed.fields, [])  # no wrapping inline fields any more
+        self.assertEqual(embed.description.split("\n"), [
+            "⏱️ **10h 00m 00s** played in 4v4 queues",
+            f"💥 Avg damage **1,500** · {month} **1,620**",
+            f"⚡ Avg impact **74** · {month} **79**",
+            "🏅 Squad tier **A-** · rating 72 · EU",
+        ])
+        self.assertEqual(embed.footer.text, "NeatQueue 4v4s · tier from survev.de")
         get_tier.assert_awaited_once_with(7, "tok")
 
     async def test_verified_player_without_queues_still_sees_the_tier(self):
-        summary_patch, tier_patch = self._patches(NO_QUEUES)
-        with summary_patch, tier_patch:
-            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+        embed, _has_history, message, _ = await self.overview(NO_QUEUES)
 
         self.assertIsNone(message)
-        self.assertEqual([f.name for f in embed.fields], ["survev.de Squad Tier"])
-        self.assertEqual(embed.description, "No cached NeatQueue results yet.")
+        self.assertEqual(embed.description.split("\n"),
+                         ["No cached NeatQueue results yet.", "🏅 Squad tier **A-** · rating 72 · EU"])
 
     async def test_unranked_player_without_queues_gets_the_usual_message(self):
-        summary_patch, tier_patch = self._patches(NO_QUEUES, tier=None)
-        with summary_patch, tier_patch:
-            embed, _file, _metric, message = await leaderboard_service.build_profile_payload(self.target, "tok")
+        embed, _has_history, message, _ = await self.overview(NO_QUEUES, tier=None)
 
         self.assertIsNone(embed)
         self.assertEqual(message, "No cached NeatQueue results found for Awang yet.")
 
     async def test_unverified_player_never_triggers_a_tier_lookup(self):
-        summary_patch, tier_patch = self._patches(QUEUE_SUMMARY)
-        with summary_patch, tier_patch as get_tier:
-            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, None)
+        embed, _has_history, _message, get_tier = await self.overview(QUEUE_SUMMARY, token=None)
 
         get_tier.assert_not_awaited()
-        self.assertEqual(len(embed.fields), 7)
-        self.assertEqual(embed.footer.text, "Stats from NeatQueue 4v4s only.")
+        self.assertNotIn("Squad tier", embed.description)
+        self.assertEqual(embed.footer.text, "NeatQueue 4v4s")
 
     async def test_lookup_errors_are_shown_instead_of_hiding_the_queue_stats(self):
-        summary_patch, tier_patch = self._patches(QUEUE_SUMMARY, tier=None, tier_error="survev.de is rate limiting the bot right now.")
-        with summary_patch, tier_patch:
-            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, "tok")
+        embed, *_ = await self.overview(QUEUE_SUMMARY, tier=None, tier_error="survev.de is rate limiting the bot right now.")
 
-        self.assertEqual(len(embed.fields), 8)
-        self.assertEqual(embed.fields[-1].value, "survev.de is rate limiting the bot right now.")
+        self.assertTrue(embed.description.endswith("🏅 Squad tier survev.de is rate limiting the bot right now."))
+        self.assertIn("Avg damage **1,500**", embed.description)
 
+    async def test_missing_values_and_a_quiet_month_have_readable_fallbacks(self):
+        month = datetime.now(timezone.utc).strftime("%B")
+        no_impact = {**QUEUE_SUMMARY, "all_time_avg_impact": None, "monthly_avg_impact": None}
+        quiet_month = {**QUEUE_SUMMARY, "monthly_avg_damage": None, "monthly_avg_impact": None}
 
-    async def test_verified_player_with_missing_impact_shows_fallback_strings(self):
-        summary_no_impact = {**QUEUE_SUMMARY, "all_time_avg_impact": None, "monthly_avg_impact": None}
-        summary_patch, tier_patch = self._patches(summary_no_impact)
-        with summary_patch, tier_patch:
-            embed, _file, _metric, _message = await leaderboard_service.build_profile_payload(self.target, "tok")
+        embed, *_ = await self.overview(no_impact)
+        self.assertIn(f"⚡ Avg impact N/A · {month} N/A", embed.description)
+        embed, *_ = await self.overview(quiet_month)
+        self.assertIn(f"💥 Avg damage **1,500** · {month} no queues yet", embed.description)
 
-        self.assertEqual(embed.fields[4].value, "N/A")
-        self.assertEqual(embed.fields[5].value, "N/A")
+    async def test_history_in_this_server_is_reported_for_the_history_button(self):
+        _embed, has_history, _message, _ = await self.overview(QUEUE_SUMMARY, guild_id=10, history=[{"match_id": "1"}])
+        self.assertTrue(has_history)
 
 
 class BuildComparePayloadTests(unittest.IsolatedAsyncioTestCase):
