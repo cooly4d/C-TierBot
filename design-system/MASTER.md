@@ -62,8 +62,8 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 ### 1.5 Renderer-Specific Surface Overrides
 
 - **Shop Offer Cards (`generate_shop_image`)**:
-  - **Available (`purchased == False`):** Fill `(40, 60, 40)` / `#283C28`, Border `QUEUE_IMG_WIN` `#6CC780` (`3px`), Status label `"◯ Available"` in `QUEUE_IMG_WIN`
-  - **Purchased (`purchased == True`):** Fill `(60, 40, 40)` / `#3C2828`, Border `QUEUE_IMG_LOSE` `#D66060` (`3px`), Status label `"✓ Bought"` in `QUEUE_IMG_LOSE`
+  - **Available (`purchased == False`):** Fill `(40, 60, 40)` / `#283C28`, Border `QUEUE_IMG_WIN` `#6CC780` (`3px`), Status label `"Available"` in `QUEUE_IMG_WIN`
+  - **Purchased (`purchased == True`):** Fill `(60, 40, 40)` / `#3C2828`, Border `QUEUE_IMG_LOSE` `#D66060` (`3px`), Status label `"Bought"` in `QUEUE_IMG_LOSE`
 - **Stats Comparison Card (`generate_compare_image`)**:
   - **Card Surface (`card_fill`):** `(26, 30, 42)` / `#1A1E2A`
   - **Card Border & Row Dividers (`card_outline`):** `(55, 62, 80)` / `#373E50`
@@ -134,9 +134,13 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 | `empty_font` | `30px` | `bold` | `QUEUE_IMG_MUTED` | Empty state message (`"No items in this rarity."`) |
 | `subtitle_font` | `22px` | `bold` | `QUEUE_IMG_MUTED` | Page & count subtitle in header |
 | `name_font` | `21px` | `bold` | `QUEUE_IMG_TEXT` | Inventory card skin name |
-| `value_font` / `price_font` | `20px` | `bold` | `QUEUE_IMG_ACCENT` | Item worth / offer price (`"{price:,} 💰"`, `"Stock"`) |
-| `item_font` / `count_font` | `18px` | `bold` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Shop offer item list / Inventory duplicate count (`"x3"`) |
-| `status_font` | `16px` | `regular` | `ACCENT` / `MUTED` / `WIN` / `LOSE` | Shop balance line, `"Slot N"`, and `"◯ Available"` / `"✓ Bought"` |
+| `value_font` / `price_font` | `20px` | `bold` | `QUEUE_IMG_ACCENT` | Item worth / offer price (`draw_fries_amount`: `"{price:,}"` plus the Golden Fries icon, `"Stock"`) |
+| `item_font` / `count_font` | `18px` | `bold` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Shop offer title (item name, or `"4 items"` for a bundle) / Inventory duplicate count (`"x3"`) |
+| `caption_font` | `15px` | `bold` | `rarity_color(rarity)` | Name under each bundle icon; rarity label (`"Epic"`) under a single offer's icon |
+| `status_font` | `16px` | `regular` | `ACCENT` / `MUTED` / `WIN` / `LOSE` | Shop balance line, offer kind (`"Daily pick"`, `"Weekly bundle"`), and `"Available"` / `"Bought"` |
+
+- **Item icons:** `assets/items/{type}.png` (128 px, exported by `tools/export_item_icons.mts`), pasted with `paste_item_icon`. Inventory cards (`180px` tall) put a `116px` icon in the bottom-right corner under the name; shop cards (`190px`) right-align up to four `104px` icons in `122px` cells. Items with no icon keep a text-only card.
+- **No emoji in images:** Quattrocento has no emoji or symbol glyphs (`💰`, `✓`, `◯` render as dots). Draw amounts with `draw_fries_amount` and keep status labels plain text.
 | `footer_font` | `15px` | `regular` | `QUEUE_IMG_MUTED` | Bottom pagination (`"Page X of Y"`) & API attribution |
 
 ### 2.3 Text Alignment, Baseline & Truncation Rules

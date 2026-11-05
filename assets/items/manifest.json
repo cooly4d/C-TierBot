@@ -1,0 +1,2593 @@
+{
+  "source": "survev.de",
+  "commit": "f55dc5bd-dirty",
+  "size": 128,
+  "count": 517,
+  "items": {
+    "key_wooden": {
+      "kind": "crate_key",
+      "name": "Wooden Key",
+      "rarity": 1
+    },
+    "key_soviet": {
+      "kind": "crate_key",
+      "name": "Soviet Key",
+      "rarity": 3
+    },
+    "key_airdrop": {
+      "kind": "crate_key",
+      "name": "Airdrop Key",
+      "rarity": 5
+    },
+    "crosshair_default": {
+      "kind": "crosshair",
+      "name": "Default",
+      "rarity": 0
+    },
+    "crosshair_001": {
+      "kind": "crosshair",
+      "name": "Style 001",
+      "rarity": 1
+    },
+    "crosshair_005": {
+      "kind": "crosshair",
+      "name": "Style 005",
+      "rarity": 1
+    },
+    "crosshair_007": {
+      "kind": "crosshair",
+      "name": "Style 007",
+      "rarity": 1
+    },
+    "crosshair_010": {
+      "kind": "crosshair",
+      "name": "Style 010",
+      "rarity": 1
+    },
+    "crosshair_022": {
+      "kind": "crosshair",
+      "name": "Style 022",
+      "rarity": 1
+    },
+    "crosshair_027": {
+      "kind": "crosshair",
+      "name": "Style 027",
+      "rarity": 1
+    },
+    "crosshair_038": {
+      "kind": "crosshair",
+      "name": "Style 038",
+      "rarity": 1
+    },
+    "crosshair_040": {
+      "kind": "crosshair",
+      "name": "Style 040",
+      "rarity": 1
+    },
+    "crosshair_045": {
+      "kind": "crosshair",
+      "name": "Style 045",
+      "rarity": 1
+    },
+    "crosshair_051": {
+      "kind": "crosshair",
+      "name": "Style 051",
+      "rarity": 1
+    },
+    "crosshair_064": {
+      "kind": "crosshair",
+      "name": "Style 064",
+      "rarity": 1
+    },
+    "crosshair_080": {
+      "kind": "crosshair",
+      "name": "Style 080",
+      "rarity": 1
+    },
+    "crosshair_086": {
+      "kind": "crosshair",
+      "name": "Style 086",
+      "rarity": 1
+    },
+    "crosshair_094": {
+      "kind": "crosshair",
+      "name": "Style 094",
+      "rarity": 1
+    },
+    "crosshair_098": {
+      "kind": "crosshair",
+      "name": "Style 098",
+      "rarity": 1
+    },
+    "crosshair_101": {
+      "kind": "crosshair",
+      "name": "Style 101",
+      "rarity": 1
+    },
+    "crosshair_102": {
+      "kind": "crosshair",
+      "name": "Style 102",
+      "rarity": 1
+    },
+    "crosshair_109": {
+      "kind": "crosshair",
+      "name": "Style 109",
+      "rarity": 1
+    },
+    "crosshair_118": {
+      "kind": "crosshair",
+      "name": "Style 118",
+      "rarity": 1
+    },
+    "crosshair_124": {
+      "kind": "crosshair",
+      "name": "Style 124",
+      "rarity": 1
+    },
+    "crosshair_125": {
+      "kind": "crosshair",
+      "name": "Style 125",
+      "rarity": 1
+    },
+    "crosshair_136": {
+      "kind": "crosshair",
+      "name": "Style 136",
+      "rarity": 1
+    },
+    "crosshair_158": {
+      "kind": "crosshair",
+      "name": "Style 158",
+      "rarity": 1
+    },
+    "crosshair_160": {
+      "kind": "crosshair",
+      "name": "Style 160",
+      "rarity": 1
+    },
+    "crosshair_173": {
+      "kind": "crosshair",
+      "name": "Style 173",
+      "rarity": 1
+    },
+    "crosshair_176": {
+      "kind": "crosshair",
+      "name": "Style 176",
+      "rarity": 1
+    },
+    "crosshair_177": {
+      "kind": "crosshair",
+      "name": "Style 177",
+      "rarity": 1
+    },
+    "crosshair_181": {
+      "kind": "crosshair",
+      "name": "Style 181",
+      "rarity": 1
+    },
+    "crosshair_184": {
+      "kind": "crosshair",
+      "name": "Style 184",
+      "rarity": 1
+    },
+    "crosshair_godak": {
+      "kind": "crosshair",
+      "name": "godak",
+      "rarity": 5
+    },
+    "death_none": {
+      "kind": "death_effect",
+      "name": "No Effect",
+      "rarity": 0
+    },
+    "death_basic": {
+      "kind": "death_effect",
+      "name": "Standard Death",
+      "rarity": 0
+    },
+    "death_blood_explosion": {
+      "kind": "death_effect",
+      "name": "Blood Explosion",
+      "rarity": 4
+    },
+    "death_confetti": {
+      "kind": "death_effect",
+      "name": "Confetti",
+      "rarity": 5
+    },
+    "death_sparkle": {
+      "kind": "death_effect",
+      "name": "Mr Sparkles",
+      "rarity": 5
+    },
+    "death_potato": {
+      "kind": "death_effect",
+      "name": "Potato Blast",
+      "rarity": 4
+    },
+    "death_toon_blast": {
+      "kind": "death_effect",
+      "name": "Toon Blast",
+      "rarity": 5
+    },
+    "death_turkey_feathers": {
+      "kind": "death_effect",
+      "name": "Turkey Feathers",
+      "rarity": 3
+    },
+    "death_cupid": {
+      "kind": "death_effect",
+      "name": "Cupid Hearts",
+      "rarity": 3
+    },
+    "death_black_hole": {
+      "kind": "death_effect",
+      "name": "Black Hole",
+      "rarity": 4
+    },
+    "death_pixel_explosion": {
+      "kind": "death_effect",
+      "name": "Pixel Explosion",
+      "rarity": 4
+    },
+    "death_pulse": {
+      "kind": "death_effect",
+      "name": "Pulse Death",
+      "rarity": 4
+    },
+    "death_smoke": {
+      "kind": "death_effect",
+      "name": "Smoke Death",
+      "rarity": 4
+    },
+    "death_magic_spark": {
+      "kind": "death_effect",
+      "name": "Magic Sparks",
+      "rarity": 5
+    },
+    "death_touhou": {
+      "kind": "death_effect",
+      "name": "Touhou Death",
+      "rarity": 5
+    },
+    "death_bubble": {
+      "kind": "death_effect",
+      "name": "Bubble Death",
+      "rarity": 5
+    },
+    "death_shattered_glass": {
+      "kind": "death_effect",
+      "name": "Shattered Glass",
+      "rarity": 5
+    },
+    "death_xp_orb": {
+      "kind": "death_effect",
+      "name": "XP Orb",
+      "rarity": 5
+    },
+    "death_alphabet_soup": {
+      "kind": "death_effect",
+      "name": "Alphabet Soup",
+      "rarity": 5
+    },
+    "death_drop_cellphone": {
+      "kind": "death_effect",
+      "name": "Drop Cellphone",
+      "rarity": 5
+    },
+    "death_billionaire": {
+      "kind": "death_effect",
+      "name": "Billionaire",
+      "rarity": 5
+    },
+    "heal_basic": {
+      "kind": "heal_effect",
+      "name": "Basic Healing",
+      "rarity": 0
+    },
+    "heal_heart": {
+      "kind": "heal_effect",
+      "name": "Healing Hearts",
+      "rarity": 1
+    },
+    "heal_moon": {
+      "kind": "heal_effect",
+      "name": "Blood Moon",
+      "rarity": 2
+    },
+    "heal_tomoe": {
+      "kind": "heal_effect",
+      "name": "Tomoe",
+      "rarity": 3
+    },
+    "boost_basic": {
+      "kind": "boost_effect",
+      "name": "Basic Boost",
+      "rarity": 0
+    },
+    "boost_star": {
+      "kind": "boost_effect",
+      "name": "Starboost",
+      "rarity": 1
+    },
+    "boost_naturalize": {
+      "kind": "boost_effect",
+      "name": "Naturalize",
+      "rarity": 2
+    },
+    "boost_shuriken": {
+      "kind": "boost_effect",
+      "name": "Shuriken",
+      "rarity": 3
+    },
+    "heal_sun": {
+      "kind": "heal_effect",
+      "name": "Solar Flare",
+      "rarity": 1
+    },
+    "boost_drop": {
+      "kind": "boost_effect",
+      "name": "Ocean Drop",
+      "rarity": 2
+    },
+    "heal_wave": {
+      "kind": "heal_effect",
+      "name": "Tidal Mend",
+      "rarity": 2
+    },
+    "boost_flame": {
+      "kind": "boost_effect",
+      "name": "Bonfire Rush",
+      "rarity": 3
+    },
+    "boost_cosmic": {
+      "kind": "boost_effect",
+      "name": "Cosmic Rush",
+      "rarity": 5
+    },
+    "heal_nebula": {
+      "kind": "heal_effect",
+      "name": "Nebula Mend",
+      "rarity": 3
+    },
+    "heal_stardust": {
+      "kind": "heal_effect",
+      "name": "Stardust",
+      "rarity": 4
+    },
+    "boost_nova": {
+      "kind": "boost_effect",
+      "name": "Nova Rush",
+      "rarity": 3
+    },
+    "heal_cult": {
+      "kind": "heal_effect",
+      "name": "The Cult",
+      "rarity": 3
+    },
+    "boost_blitzgruen": {
+      "kind": "boost_effect",
+      "name": "Gruen Blitz",
+      "rarity": 3
+    },
+    "heal_bubble": {
+      "kind": "heal_effect",
+      "name": "Bubble",
+      "rarity": 1
+    },
+    "heal_ruby": {
+      "kind": "heal_effect",
+      "name": "rubi",
+      "rarity": 1
+    },
+    "emote_medical": {
+      "kind": "emote",
+      "name": "emote_medical",
+      "rarity": null
+    },
+    "emote_adren": {
+      "kind": "emote",
+      "name": "emote_adren",
+      "rarity": null
+    },
+    "emote_ammo": {
+      "kind": "emote",
+      "name": "emote_ammo",
+      "rarity": null
+    },
+    "emote_ammo9mm": {
+      "kind": "emote",
+      "name": "emote_ammo9mm",
+      "rarity": null
+    },
+    "emote_ammo12gauge": {
+      "kind": "emote",
+      "name": "emote_ammo12gauge",
+      "rarity": null
+    },
+    "emote_ammo762mm": {
+      "kind": "emote",
+      "name": "emote_ammo762mm",
+      "rarity": null
+    },
+    "emote_ammo556mm": {
+      "kind": "emote",
+      "name": "emote_ammo556mm",
+      "rarity": null
+    },
+    "emote_ammo50ae": {
+      "kind": "emote",
+      "name": "emote_ammo50ae",
+      "rarity": null
+    },
+    "emote_ammo308sub": {
+      "kind": "emote",
+      "name": "emote_ammo308sub",
+      "rarity": null
+    },
+    "emote_ammoflare": {
+      "kind": "emote",
+      "name": "emote_ammoflare",
+      "rarity": null
+    },
+    "emote_ammo45acp": {
+      "kind": "emote",
+      "name": "emote_ammo45acp",
+      "rarity": null
+    },
+    "emote_trick_nothing": {
+      "kind": "emote",
+      "name": "emote_trick_nothing",
+      "rarity": null
+    },
+    "emote_trick_size": {
+      "kind": "emote",
+      "name": "emote_trick_size",
+      "rarity": null
+    },
+    "emote_trick_m9": {
+      "kind": "emote",
+      "name": "emote_trick_m9",
+      "rarity": null
+    },
+    "emote_trick_chatty": {
+      "kind": "emote",
+      "name": "emote_trick_chatty",
+      "rarity": null
+    },
+    "emote_trick_drain": {
+      "kind": "emote",
+      "name": "emote_trick_drain",
+      "rarity": null
+    },
+    "emote_treat_9mm": {
+      "kind": "emote",
+      "name": "emote_treat_9mm",
+      "rarity": null
+    },
+    "emote_treat_12g": {
+      "kind": "emote",
+      "name": "emote_treat_12g",
+      "rarity": null
+    },
+    "emote_treat_556": {
+      "kind": "emote",
+      "name": "emote_treat_556",
+      "rarity": null
+    },
+    "emote_treat_762": {
+      "kind": "emote",
+      "name": "emote_treat_762",
+      "rarity": null
+    },
+    "emote_treat_super": {
+      "kind": "emote",
+      "name": "emote_treat_super",
+      "rarity": null
+    },
+    "emote_bugle_inspiration_red": {
+      "kind": "emote",
+      "name": "emote_bugle_inspiration_red",
+      "rarity": null
+    },
+    "emote_bugle_final_red": {
+      "kind": "emote",
+      "name": "emote_bugle_final_red",
+      "rarity": null
+    },
+    "emote_bugle_inspiration_blue": {
+      "kind": "emote",
+      "name": "emote_bugle_inspiration_blue",
+      "rarity": null
+    },
+    "emote_bugle_final_blue": {
+      "kind": "emote",
+      "name": "emote_bugle_final_blue",
+      "rarity": null
+    },
+    "emote_thumbsup": {
+      "kind": "emote",
+      "name": "Thumbs Up",
+      "rarity": 1
+    },
+    "emote_sadface": {
+      "kind": "emote",
+      "name": "Sad Face",
+      "rarity": 1
+    },
+    "emote_happyface": {
+      "kind": "emote",
+      "name": "Happy Face",
+      "rarity": 1
+    },
+    "emote_mog": {
+      "kind": "emote",
+      "name": "Mogging",
+      "rarity": 1
+    },
+    "emote_unamused": {
+      "kind": "emote",
+      "name": "Unamused",
+      "rarity": 1
+    },
+    "emote_boffy": {
+      "kind": "emote",
+      "name": "Boffy",
+      "rarity": 1
+    },
+    "emote_surviv": {
+      "kind": "emote",
+      "name": "Surviv Logo",
+      "rarity": 1
+    },
+    "emote_gg": {
+      "kind": "emote",
+      "name": "GG",
+      "rarity": 1
+    },
+    "emote_question": {
+      "kind": "emote",
+      "name": "Question Mark",
+      "rarity": 1
+    },
+    "emote_tombstone": {
+      "kind": "emote",
+      "name": "Tombstone",
+      "rarity": 1
+    },
+    "emote_joyface": {
+      "kind": "emote",
+      "name": "Joyful Face",
+      "rarity": 1
+    },
+    "emote_sobface": {
+      "kind": "emote",
+      "name": "Sobbing Face",
+      "rarity": 1
+    },
+    "emote_thinkingface": {
+      "kind": "emote",
+      "name": "Thonk",
+      "rarity": 1
+    },
+    "emote_flagus": {
+      "kind": "emote",
+      "name": "Flag United States",
+      "rarity": 1
+    },
+    "emote_flagthailand": {
+      "kind": "emote",
+      "name": "Flag Thailand",
+      "rarity": 1
+    },
+    "emote_flaggermany": {
+      "kind": "emote",
+      "name": "Flag Germany",
+      "rarity": 1
+    },
+    "emote_flagfrance": {
+      "kind": "emote",
+      "name": "Flag France",
+      "rarity": 1
+    },
+    "emote_flagsouthkorea": {
+      "kind": "emote",
+      "name": "Flag South Korea",
+      "rarity": 1
+    },
+    "emote_flagbrazil": {
+      "kind": "emote",
+      "name": "Flag Brazil",
+      "rarity": 1
+    },
+    "emote_flagcanada": {
+      "kind": "emote",
+      "name": "Flag Canada",
+      "rarity": 1
+    },
+    "emote_flagspain": {
+      "kind": "emote",
+      "name": "Flag Spain",
+      "rarity": 1
+    },
+    "emote_flagrussia": {
+      "kind": "emote",
+      "name": "Flag Russia",
+      "rarity": 1
+    },
+    "emote_flagmexico": {
+      "kind": "emote",
+      "name": "Flag Mexico",
+      "rarity": 1
+    },
+    "emote_flagpoland": {
+      "kind": "emote",
+      "name": "Flag Poland",
+      "rarity": 1
+    },
+    "emote_flaguk": {
+      "kind": "emote",
+      "name": "Flag United Kingdom",
+      "rarity": 1
+    },
+    "emote_flagcolombia": {
+      "kind": "emote",
+      "name": "Flag Colombia",
+      "rarity": 1
+    },
+    "emote_flagukraine": {
+      "kind": "emote",
+      "name": "Flag Ukraine",
+      "rarity": 1
+    },
+    "emote_flagturkey": {
+      "kind": "emote",
+      "name": "Flag Turkey",
+      "rarity": 1
+    },
+    "emote_flagphilippines": {
+      "kind": "emote",
+      "name": "Flag Philippines",
+      "rarity": 1
+    },
+    "emote_flagczechia": {
+      "kind": "emote",
+      "name": "Flag Czechia",
+      "rarity": 1
+    },
+    "emote_flagperu": {
+      "kind": "emote",
+      "name": "Flag Peru",
+      "rarity": 1
+    },
+    "emote_flagaustria": {
+      "kind": "emote",
+      "name": "Flag Austria",
+      "rarity": 1
+    },
+    "emote_flagargentina": {
+      "kind": "emote",
+      "name": "Flag Argentina",
+      "rarity": 1
+    },
+    "emote_flagjapan": {
+      "kind": "emote",
+      "name": "Flag Japan",
+      "rarity": 1
+    },
+    "emote_flagvenezuela": {
+      "kind": "emote",
+      "name": "Flag Venezuela",
+      "rarity": 1
+    },
+    "emote_flagvietnam": {
+      "kind": "emote",
+      "name": "Flag Vietnam",
+      "rarity": 1
+    },
+    "emote_flagswitzerland": {
+      "kind": "emote",
+      "name": "Flag Switzerland",
+      "rarity": 1
+    },
+    "emote_flagnetherlands": {
+      "kind": "emote",
+      "name": "Flag Netherlands",
+      "rarity": 1
+    },
+    "emote_flagchina": {
+      "kind": "emote",
+      "name": "Flag China",
+      "rarity": 1
+    },
+    "emote_flagtaiwan": {
+      "kind": "emote",
+      "name": "Flag Taiwan",
+      "rarity": 1
+    },
+    "emote_flagchile": {
+      "kind": "emote",
+      "name": "Flag Chile",
+      "rarity": 1
+    },
+    "emote_flagaustralia": {
+      "kind": "emote",
+      "name": "Flag Australia",
+      "rarity": 1
+    },
+    "emote_flagdenmark": {
+      "kind": "emote",
+      "name": "Flag Denmark",
+      "rarity": 1
+    },
+    "emote_flagitaly": {
+      "kind": "emote",
+      "name": "Flag Italy",
+      "rarity": 1
+    },
+    "emote_flagsweden": {
+      "kind": "emote",
+      "name": "Flag Sweden",
+      "rarity": 1
+    },
+    "emote_flagecuador": {
+      "kind": "emote",
+      "name": "Flag Ecuador",
+      "rarity": 1
+    },
+    "emote_flagslovakia": {
+      "kind": "emote",
+      "name": "Flag Slovakia",
+      "rarity": 1
+    },
+    "emote_flaghungary": {
+      "kind": "emote",
+      "name": "Flag Hungary",
+      "rarity": 1
+    },
+    "emote_flagromania": {
+      "kind": "emote",
+      "name": "Flag Romania",
+      "rarity": 1
+    },
+    "emote_flaghongkong": {
+      "kind": "emote",
+      "name": "Flag Hong Kong",
+      "rarity": 1
+    },
+    "emote_flagindonesia": {
+      "kind": "emote",
+      "name": "Flag Indonesia",
+      "rarity": 1
+    },
+    "emote_flagfinland": {
+      "kind": "emote",
+      "name": "Flag Finland",
+      "rarity": 1
+    },
+    "emote_flagnorway": {
+      "kind": "emote",
+      "name": "Flag Norway",
+      "rarity": 1
+    },
+    "emote_flagbosnia": {
+      "kind": "emote",
+      "name": "Flag Bosnia",
+      "rarity": 1
+    },
+    "emote_flaglibya": {
+      "kind": "emote",
+      "name": "Flag Libya",
+      "rarity": 1
+    },
+    "emote_heart": {
+      "kind": "emote",
+      "name": "Heart",
+      "rarity": 1
+    },
+    "emote_sleepy": {
+      "kind": "emote",
+      "name": "Zzz",
+      "rarity": 1
+    },
+    "emote_flex": {
+      "kind": "emote",
+      "name": "Flex",
+      "rarity": 1
+    },
+    "emote_angryface": {
+      "kind": "emote",
+      "name": "Angry Face",
+      "rarity": 1
+    },
+    "emote_upsidedownface": {
+      "kind": "emote",
+      "name": "Upside Down Face",
+      "rarity": 1
+    },
+    "emote_teabag": {
+      "kind": "emote",
+      "name": "Teabag",
+      "rarity": 1
+    },
+    "emote_alienface": {
+      "kind": "emote",
+      "name": "Alien Face",
+      "rarity": 1
+    },
+    "emote_flagbelarus": {
+      "kind": "emote",
+      "name": "Flag Belarus",
+      "rarity": 1
+    },
+    "emote_flagbelgium": {
+      "kind": "emote",
+      "name": "Flag Belgium",
+      "rarity": 1
+    },
+    "emote_flagkazakhstan": {
+      "kind": "emote",
+      "name": "Flag Kazakhstan",
+      "rarity": 1
+    },
+    "emote_egg": {
+      "kind": "emote",
+      "name": "Egg",
+      "rarity": 1
+    },
+    "emote_police": {
+      "kind": "emote",
+      "name": "Police Insignia",
+      "rarity": 1
+    },
+    "emote_dabface": {
+      "kind": "emote",
+      "name": "Dab Face",
+      "rarity": 1
+    },
+    "emote_flagmalaysia": {
+      "kind": "emote",
+      "name": "Flag Malaysia",
+      "rarity": 1
+    },
+    "emote_flagnewzealand": {
+      "kind": "emote",
+      "name": "Flag New Zealand",
+      "rarity": 1
+    },
+    "emote_logosurviv": {
+      "kind": "emote",
+      "name": "PARMA",
+      "rarity": 1
+    },
+    "emote_logoegg": {
+      "kind": "emote",
+      "name": "The Egg",
+      "rarity": 1
+    },
+    "emote_logoswine": {
+      "kind": "emote",
+      "name": "The Swine",
+      "rarity": 1
+    },
+    "emote_logohydra": {
+      "kind": "emote",
+      "name": "The Hydra",
+      "rarity": 1
+    },
+    "emote_logostorm": {
+      "kind": "emote",
+      "name": "The Storm",
+      "rarity": 1
+    },
+    "emote_logocult": {
+      "kind": "emote",
+      "name": "The Cult",
+      "rarity": 1
+    },
+    "emote_flaghonduras": {
+      "kind": "emote",
+      "name": "Flag Honduras",
+      "rarity": 1
+    },
+    "emote_logocaduceus": {
+      "kind": "emote",
+      "name": "The Caduceus",
+      "rarity": 1
+    },
+    "emote_impface": {
+      "kind": "emote",
+      "name": "Imp Face",
+      "rarity": 1
+    },
+    "emote_monocleface": {
+      "kind": "emote",
+      "name": "Monocole Face",
+      "rarity": 1
+    },
+    "emote_sunglassface": {
+      "kind": "emote",
+      "name": "Sunglasses Face",
+      "rarity": 1
+    },
+    "emote_headshotface": {
+      "kind": "emote",
+      "name": "Headshot!",
+      "rarity": 1
+    },
+    "emote_potato": {
+      "kind": "emote",
+      "name": "Potato",
+      "rarity": 1
+    },
+    "emote_tomato": {
+      "kind": "emote",
+      "name": "Tomato",
+      "rarity": 1
+    },
+    "emote_cake": {
+      "kind": "emote",
+      "name": "Cake",
+      "rarity": 1
+    },
+    "emote_leek": {
+      "kind": "emote",
+      "name": "Leek",
+      "rarity": 1
+    },
+    "emote_eggplant": {
+      "kind": "emote",
+      "name": "Eggplant",
+      "rarity": 1
+    },
+    "emote_baguette": {
+      "kind": "emote",
+      "name": "Baguette",
+      "rarity": 1
+    },
+    "emote_chick": {
+      "kind": "emote",
+      "name": "Chick",
+      "rarity": 1
+    },
+    "emote_flagbolivia": {
+      "kind": "emote",
+      "name": "Flag Bolivia",
+      "rarity": 1
+    },
+    "emote_flagcroatia": {
+      "kind": "emote",
+      "name": "Flag Croatia",
+      "rarity": 1
+    },
+    "emote_flagindia": {
+      "kind": "emote",
+      "name": "Flag India",
+      "rarity": 1
+    },
+    "emote_flaggeorgia": {
+      "kind": "emote",
+      "name": "Flag Georgia",
+      "rarity": 1
+    },
+    "emote_flaggreece": {
+      "kind": "emote",
+      "name": "Flag Greece",
+      "rarity": 1
+    },
+    "emote_flagguatemala": {
+      "kind": "emote",
+      "name": "Flag Guatemala",
+      "rarity": 1
+    },
+    "emote_flagportugal": {
+      "kind": "emote",
+      "name": "Flag Portugal",
+      "rarity": 1
+    },
+    "emote_flagserbia": {
+      "kind": "emote",
+      "name": "Flag Serbia",
+      "rarity": 1
+    },
+    "emote_flagsingapore": {
+      "kind": "emote",
+      "name": "Flag Singapore",
+      "rarity": 1
+    },
+    "emote_flagtrinidad": {
+      "kind": "emote",
+      "name": "Flag Trinidad and Tobago",
+      "rarity": 1
+    },
+    "emote_flaguruguay": {
+      "kind": "emote",
+      "name": "Flag Uruguay",
+      "rarity": 1
+    },
+    "emote_logoconch": {
+      "kind": "emote",
+      "name": "The Conch",
+      "rarity": 1
+    },
+    "emote_pineapple": {
+      "kind": "emote",
+      "name": "Pineapple",
+      "rarity": 1
+    },
+    "emote_coconut": {
+      "kind": "emote",
+      "name": "Coconut",
+      "rarity": 1
+    },
+    "emote_crab": {
+      "kind": "emote",
+      "name": "Crab",
+      "rarity": 1
+    },
+    "emote_whale": {
+      "kind": "emote",
+      "name": "Whale",
+      "rarity": 1
+    },
+    "emote_logometeor": {
+      "kind": "emote",
+      "name": "The Meteor",
+      "rarity": 1
+    },
+    "emote_salt": {
+      "kind": "emote",
+      "name": "Salt Shaker",
+      "rarity": 1
+    },
+    "emote_disappointface": {
+      "kind": "emote",
+      "name": "Disappointed Face",
+      "rarity": 1
+    },
+    "emote_logocrossing": {
+      "kind": "emote",
+      "name": "The Crossing",
+      "rarity": 1
+    },
+    "emote_fish": {
+      "kind": "emote",
+      "name": "Fish",
+      "rarity": 1
+    },
+    "emote_campfire": {
+      "kind": "emote",
+      "name": "Campfire",
+      "rarity": 1
+    },
+    "emote_chickendinner": {
+      "kind": "emote",
+      "name": "Chicken Dinner",
+      "rarity": 1
+    },
+    "emote_cattle": {
+      "kind": "emote",
+      "name": "Cattle Skull",
+      "rarity": 1
+    },
+    "emote_icecream": {
+      "kind": "emote",
+      "name": "Ice Cream",
+      "rarity": 1
+    },
+    "emote_cupcake": {
+      "kind": "emote",
+      "name": "Cupcake",
+      "rarity": 1
+    },
+    "emote_donut": {
+      "kind": "emote",
+      "name": "Donut",
+      "rarity": 1
+    },
+    "emote_logohatchet": {
+      "kind": "emote",
+      "name": "The Hatchet",
+      "rarity": 1
+    },
+    "emote_acorn": {
+      "kind": "emote",
+      "name": "Acorn",
+      "rarity": 1
+    },
+    "emote_leaf": {
+      "kind": "emote",
+      "name": "Leaf",
+      "rarity": 1
+    },
+    "emote_trunk": {
+      "kind": "emote",
+      "name": "Tree Trunk",
+      "rarity": 1
+    },
+    "emote_forest": {
+      "kind": "emote",
+      "name": "Forest",
+      "rarity": 1
+    },
+    "emote_pumpkin": {
+      "kind": "emote",
+      "name": "Pumpkin",
+      "rarity": 1
+    },
+    "emote_candycorn": {
+      "kind": "emote",
+      "name": "Candy Corn",
+      "rarity": 1
+    },
+    "emote_pilgrimhat": {
+      "kind": "emote",
+      "name": "Pilgrim",
+      "rarity": 1
+    },
+    "emote_turkeyanimal": {
+      "kind": "emote",
+      "name": "Turkey",
+      "rarity": 1
+    },
+    "emote_heartface": {
+      "kind": "emote",
+      "name": "Heart Face",
+      "rarity": 1
+    },
+    "emote_logochrysanthemum": {
+      "kind": "emote",
+      "name": "The Chrysanthemum",
+      "rarity": 1
+    },
+    "emote_santahat": {
+      "kind": "emote",
+      "name": "Santa Hat",
+      "rarity": 1
+    },
+    "emote_snowman": {
+      "kind": "emote",
+      "name": "Snowman",
+      "rarity": 1
+    },
+    "emote_snowflake": {
+      "kind": "emote",
+      "name": "Snowflake",
+      "rarity": 1
+    },
+    "emote_flagmorocco": {
+      "kind": "emote",
+      "name": "Flag Morocco",
+      "rarity": 1
+    },
+    "emote_flagestonia": {
+      "kind": "emote",
+      "name": "Flag Estonia",
+      "rarity": 1
+    },
+    "emote_flagalgeria": {
+      "kind": "emote",
+      "name": "Flag Algeria",
+      "rarity": 1
+    },
+    "emote_flagegypt": {
+      "kind": "emote",
+      "name": "Flag Egypt",
+      "rarity": 1
+    },
+    "emote_flagazerbaijan": {
+      "kind": "emote",
+      "name": "Flag Azerbaijan",
+      "rarity": 1
+    },
+    "emote_flagalbania": {
+      "kind": "emote",
+      "name": "Flag Albania",
+      "rarity": 1
+    },
+    "emote_flaglithuania": {
+      "kind": "emote",
+      "name": "Flag Lithuania",
+      "rarity": 1
+    },
+    "emote_flaglatvia": {
+      "kind": "emote",
+      "name": "Flag Latvia",
+      "rarity": 1
+    },
+    "emote_flaguae": {
+      "kind": "emote",
+      "name": "Flag United Arab Emirates",
+      "rarity": 1
+    },
+    "emote_flagdominicanrepublic": {
+      "kind": "emote",
+      "name": "Flag Dominican Republic",
+      "rarity": 1
+    },
+    "emote_flagpalestine": {
+      "kind": "emote",
+      "name": "Flag Palestine",
+      "rarity": 1
+    },
+    "emote_flagiran": {
+      "kind": "emote",
+      "name": "Flag Iran",
+      "rarity": 1
+    },
+    "emote_flaglebanon": {
+      "kind": "emote",
+      "name": "Flag Lebanon",
+      "rarity": 1
+    },
+    "emote_flagyemen": {
+      "kind": "emote",
+      "name": "Flag Yemen",
+      "rarity": 1
+    },
+    "emote_flagtransgender": {
+      "kind": "emote",
+      "name": "Flag Transgender",
+      "rarity": 1
+    },
+    "emote_flagpride": {
+      "kind": "emote",
+      "name": "Flag Pride",
+      "rarity": 1
+    },
+    "emote_flaglesbian": {
+      "kind": "emote",
+      "name": "Flag Lesbian",
+      "rarity": 1
+    },
+    "emote_flaggay": {
+      "kind": "emote",
+      "name": "Flag Gay",
+      "rarity": 1
+    },
+    "emote_flagasexual": {
+      "kind": "emote",
+      "name": "Flag Asexual",
+      "rarity": 1
+    },
+    "emote_flagnonbinary": {
+      "kind": "emote",
+      "name": "Flag Non-Binary",
+      "rarity": 1
+    },
+    "emote_flagbisexual": {
+      "kind": "emote",
+      "name": "Flag Bisexual",
+      "rarity": 1
+    },
+    "emote_logocloud": {
+      "kind": "emote",
+      "name": "The Cloud",
+      "rarity": 1
+    },
+    "emote_ghost_base": {
+      "kind": "emote",
+      "name": "Ghost",
+      "rarity": 2
+    },
+    "emote_bandagedface": {
+      "kind": "emote",
+      "name": "Bandaged Face",
+      "rarity": 2
+    },
+    "emote_picassoface": {
+      "kind": "emote",
+      "name": "Picasso Face",
+      "rarity": 2
+    },
+    "emote_ohnah": {
+      "kind": "emote",
+      "name": "Ohnah",
+      "rarity": 5
+    },
+    "emote_pooface": {
+      "kind": "emote",
+      "name": "Poo Face",
+      "rarity": 3
+    },
+    "emote_ok": {
+      "kind": "emote",
+      "name": "Ok",
+      "rarity": 2
+    },
+    "emote_rainbow": {
+      "kind": "emote",
+      "name": "Rainbow",
+      "rarity": 3
+    },
+    "emote_logotwins": {
+      "kind": "emote",
+      "name": "The Twins",
+      "rarity": 1
+    },
+    "emote_sun": {
+      "kind": "emote",
+      "name": "Sunshine",
+      "rarity": 1
+    },
+    "emote_surfboard": {
+      "kind": "emote",
+      "name": "Catching Waves",
+      "rarity": 2
+    },
+    "emote_beachball": {
+      "kind": "emote",
+      "name": "Beach Ball",
+      "rarity": 1
+    },
+    "emote_flamingo": {
+      "kind": "emote",
+      "name": "Flamingo",
+      "rarity": 2
+    },
+    "emote_watermelon": {
+      "kind": "emote",
+      "name": "Watermelon",
+      "rarity": 1
+    },
+    "emote_palm": {
+      "kind": "emote",
+      "name": "Palm Tree",
+      "rarity": 1
+    },
+    "emote_smh": {
+      "kind": "emote",
+      "name": "SMH",
+      "rarity": 2
+    },
+    "emote_dove": {
+      "kind": "emote",
+      "name": "Rest in Piece",
+      "rarity": 2
+    },
+    "emote_saturn": {
+      "kind": "emote",
+      "name": "Ringed Planet",
+      "rarity": 2
+    },
+    "emote_rocket": {
+      "kind": "emote",
+      "name": "Blast Off",
+      "rarity": 2
+    },
+    "emote_ufo": {
+      "kind": "emote",
+      "name": "UFO",
+      "rarity": 2
+    },
+    "emote_comet": {
+      "kind": "emote",
+      "name": "Comet",
+      "rarity": 3
+    },
+    "emote_astrohelmet": {
+      "kind": "emote",
+      "name": "Space Helmet",
+      "rarity": 3
+    },
+    "emote_shootingstar": {
+      "kind": "emote",
+      "name": "Shooting Star",
+      "rarity": 3
+    },
+    "emote_blackhole": {
+      "kind": "emote",
+      "name": "Event Horizon",
+      "rarity": 4
+    },
+    "emote_violence": {
+      "kind": "emote",
+      "name": "Violence",
+      "rarity": 1
+    },
+    "emote_confetti": {
+      "kind": "emote",
+      "name": "Confetti",
+      "rarity": 1
+    },
+    "fists": {
+      "kind": "melee",
+      "name": "Fists",
+      "rarity": 0
+    },
+    "knuckles": {
+      "kind": "melee",
+      "name": "Knuckles",
+      "rarity": null
+    },
+    "antlers": {
+      "kind": "melee",
+      "name": "Buck Antler",
+      "rarity": null
+    },
+    "karambit": {
+      "kind": "melee",
+      "name": "Karambit",
+      "rarity": null
+    },
+    "bayonet": {
+      "kind": "melee",
+      "name": "Bayonet",
+      "rarity": null
+    },
+    "wakizashi": {
+      "kind": "melee",
+      "name": "Wakizashi",
+      "rarity": null
+    },
+    "huntsman": {
+      "kind": "melee",
+      "name": "Huntsman",
+      "rarity": null
+    },
+    "ursus": {
+      "kind": "melee",
+      "name": "Ursus Knife",
+      "rarity": null
+    },
+    "flip": {
+      "kind": "melee",
+      "name": "Flip Knife",
+      "rarity": null
+    },
+    "bowie": {
+      "kind": "melee",
+      "name": "Bowie",
+      "rarity": null
+    },
+    "machete": {
+      "kind": "melee",
+      "name": "Machete",
+      "rarity": null
+    },
+    "saw": {
+      "kind": "melee",
+      "name": "Saw",
+      "rarity": null
+    },
+    "woodaxe": {
+      "kind": "melee",
+      "name": "Wood Axe",
+      "rarity": null
+    },
+    "fireaxe": {
+      "kind": "melee",
+      "name": "Fire Axe",
+      "rarity": null
+    },
+    "katana": {
+      "kind": "melee",
+      "name": "Katana",
+      "rarity": null
+    },
+    "naginata": {
+      "kind": "melee",
+      "name": "Naginata",
+      "rarity": null
+    },
+    "stonehammer": {
+      "kind": "melee",
+      "name": "Stone Hammer",
+      "rarity": null
+    },
+    "iceaxe": {
+      "kind": "melee",
+      "name": "Ice Axe",
+      "rarity": null
+    },
+    "hook": {
+      "kind": "melee",
+      "name": "Hook",
+      "rarity": null
+    },
+    "pan": {
+      "kind": "melee",
+      "name": "Pan",
+      "rarity": null
+    },
+    "spade": {
+      "kind": "melee",
+      "name": "Spade",
+      "rarity": null
+    },
+    "crowbar": {
+      "kind": "melee",
+      "name": "Crowbar",
+      "rarity": null
+    },
+    "cutlass": {
+      "kind": "melee",
+      "name": "Cutlass",
+      "rarity": null
+    },
+    "knuckles_rusted": {
+      "kind": "melee",
+      "name": "Knuckles Rusted",
+      "rarity": 2
+    },
+    "knuckles_heroic": {
+      "kind": "melee",
+      "name": "Knuckles Heroic",
+      "rarity": 3
+    },
+    "knuckles_OldMan": {
+      "kind": "melee",
+      "name": "Knuckles Old Man",
+      "rarity": 5
+    },
+    "karambit_rugged": {
+      "kind": "melee",
+      "name": "Karambit Rugged",
+      "rarity": 3
+    },
+    "karambit_prismatic": {
+      "kind": "melee",
+      "name": "Karambit Prismatic",
+      "rarity": 4
+    },
+    "combat_banana": {
+      "kind": "melee",
+      "name": "Combat Banana",
+      "rarity": 4
+    },
+    "karambit_drowned": {
+      "kind": "melee",
+      "name": "Karambit Drowned",
+      "rarity": 4
+    },
+    "karambit_fade": {
+      "kind": "melee",
+      "name": "Karambit Fade",
+      "rarity": 4
+    },
+    "karambit_blazing": {
+      "kind": "melee",
+      "name": "Karambit Blazing",
+      "rarity": 4
+    },
+    "karambit_dotexe": {
+      "kind": "melee",
+      "name": "Karambit Dotexe",
+      "rarity": 4
+    },
+    "karambit_woodland": {
+      "kind": "melee",
+      "name": "Karambit Woodland",
+      "rarity": 3
+    },
+    "karambit_rust": {
+      "kind": "melee",
+      "name": "Karambit Rust",
+      "rarity": 3
+    },
+    "karambit_ice": {
+      "kind": "melee",
+      "name": "Karambit Ice",
+      "rarity": 3
+    },
+    "karambit_case_hardened": {
+      "kind": "melee",
+      "name": "Karambit case hardened",
+      "rarity": 3
+    },
+    "bayonet_rugged": {
+      "kind": "melee",
+      "name": "Bayonet Rugged",
+      "rarity": 3
+    },
+    "bayonet_woodland": {
+      "kind": "melee",
+      "name": "Bayonet Woodland",
+      "rarity": 4
+    },
+    "bayonet_fade": {
+      "kind": "melee",
+      "name": "Bayonet Fade",
+      "rarity": 4
+    },
+    "bayonet_case_hardened": {
+      "kind": "melee",
+      "name": "Bayonet Case Hardened",
+      "rarity": 4
+    },
+    "bayonet_m9_autotronic": {
+      "kind": "melee",
+      "name": "Bayonet M9 Autotronic",
+      "rarity": 4
+    },
+    "bayonet_m9_vanilla": {
+      "kind": "melee",
+      "name": "Bayonet M9 Vanilla",
+      "rarity": 4
+    },
+    "bayonet_m9_pink_crystal": {
+      "kind": "melee",
+      "name": "Bayonet M9 Pink Crystal",
+      "rarity": 4
+    },
+    "wakizashi_rust": {
+      "kind": "melee",
+      "name": "Wakizashi Rust",
+      "rarity": 3
+    },
+    "wakizashi_ninja": {
+      "kind": "melee",
+      "name": "Wakizashi Ninja",
+      "rarity": 4
+    },
+    "bayonet_glow": {
+      "kind": "melee",
+      "name": "Bayonet Glow",
+      "rarity": 4
+    },
+    "huntsman_rugged": {
+      "kind": "melee",
+      "name": "Huntsman Rugged",
+      "rarity": 3
+    },
+    "huntsman_burnished": {
+      "kind": "melee",
+      "name": "Huntsman Burnished",
+      "rarity": 4
+    },
+    "huntsman_blackwater": {
+      "kind": "melee",
+      "name": "Huntsman Blackwater",
+      "rarity": 4
+    },
+    "huntsman_ice": {
+      "kind": "melee",
+      "name": "Huntsman Ice",
+      "rarity": 3
+    },
+    "huntsman_purple": {
+      "kind": "melee",
+      "name": "Huntsman Purple",
+      "rarity": 3
+    },
+    "huntsman_pink": {
+      "kind": "melee",
+      "name": "Huntsman Pink",
+      "rarity": 3
+    },
+    "flip_technical": {
+      "kind": "melee",
+      "name": "Flip Knife Technical",
+      "rarity": 3
+    },
+    "flip_pyrotechnical": {
+      "kind": "melee",
+      "name": "Flip Knife Pyrotechnical",
+      "rarity": 3
+    },
+    "flip_eclipse": {
+      "kind": "melee",
+      "name": "Flip Knife Eclipse",
+      "rarity": 3
+    },
+    "ursus_rugged": {
+      "kind": "melee",
+      "name": "Ursus Knife Rugged",
+      "rarity": 3
+    },
+    "ursus_jade": {
+      "kind": "melee",
+      "name": "Ursus Knife Jade",
+      "rarity": 3
+    },
+    "ursus_safari": {
+      "kind": "melee",
+      "name": "Ursus Knife Safari",
+      "rarity": 3
+    },
+    "bowie_vintage": {
+      "kind": "melee",
+      "name": "Bowie Vintage",
+      "rarity": 3
+    },
+    "bowie_frontier": {
+      "kind": "melee",
+      "name": "Bowie Frontier",
+      "rarity": 4
+    },
+    "bowie_redtiger": {
+      "kind": "melee",
+      "name": "Bowie Redtiger",
+      "rarity": 4
+    },
+    "bowie_ice": {
+      "kind": "melee",
+      "name": "Bowie Ice",
+      "rarity": 3
+    },
+    "machete_taiga": {
+      "kind": "melee",
+      "name": "UVSR Taiga",
+      "rarity": null
+    },
+    "kukri_trad": {
+      "kind": "melee",
+      "name": "Tallow's Kukri",
+      "rarity": null
+    },
+    "bonesaw_rusted": {
+      "kind": "melee",
+      "name": "Bonesaw Rusted",
+      "rarity": null
+    },
+    "woodaxe_bloody": {
+      "kind": "melee",
+      "name": "Axe Bloodstained",
+      "rarity": null
+    },
+    "katana_rusted": {
+      "kind": "melee",
+      "name": "Katana Rusted",
+      "rarity": null
+    },
+    "katana_orchid": {
+      "kind": "melee",
+      "name": "Katana Orchid",
+      "rarity": null
+    },
+    "sledgehammer": {
+      "kind": "melee",
+      "name": "Sledgehammer",
+      "rarity": null
+    },
+    "crowbar_scout": {
+      "kind": "melee",
+      "name": "Scouting Crowbar",
+      "rarity": null
+    },
+    "crowbar_recon": {
+      "kind": "melee",
+      "name": "Crowbar Carbon",
+      "rarity": null
+    },
+    "kukri_sniper": {
+      "kind": "melee",
+      "name": "Marksman's Recurve",
+      "rarity": null
+    },
+    "bonesaw_healer": {
+      "kind": "melee",
+      "name": "The Separator",
+      "rarity": null
+    },
+    "katana_demo": {
+      "kind": "melee",
+      "name": "Hakai no Katana",
+      "rarity": null
+    },
+    "spade_assault": {
+      "kind": "melee",
+      "name": "Trench Spade",
+      "rarity": null
+    },
+    "warhammer_tank": {
+      "kind": "melee",
+      "name": "Panzerhammer",
+      "rarity": null
+    },
+    "naginata_daemon": {
+      "kind": "melee",
+      "name": "Naginata Daemon",
+      "rarity": null
+    },
+    "cutlass_gold": {
+      "kind": "melee",
+      "name": "Gold Cutlass",
+      "rarity": null
+    },
+    "outfitBase": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": 0
+    },
+    "outfitDemo": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitTank": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitMedic": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitScout": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitSniper": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitAssault": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitClassless": {
+      "kind": "outfit",
+      "name": "Basic Outfit",
+      "rarity": null
+    },
+    "outfitTurkey": {
+      "kind": "outfit",
+      "name": "Fowl Facade",
+      "rarity": 3
+    },
+    "outfitDev": {
+      "kind": "outfit",
+      "name": "Developer Swag",
+      "rarity": 5
+    },
+    "outfitGD": {
+      "kind": "outfit",
+      "name": "Game Designr",
+      "rarity": 4
+    },
+    "outfitMod": {
+      "kind": "outfit",
+      "name": "Game Moderatr",
+      "rarity": 4
+    },
+    "outfitWheat": {
+      "kind": "outfit",
+      "name": "Splintered Wheat",
+      "rarity": 1
+    },
+    "outfitNoir": {
+      "kind": "outfit",
+      "name": "Neo Noir",
+      "rarity": null
+    },
+    "outfitRedLeaderAged": {
+      "kind": "outfit",
+      "name": "Weathered Red",
+      "rarity": null
+    },
+    "outfitBlueLeaderAged": {
+      "kind": "outfit",
+      "name": "Stifled Blue",
+      "rarity": null
+    },
+    "outfitRedLeader": {
+      "kind": "outfit",
+      "name": "Red Leader",
+      "rarity": null
+    },
+    "outfitBlueLeader": {
+      "kind": "outfit",
+      "name": "Blue Leader",
+      "rarity": null
+    },
+    "outfitSpetsnaz": {
+      "kind": "outfit",
+      "name": "Siberian Assault",
+      "rarity": 3
+    },
+    "outfitWoodsCloak": {
+      "kind": "outfit",
+      "name": "Greencloak",
+      "rarity": null
+    },
+    "outfitElf": {
+      "kind": "outfit",
+      "name": "Tallow's Little Helper",
+      "rarity": null
+    },
+    "outfitImperial": {
+      "kind": "outfit",
+      "name": "Imperial Seal",
+      "rarity": null
+    },
+    "outfitLumber": {
+      "kind": "outfit",
+      "name": "Woodcutter's Wrap",
+      "rarity": null
+    },
+    "outfitVerde": {
+      "kind": "outfit",
+      "name": "Poncho Verde",
+      "rarity": null
+    },
+    "outfitPineapple": {
+      "kind": "outfit",
+      "name": "Valiant Pineapple",
+      "rarity": null
+    },
+    "outfitTarkhany": {
+      "kind": "outfit",
+      "name": "Tarkhany Regal",
+      "rarity": null
+    },
+    "outfitWaterElem": {
+      "kind": "outfit",
+      "name": "Water Elemental",
+      "rarity": null
+    },
+    "outfitHeaven": {
+      "kind": "outfit",
+      "name": "Celestial Garb",
+      "rarity": null
+    },
+    "outfitMeteor": {
+      "kind": "outfit",
+      "name": "Falling Star",
+      "rarity": null
+    },
+    "outfitIslander": {
+      "kind": "outfit",
+      "name": "Island Time",
+      "rarity": null
+    },
+    "outfitAqua": {
+      "kind": "outfit",
+      "name": "Aquatic Avenger",
+      "rarity": null
+    },
+    "outfitCoral": {
+      "kind": "outfit",
+      "name": "Coral Guise",
+      "rarity": null
+    },
+    "outfitKhaki": {
+      "kind": "outfit",
+      "name": "The Initiative",
+      "rarity": 1
+    },
+    "outfitParma": {
+      "kind": "outfit",
+      "name": "PARMA Jumpsuit",
+      "rarity": 1
+    },
+    "outfitParmaPrestige": {
+      "kind": "outfit",
+      "name": "The Core Jumpsuit",
+      "rarity": 3
+    },
+    "outfitCasanova": {
+      "kind": "outfit",
+      "name": "Casanova Silks",
+      "rarity": null
+    },
+    "outfitPrisoner": {
+      "kind": "outfit",
+      "name": "The New Black",
+      "rarity": null
+    },
+    "outfitJester": {
+      "kind": "outfit",
+      "name": "Jester's Folly",
+      "rarity": null
+    },
+    "outfitWoodland": {
+      "kind": "outfit",
+      "name": "Woodland Combat",
+      "rarity": 1
+    },
+    "outfitRoyalFortune": {
+      "kind": "outfit",
+      "name": "Royal Fortune",
+      "rarity": 3
+    },
+    "outfitKeyLime": {
+      "kind": "outfit",
+      "name": "Key Lime",
+      "rarity": 1
+    },
+    "outfitCobaltShell": {
+      "kind": "outfit",
+      "name": "Cobalt Shell",
+      "rarity": 1
+    },
+    "outfitFragtastic": {
+      "kind": "outfit",
+      "name": "Fragtastic",
+      "rarity": 1
+    },
+    "outfitCarbonFiber": {
+      "kind": "outfit",
+      "name": "Carbon Fiber",
+      "rarity": 2
+    },
+    "outfitDarkGloves": {
+      "kind": "outfit",
+      "name": "The Professional",
+      "rarity": 2
+    },
+    "outfitOldMan": {
+      "kind": "outfit",
+      "name": "The Old Man",
+      "rarity": 5
+    },
+    "outfitDarkShirt": {
+      "kind": "outfit",
+      "name": "The Semi-Pro",
+      "rarity": 1
+    },
+    "outfitGhillie": {
+      "kind": "outfit",
+      "name": "Ghillie Suit",
+      "rarity": null
+    },
+    "outfitDesertCamo": {
+      "kind": "outfit",
+      "name": "Desert Camo",
+      "rarity": 1
+    },
+    "outfitCamo": {
+      "kind": "outfit",
+      "name": "Forest Camo",
+      "rarity": 1
+    },
+    "outfitRed": {
+      "kind": "outfit",
+      "name": "Target Practice",
+      "rarity": 1
+    },
+    "outfitWhite": {
+      "kind": "outfit",
+      "name": "Arctic Avenger",
+      "rarity": 1
+    },
+    "outfitSnow": {
+      "kind": "outfit",
+      "name": "Snowed Over",
+      "rarity": 2
+    },
+    "outfitBlackIce": {
+      "kind": "outfit",
+      "name": "Black Ice",
+      "rarity": 1
+    },
+    "outfitBeachCamo": {
+      "kind": "outfit",
+      "name": "Beach Shored",
+      "rarity": null
+    },
+    "outfitCoconut": {
+      "kind": "outfit",
+      "name": "Coconut Frenzy",
+      "rarity": 1
+    },
+    "outfitWave": {
+      "kind": "outfit",
+      "name": "Tidal Wave",
+      "rarity": 1
+    },
+    "outfitParrotfish": {
+      "kind": "outfit",
+      "name": "Parrotfish",
+      "rarity": 3
+    },
+    "outfitSunrise": {
+      "kind": "outfit",
+      "name": "Sunrise Warrior",
+      "rarity": 1
+    },
+    "outfitTide": {
+      "kind": "outfit",
+      "name": "High Tide",
+      "rarity": 2
+    },
+    "outfitTropicalStorm": {
+      "kind": "outfit",
+      "name": "Tropical Fury",
+      "rarity": 3
+    },
+    "outfitOhNah": {
+      "kind": "outfit",
+      "name": "Oh Nah!",
+      "rarity": 5
+    },
+    "outfitMarblePink": {
+      "kind": "outfit",
+      "name": "Marble Pink",
+      "rarity": 2
+    },
+    "outfitMarblegreen": {
+      "kind": "outfit",
+      "name": "Marble Green",
+      "rarity": 2
+    },
+    "outfitMarblered": {
+      "kind": "outfit",
+      "name": "Marble Red",
+      "rarity": 2
+    },
+    "outfitRuin": {
+      "kind": "outfit",
+      "name": "Ruin",
+      "rarity": 3
+    },
+    "outfitAuronV2": {
+      "kind": "outfit",
+      "name": "AuronV2",
+      "rarity": 3
+    },
+    "outfitHorizon": {
+      "kind": "outfit",
+      "name": "Horizon",
+      "rarity": 2
+    },
+    "outfitDotexe": {
+      "kind": "outfit",
+      "name": ".EXE",
+      "rarity": 4
+    },
+    "outfitTwilight": {
+      "kind": "outfit",
+      "name": "Twilight",
+      "rarity": 4
+    },
+    "outfitSortablue": {
+      "kind": "outfit",
+      "name": "Sorta Blue",
+      "rarity": 2
+    },
+    "outfitSunset": {
+      "kind": "outfit",
+      "name": "Sunset",
+      "rarity": 2
+    },
+    "outfitYinyang": {
+      "kind": "outfit",
+      "name": "Yin & Yang",
+      "rarity": 3
+    },
+    "outfitGalaxy": {
+      "kind": "outfit",
+      "name": "Galaxy",
+      "rarity": 2
+    },
+    "outfitDiamond": {
+      "kind": "outfit",
+      "name": "Diamond",
+      "rarity": 5
+    },
+    "outfitRosepetals": {
+      "kind": "outfit",
+      "name": "Rosepetals",
+      "rarity": 1
+    },
+    "outfitGreenwheat": {
+      "kind": "outfit",
+      "name": "Greenwheat",
+      "rarity": 1
+    },
+    "outfitNordCode": {
+      "kind": "outfit",
+      "name": "Nord Code",
+      "rarity": 5
+    },
+    "outfitDamascussteel": {
+      "kind": "outfit",
+      "name": "Damascussteel",
+      "rarity": 1
+    },
+    "outfitPurplefade": {
+      "kind": "outfit",
+      "name": "Purple Fade",
+      "rarity": 1
+    },
+    "outfitPandora": {
+      "kind": "outfit",
+      "name": "Pandora",
+      "rarity": 2
+    },
+    "outfitBlackpurple": {
+      "kind": "outfit",
+      "name": "Black Purple",
+      "rarity": 3
+    },
+    "outfitCrusader": {
+      "kind": "outfit",
+      "name": "Crusader",
+      "rarity": 1
+    },
+    "outfitDiamondred": {
+      "kind": "outfit",
+      "name": "Diamond Black/Red variant",
+      "rarity": 5
+    },
+    "outfitPanorama": {
+      "kind": "outfit",
+      "name": "Panorama",
+      "rarity": 2
+    },
+    "outfitCrimson": {
+      "kind": "outfit",
+      "name": "Crimson-Web",
+      "rarity": 2
+    },
+    "outfitDemon": {
+      "kind": "outfit",
+      "name": "Extrem demon ",
+      "rarity": 2
+    },
+    "outfitPinkwarrior": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitYellowhero": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitDarkslayed": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitBluebell": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitAegis": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitUmbra": {
+      "kind": "outfit",
+      "name": "Pink Warrior",
+      "rarity": 2
+    },
+    "outfitEvent": {
+      "kind": "outfit",
+      "name": "Event Winnr",
+      "rarity": 3
+    },
+    "outfitGold": {
+      "kind": "outfit",
+      "name": "Capital Gains",
+      "rarity": null
+    },
+    "outfitBarrel": {
+      "kind": "outfit",
+      "name": "Barrel Costume",
+      "rarity": null
+    },
+    "outfitWoodBarrel": {
+      "kind": "outfit",
+      "name": "Wood Barrel Costume",
+      "rarity": null
+    },
+    "outfitStone": {
+      "kind": "outfit",
+      "name": "Stone Costume",
+      "rarity": null
+    },
+    "outfitSpringTree": {
+      "kind": "outfit",
+      "name": "Tree Costume",
+      "rarity": null
+    },
+    "outfitHalloweenTree": {
+      "kind": "outfit",
+      "name": "Tree Costume",
+      "rarity": null
+    },
+    "outfitTreeSpooky": {
+      "kind": "outfit",
+      "name": "Spooky Tree Costume",
+      "rarity": null
+    },
+    "outfitStump": {
+      "kind": "outfit",
+      "name": "Stump Costume",
+      "rarity": null
+    },
+    "outfitBush": {
+      "kind": "outfit",
+      "name": "Bush Costume",
+      "rarity": null
+    },
+    "outfitLeafPile": {
+      "kind": "outfit",
+      "name": "Leaf Pile Costume",
+      "rarity": null
+    },
+    "outfitCrate": {
+      "kind": "outfit",
+      "name": "Crate Costume",
+      "rarity": null
+    },
+    "outfitTable": {
+      "kind": "outfit",
+      "name": "Table Costume",
+      "rarity": null
+    },
+    "outfitSoviet": {
+      "kind": "outfit",
+      "name": "Soviet Costume",
+      "rarity": null
+    },
+    "outfitAirdrop": {
+      "kind": "outfit",
+      "name": "Air Drop Costume",
+      "rarity": null
+    },
+    "outfitOven": {
+      "kind": "outfit",
+      "name": "Oven Costume",
+      "rarity": null
+    },
+    "outfitRefrigerator": {
+      "kind": "outfit",
+      "name": "Fridge Costume",
+      "rarity": null
+    },
+    "outfitVending": {
+      "kind": "outfit",
+      "name": "Vending Costume",
+      "rarity": null
+    },
+    "outfitPumpkin": {
+      "kind": "outfit",
+      "name": "Pumpkin Costume",
+      "rarity": null
+    },
+    "outfitWoodpile": {
+      "kind": "outfit",
+      "name": "Woodpile Costume",
+      "rarity": null
+    },
+    "outfitToilet": {
+      "kind": "outfit",
+      "name": "Toilet Costume",
+      "rarity": null
+    },
+    "outfitBushRiver": {
+      "kind": "outfit",
+      "name": "River Bush Costume",
+      "rarity": null
+    },
+    "outfitCrab": {
+      "kind": "outfit",
+      "name": "Crab Pot Costume",
+      "rarity": null
+    },
+    "outfitStumpAxe": {
+      "kind": "outfit",
+      "name": "Stump Axe Costume",
+      "rarity": null
+    },
+    "outfitSnowman": {
+      "kind": "outfit",
+      "name": "Snowman",
+      "rarity": 4
+    },
+    "outfitChewieCheese": {
+      "kind": "outfit",
+      "name": "Chewie Cheese",
+      "rarity": 2
+    },
+    "outfitFireball": {
+      "kind": "outfit",
+      "name": "Fireball",
+      "rarity": 5
+    },
+    "outfitWolf": {
+      "kind": "outfit",
+      "name": "Wolf",
+      "rarity": 3
+    },
+    "outfitPanda": {
+      "kind": "outfit",
+      "name": "Panda",
+      "rarity": 3
+    },
+    "outfitGreenTeaRex": {
+      "kind": "outfit",
+      "name": "Green Tea Rex",
+      "rarity": 3
+    },
+    "outfitDragonTails": {
+      "kind": "outfit",
+      "name": "Dragon Tails",
+      "rarity": 3
+    },
+    "outfitVillageNinja": {
+      "kind": "outfit",
+      "name": "Village Ninja",
+      "rarity": 3
+    },
+    "outfitChromesis": {
+      "kind": "outfit",
+      "name": "Chromesis",
+      "rarity": 5
+    },
+    "outfitDiamondRsrv": {
+      "kind": "outfit",
+      "name": "Diamond",
+      "rarity": 5
+    },
+    "outfitMultiTusking": {
+      "kind": "outfit",
+      "name": "Multi Tusking",
+      "rarity": 3
+    },
+    "outfitMaxAttack": {
+      "kind": "outfit",
+      "name": "Max Attack",
+      "rarity": 3
+    },
+    "outfitLustrousPaladin": {
+      "kind": "outfit",
+      "name": "Lustrous Paladin",
+      "rarity": 3
+    },
+    "outfitAstronaut": {
+      "kind": "outfit",
+      "name": "Astronaut",
+      "rarity": 4
+    },
+    "outfitDiamondy": {
+      "kind": "outfit",
+      "name": "Diamondy",
+      "rarity": 5
+    },
+    "outfitMecha": {
+      "kind": "outfit",
+      "name": "Mecha",
+      "rarity": 5
+    },
+    "outfitILavaYou": {
+      "kind": "outfit",
+      "name": "I Lava You",
+      "rarity": 4
+    },
+    "outfitIgris": {
+      "kind": "outfit",
+      "name": "Igris",
+      "rarity": 4
+    },
+    "outfitKingGalaxy": {
+      "kind": "outfit",
+      "name": "King Galaxy",
+      "rarity": 4
+    },
+    "outfitJuleVerny": {
+      "kind": "outfit",
+      "name": "Jule Verny",
+      "rarity": 5
+    },
+    "outfitGhoulFire": {
+      "kind": "outfit",
+      "name": "Blue Burns",
+      "rarity": 5
+    },
+    "outfitAhoy": {
+      "kind": "outfit",
+      "name": "Ahoy",
+      "rarity": 5
+    },
+    "outfitBuckTeeth": {
+      "kind": "outfit",
+      "name": "Buck Teeth",
+      "rarity": 4
+    },
+    "outfitPoinsetee": {
+      "kind": "outfit",
+      "name": "Poinsetee",
+      "rarity": 3
+    },
+    "outfitSnowyClaus": {
+      "kind": "outfit",
+      "name": "Snowy Claus",
+      "rarity": 3
+    },
+    "outfitCamoDeer": {
+      "kind": "outfit",
+      "name": "Camo Deer",
+      "rarity": 4
+    },
+    "outfitDisasteroid": {
+      "kind": "outfit",
+      "name": "Disasteroid",
+      "rarity": 5
+    },
+    "outfitIdDie4U": {
+      "kind": "outfit",
+      "name": "Id Die 4 U",
+      "rarity": 5
+    },
+    "outfitMwow": {
+      "kind": "outfit",
+      "name": "MEOW",
+      "rarity": 5
+    },
+    "outfitNeckNapkin": {
+      "kind": "outfit",
+      "name": "Neck Napkin",
+      "rarity": 1
+    },
+    "outfitTheySeeMeRolling": {
+      "kind": "outfit",
+      "name": "They See Me Rolling",
+      "rarity": 2
+    },
+    "outfitGoodFeather": {
+      "kind": "outfit",
+      "name": "Good Feather",
+      "rarity": 3
+    },
+    "outfitNachoHat": {
+      "kind": "outfit",
+      "name": "Nacho Hat",
+      "rarity": 3
+    },
+    "outfitSuppaPoncho": {
+      "kind": "outfit",
+      "name": "Suppa Poncho",
+      "rarity": 3
+    },
+    "outfitRanchDressing": {
+      "kind": "outfit",
+      "name": "Ranch Dressing",
+      "rarity": 4
+    },
+    "outfitSirLoin": {
+      "kind": "outfit",
+      "name": "Sir Loin",
+      "rarity": 5
+    },
+    "outfitMoosli": {
+      "kind": "outfit",
+      "name": "Moosli",
+      "rarity": 5
+    },
+    "outfitTopOnePercent": {
+      "kind": "outfit",
+      "name": "Top 1%",
+      "rarity": 5
+    },
+    "outfitTopTwoPercent": {
+      "kind": "outfit",
+      "name": "Top 2%",
+      "rarity": 5
+    },
+    "outfitTopThreePercent": {
+      "kind": "outfit",
+      "name": "Top 3%",
+      "rarity": 5
+    },
+    "outfitReTag": {
+      "kind": "outfit",
+      "name": "RSRV",
+      "rarity": 5
+    },
+    "outfitLog": {
+      "kind": "outfit",
+      "name": "Log",
+      "rarity": 5
+    },
+    "outfitLuminize": {
+      "kind": "outfit",
+      "name": "Luminize",
+      "rarity": 5
+    },
+    "outfitEclipse": {
+      "kind": "outfit",
+      "name": "Eclipse",
+      "rarity": 5
+    }
+  }
+}

@@ -3,7 +3,10 @@
 Kept self-contained (no db/discord-client/network imports) so images can be
 generated and unit-tested independently of the rest of the bot.
 """
+import functools
+import json
 import os
+import re
 from datetime import datetime, timezone
 from io import BytesIO
 
@@ -75,10 +78,83 @@ def load_font(size: int, weight: str = "regular"):
     return ImageFont.load_default()
 
 
+# Item icons and names exported from survev.de by tools/export_item_icons.mts.
+ITEM_ICON_DIR = os.path.join(_CURRENT_DIR, "assets", "items")
+_ITEM_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")  # "_..." files are the bot's own art
+
+
+@functools.lru_cache(maxsize=1)
+def load_item_manifest() -> dict[str, dict]:
+    """{type: {"kind", "name", "rarity"}} for every exported item, or {} when the icons aren't installed."""
+    try:
+        with open(os.path.join(ITEM_ICON_DIR, "manifest.json"), encoding="utf-8") as file:
+            items = json.load(file).get("items")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return items if isinstance(items, dict) else {}
+
+
+@functools.lru_cache(maxsize=256)
+def load_item_icon(item_type: str | None) -> Image.Image | None:
+    """The item's square RGBA icon, or None for unknown types. The type comes from the survev.de API, so it is
+    checked before it becomes part of a file path."""
+    if not isinstance(item_type, str) or not _ITEM_TYPE_RE.match(item_type):
+        return None
+    try:
+        with Image.open(os.path.join(ITEM_ICON_DIR, f"{item_type}.png")) as icon:
+            return icon.convert("RGBA")
+    except (OSError, ValueError):
+        return None
+
+
+def paste_item_icon(image: Image.Image, item_type: str | None, x: int, y: int, size: int) -> bool:
+    """Draws the item's icon as a size x size square at (x, y). Returns False when there's no icon."""
+    icon = load_item_icon(item_type)
+    if icon is None:
+        return False
+    if icon.size != (size, size):
+        icon = icon.resize((size, size), Image.LANCZOS)
+    image.paste(icon, (x, y), icon)
+    return True
+
+
+@functools.lru_cache(maxsize=1)
+def _load_fries_icon() -> Image.Image | None:
+    try:
+        with Image.open(os.path.join(ITEM_ICON_DIR, "_golden_fries.png")) as icon:
+            return icon.convert("RGBA")
+    except (OSError, ValueError):
+        return None
+
+
+def draw_fries_amount(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int], amount: int, font, fill,
+                      prefix: str = "") -> None:
+    """Draws "{prefix}{amount:,}" followed by the Golden Fries icon (or the word "fries" without the icon)."""
+    text = f"{prefix}{amount:,}"
+    icon = _load_fries_icon()
+    if icon is None:
+        draw.text(xy, f"{text} fries", font=font, fill=fill)
+        return
+    draw.text(xy, text, font=font, fill=fill)
+    left, top, right, bottom = draw.textbbox(xy, text, font=font)
+    size = max(12, round((bottom - top) * 1.25))
+    icon = icon.resize((size, size), Image.LANCZOS)
+    image.paste(icon, (int(right + 6), int((top + bottom) / 2 - size / 2)), icon)
+
+
 def prettify_shop_item_type(item_type: str | None) -> str:
     if not item_type:
         return "Unknown"
+    known = load_item_manifest().get(item_type)
+    if isinstance(known, dict) and known.get("name"):
+        return str(known["name"])
     return item_type.replace("_", " ").title()
+
+
+def shop_item_rarity(item_type: str | None) -> int | None:
+    known = load_item_manifest().get(item_type or "")
+    rarity = known.get("rarity") if isinstance(known, dict) else None
+    return rarity if isinstance(rarity, int) else None
 
 
 def compute_inventory_worth(items: list[dict]) -> int:
@@ -103,11 +179,13 @@ def group_inventory_items(items: list[dict]) -> list[dict]:
         key = (name, rarity)
         group = grouped.get(key)
         if group is None:
-            group = {"name": name, "rarity": rarity, "count": 0, "value": item.get("value")}
+            group = {"name": name, "rarity": rarity, "count": 0, "value": item.get("value"), "type": item.get("type")}
             grouped[key] = group
         group["count"] += 1
         if group["value"] is None:
             group["value"] = item.get("value")
+        if not group["type"]:
+            group["type"] = item.get("type")
     return list(grouped.values())
 
 
@@ -203,14 +281,19 @@ def rarity_color(rarity: int) -> tuple[int, int, int]:
 
 
 INVENTORY_GRID_COLUMNS = 4
-INVENTORY_CARD_HEIGHT = 150
+INVENTORY_CARD_HEIGHT = 180
 INVENTORY_CARD_GAP = 24
 INVENTORY_ITEMS_PER_PAGE = 12
+INVENTORY_ICON_SIZE = 116
 
 SHOP_GRID_COLUMNS = 2
-SHOP_CARD_HEIGHT = 160
+SHOP_CARD_HEIGHT = 190
 SHOP_CARD_GAP = 24
 SHOP_ITEMS_PER_PAGE = 6
+SHOP_ICON_SIZE = 104
+SHOP_ICON_CELL_WIDTH = 122
+# Offer slot ids from the survev.de market API (shared/types/user.ts ShopOffer.slot).
+SHOP_SLOT_LABELS = {0: "Daily pick", 1: "Daily bundle", 2: "Weekly pick", 3: "Weekly bundle"}
 
 
 def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
@@ -778,12 +861,19 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
         name_text = truncate_to_width(draw, entry["name"], name_font, card_width - 32)
         draw.text((x0 + 16, y0 + 18), name_text, font=name_font, fill=QUEUE_IMG_TEXT)
 
+        # Icon in the bottom-right corner, under the name, beside the count and value.
+        paste_item_icon(
+            image, entry.get("type"), x1 - 14 - INVENTORY_ICON_SIZE, y1 - 12 - INVENTORY_ICON_SIZE, INVENTORY_ICON_SIZE
+        )
+
         if entry["count"] > 1:
             draw.text((x0 + 16, y0 + 52), f"x{entry['count']}", font=count_font, fill=QUEUE_IMG_MUTED)
 
         value = entry["value"]
-        value_text = f"{value:,} 💰" if isinstance(value, (int, float)) and value else "Stock"
-        draw.text((x0 + 16, y1 - 42), value_text, font=value_font, fill=QUEUE_IMG_ACCENT)
+        if isinstance(value, (int, float)) and value:
+            draw_fries_amount(image, draw, (x0 + 16, y1 - 42), int(value), value_font, QUEUE_IMG_ACCENT)
+        else:
+            draw.text((x0 + 16, y1 - 42), "Stock", font=value_font, fill=QUEUE_IMG_ACCENT)
 
     page_text = f"Page {page + 1} of {total_pages}"
     page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
@@ -841,6 +931,7 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     item_font = load_font(18, "bold")
     price_font = load_font(20, "bold")
     status_font = load_font(16)
+    caption_font = load_font(15, "bold")
     footer_font = load_font(15)
 
     # Gradient header
@@ -854,8 +945,8 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
         fill=QUEUE_IMG_MUTED
     )
 
-    balance_text = f"Balance: {balance:,} Golden Fries 💰"
-    draw.text((QUEUE_IMG_PADDING, 130), balance_text, font=status_font, fill=QUEUE_IMG_ACCENT)
+    draw_fries_amount(image, draw, (QUEUE_IMG_PADDING, 130), int(balance or 0), status_font, QUEUE_IMG_ACCENT,
+                      prefix="Balance: ")
 
     # Render cards
     for idx, offer in enumerate(page_offers):
@@ -875,28 +966,49 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
             [x0, y0, x1, y1], radius=16, fill=card_color, outline=border_color, width=3
         )
 
-        # Slot info
-        slot = offer.get("slot", "?")
-        slot_text = f"Slot {slot}"
-        draw.text((x0 + 12, y0 + 12), slot_text, font=status_font, fill=QUEUE_IMG_MUTED)
+        # Item icons, right-aligned, each with its name under it in its rarity colour.
+        item_types = [item.get("type") for item in offer.get("items", [])][:4]
+        icons_left = x1 - 16 - len(item_types) * SHOP_ICON_CELL_WIDTH
+        for slot_index, item_type in enumerate(item_types):
+            cell_x = icons_left + slot_index * SHOP_ICON_CELL_WIDTH
+            icon_x = cell_x + (SHOP_ICON_CELL_WIDTH - SHOP_ICON_SIZE) // 2
+            paste_item_icon(image, item_type, icon_x, y0 + 18, SHOP_ICON_SIZE)
+            rarity = shop_item_rarity(item_type)
+            if len(item_types) == 1:  # the title already names a single item, so show its rarity instead
+                caption = INVENTORY_RARITY_FILTERS.get(str(rarity), "") if rarity is not None else ""
+            else:
+                caption = prettify_shop_item_type(item_type)
+            caption = truncate_to_width(draw, caption, caption_font, SHOP_ICON_CELL_WIDTH - 8)
+            caption_width = draw.textbbox((0, 0), caption, font=caption_font)[2]
+            draw.text(
+                (cell_x + (SHOP_ICON_CELL_WIDTH - caption_width) / 2, y0 + 18 + SHOP_ICON_SIZE + 12),
+                caption,
+                font=caption_font,
+                fill=rarity_color(rarity) if rarity is not None else QUEUE_IMG_MUTED,
+            )
 
-        # Items
-        item_types = offer.get("items", [])
-        item_label = ", ".join(prettify_shop_item_type(item.get("type")) for item in item_types[:2])
-        if len(item_types) > 2:
-            item_label += ", …"
-        item_label = truncate_to_width(draw, item_label, item_font, card_width - 32)
-        draw.text((x0 + 12, y0 + 40), item_label, font=item_font, fill=QUEUE_IMG_TEXT)
+        # Offer kind, title, price and status down the left side.
+        text_width = max(80, icons_left - x0 - 28)
+        slot = offer.get("slot")
+        slot_text = SHOP_SLOT_LABELS.get(slot, f"Slot {slot}")
+        draw.text((x0 + 16, y0 + 16), slot_text, font=status_font, fill=QUEUE_IMG_MUTED)
 
-        # Price
+        if len(item_types) == 1:
+            title = prettify_shop_item_type(item_types[0])
+        else:
+            title = f"{len(offer.get('items', []))} items"
+        title = truncate_to_width(draw, title, item_font, text_width)
+        draw.text((x0 + 16, y0 + 44), title, font=item_font, fill=QUEUE_IMG_TEXT)
+
         price = offer.get("price")
-        price_text = f"{price:,} 💰" if price is not None else "?"
-        draw.text((x0 + 12, y0 + 75), price_text, font=price_font, fill=QUEUE_IMG_ACCENT)
+        if isinstance(price, (int, float)):
+            draw_fries_amount(image, draw, (x0 + 16, y0 + 84), int(price), price_font, QUEUE_IMG_ACCENT)
+        else:
+            draw.text((x0 + 16, y0 + 84), "?", font=price_font, fill=QUEUE_IMG_ACCENT)
 
-        # Status
-        status_text = "✓ Bought" if purchased else "◯ Available"
+        status_text = "Bought" if purchased else "Available"
         status_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
-        draw.text((x0 + 12, y1 - 30), status_text, font=status_font, fill=status_color)
+        draw.text((x0 + 16, y1 - 36), status_text, font=status_font, fill=status_color)
 
     # Page indicator
     page_text = f"Page {page + 1} of {total_pages}"
