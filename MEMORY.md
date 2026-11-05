@@ -255,7 +255,7 @@ The following decisions were explicitly requested or approved by the user across
 
 ## Current Focus and Handover
 
-### Review Follow-ups 7, 16–18, 21–25 (2026-11-05, branch `review-follow-ups`, not merged into `main`)
+### Review Follow-ups 7, 16–18, 21–25 (2026-11-05, commit `20f22b9`, on `main`)
 - **Context:** after a whole-codebase review (ranked list given in chat), the user picked items 7, 16, 17, 18, 19, 21 and all of Tier 7 (22–25) and answered design questions; their choices are recorded on the TODO rows. Item 19 (inventory/market redesign) was then deferred by the user, who will do it with the survev.de SVG skin files. Started from clean commit `91f8940`.
 - **Changed:**
   - `/leaderboard` replaces `/leaderboard_weekly`/`/leaderboard_monthly` (5-minute per-player cache).
@@ -291,8 +291,8 @@ The following decisions were explicitly requested or approved by the user across
   - At the default `LOG_LEVEL=INFO`, the old per-click `DEBUG -` console lines are hidden.
   - The shared session keeps aiohttp's default 5-minute timeout (review item 5 was not selected).
   - README still advertises restart catch-up, which the deprioritized `game_num` bug breaks.
-- **Outstanding:** the three P1 items; item 19 (deferred to the user); merging into `main` and deploying when the user asks. After deploying, buttons on old `/inventory` and `/market` messages answer "menu expired". Old `/history` buttons redraw as `/profile`.
-- **Git:** committed and pushed (user's request) as one commit on branch `review-follow-ups`, branched from `91f8940`; `main` is unchanged until the user merges it. The commit modifies `AGENTS.md`, `MEMORY.md`, `README.md`, `bot_config.py`, `console_service.py`, `db.py`, `design-system/MASTER.md`, `discord_ui.py`, `leaderboard_bot.py`, `leaderboard_service.py`, `neatqueue_client.py`, `queue_stats_service.py`, `survev_client.py` and tests; adds `http_client.py`, `tests/fixtures/` and six test modules; deletes `.github/prompts/` (171 files).
+- **Outstanding:** the three P1 items; item 19 (deferred to the user); deploying to PebbleHost when the user asks. After deploying, buttons on old `/inventory` and `/market` messages answer "menu expired". Old `/history` buttons redraw as `/profile`.
+- **Git:** committed and pushed (user's request) as one commit on branch `review-follow-ups`, branched from `91f8940`; the user then had `main` fast-forwarded to it and pushed (`20f22b9`). The commit modifies `AGENTS.md`, `MEMORY.md`, `README.md`, `bot_config.py`, `console_service.py`, `db.py`, `design-system/MASTER.md`, `discord_ui.py`, `leaderboard_bot.py`, `leaderboard_service.py`, `neatqueue_client.py`, `queue_stats_service.py`, `survev_client.py` and tests; adds `http_client.py`, `tests/fixtures/` and six test modules; deletes `.github/prompts/` (171 files).
 
 ### Single-Game Timeline Fix & Queue Stats Review (2026-11-04, local changes)
 - **Fixed:** with one game (e.g. a live `1 - 0`), `_render_queue_card` drew the timeline axis across the whole box with the dot at its left end. It now draws no axis and centers the lone dot; two or more games are unchanged. Also applies to one-game Game breakdown cards. Two `TimelineTests` (the single-game one fails on the old code); spec updated in `design-system/MASTER.md` 5.1. 232 tests pass; `git diff --check` clean. Started from clean commit `a753b14` (the substitute work is committed in `65b86a7`/`a753b14`). No commit, push, or deployment.
