@@ -75,8 +75,8 @@ Used by `rarity_color(rarity)` for `4px` card borders in `generate_inventory_ima
 | Discord Color | Hex | Applied Commands / Views |
 |---|---|---|
 | `discord.Color.blurple()` | `#5865F2` | `/profile` (incl. the `survev.de Squad Tier` field), `/inventory`, `/market`, Game breakdown embeds |
-| `discord.Color.gold()` | `#F1C40F` | `/leaderboard` (Weekly), `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
-| `discord.Color.purple()` | `#9B59B6` | `/leaderboard` (Monthly) |
+| `discord.Color.gold()` | `#F1C40F` | `/leaderboard_old` (Weekly), `/leaderboard_season`, `/leaderboard_fries`, `/goldenfries`, `/hall_of_fame` |
+| `discord.Color.purple()` | `#9B59B6` | `/leaderboard_old` (Monthly) |
 
 ---
 

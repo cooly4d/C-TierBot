@@ -1,4 +1,4 @@
-"""/leaderboard (weekly/monthly, with its per-player cache) and /leaderboard_fries."""
+"""/leaderboard_old (legacy weekly/monthly, with its per-player cache) and /leaderboard_fries."""
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch

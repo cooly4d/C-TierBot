@@ -69,8 +69,8 @@ class RawMessageEditTests(unittest.IsolatedAsyncioTestCase):
 class SlashCommandSetTests(unittest.TestCase):
     def test_leaderboards_and_profile_replace_the_old_commands(self):
         names = {command.name for command in app.bot.tree.get_commands()}
-        self.assertTrue({"leaderboard", "leaderboard_season", "leaderboard_fries", "profile"} <= names)
-        self.assertFalse({"leaderboard_weekly", "leaderboard_monthly", "history"} & names)
+        self.assertTrue({"leaderboard_old", "leaderboard_season", "leaderboard_fries", "profile"} <= names)
+        self.assertFalse({"leaderboard_weekly", "leaderboard_monthly", "leaderboard", "history"} & names)
 
 
 class LeaderboardCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -80,7 +80,7 @@ class LeaderboardCommandTests(unittest.IsolatedAsyncioTestCase):
         interaction.followup.send = AsyncMock()
         embed = discord.Embed(title="🏆 Server Weekly Leaderboard")
         with patch.object(app, "generate_leaderboard_embed", new=AsyncMock(return_value=embed)) as build:
-            await app.leaderboard.callback(interaction)
+            await app.leaderboard_old.callback(interaction)
 
         build.assert_awaited_once_with("Weekly", 7, "kills")
         view = interaction.followup.send.await_args.kwargs["view"]

@@ -36,7 +36,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 
 | Command | What it does |
 | :--- | :--- |
-| `/leaderboard` | Top players over the last 7 days. Switch to the last 30 days with the Weekly/Monthly buttons, and pick the stat (kills, wins, games, damage) from the dropdown. Results are reused for 5 minutes, so switching back and forth is instant. |
+| `/leaderboard_old` | *(Legacy)* Top players over the last 7 days. Switch to the last 30 days with the Weekly/Monthly buttons, and pick the stat (kills, wins, games, damage) from the dropdown. Results are reused for 5 minutes, so switching back and forth is instant. |
 | `/leaderboard_season [month]` | 4v4 queue leaderboard for a calendar month (`YYYY-MM`, defaults to the current month), ranked by average damage, impact, or kills per game (pick from the dropdown). Use the Previous/Next buttons to page through everyone, 10 per page. |
 | `/leaderboard_fries` | Ranks linked players by Golden Fries balance. |
 

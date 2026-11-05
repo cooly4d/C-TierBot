@@ -216,8 +216,8 @@ async def verify(interaction: discord.Interaction):
     await run_survev_verification(interaction.user.id, lambda **kw: interaction.followup.send(ephemeral=True, **kw))
 
 
-@bot.tree.command(name="leaderboard", description="View the top players over the past 7 or 30 days.")
-async def leaderboard(interaction: discord.Interaction):
+@bot.tree.command(name="leaderboard_old", description="(Legacy) View the top players over the past 7 or 30 days.")
+async def leaderboard_old(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await generate_leaderboard_embed("Weekly", 7, "kills")
     await interaction.followup.send(embed=embed, view=LeaderboardView("Weekly", "kills"))
