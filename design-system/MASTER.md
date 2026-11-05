@@ -130,14 +130,15 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 
 | Token / Variable | Size | Weight | Color | Usage |
 |---|---|---|---|---|
-| `title_font` | `44px` | `bold` | `QUEUE_IMG_TEXT` | Header title (`"{username}'s Inventory"`, `"survev.de Shop"`) |
+| `title_font` | `40px` | `bold` | `QUEUE_IMG_TEXT` | Header title (`"{username}'s Inventory"`, `"{username}'s Shop"`) |
 | `empty_font` | `30px` | `bold` | `QUEUE_IMG_MUTED` | Empty state message (`"No items in this rarity."`) |
-| `subtitle_font` | `22px` | `bold` | `QUEUE_IMG_MUTED` | Page & count subtitle in header |
+| `subtitle_font` | `20px` | `bold` | `QUEUE_IMG_MUTED` | Count, filter/mode and page subtitle in header |
+| `label_font` / `amount_font` | `16px` / `36px` | `bold` | `QUEUE_IMG_MUTED` / `QUEUE_IMG_ACCENT` | Header `"TOTAL VALUE"` (inventory) or `"BALANCE"` (shop) label and amount |
 | `name_font` | `21px` | `bold` | `QUEUE_IMG_TEXT` | Inventory card skin name |
 | `value_font` / `price_font` | `20px` | `bold` | `QUEUE_IMG_ACCENT` | Item worth / offer price (`draw_fries_amount`: `"{price:,}"` plus the Golden Fries icon, `"Stock"`) |
 | `item_font` / `count_font` | `18px` | `bold` | `QUEUE_IMG_TEXT` / `QUEUE_IMG_MUTED` | Shop offer title (item name, or `"4 items"` for a bundle) / Inventory duplicate count (`"x3"`) |
 | `caption_font` | `15px` | `bold` | `rarity_color(rarity)` | Name under each bundle icon; rarity label (`"Epic"`) under a single offer's icon |
-| `status_font` | `16px` | `regular` | `ACCENT` / `MUTED` / `WIN` / `LOSE` | Shop balance line, offer kind (`"Daily pick"`, `"Weekly bundle"`), and `"Available"` / `"Bought"` |
+| `status_font` | `16px` | `regular` | `MUTED` / `WIN` / `LOSE` | Shop offer kind (`"Daily pick"`, `"Weekly bundle"`), and `"Available"` / `"Bought"` |
 
 - **Item icons:** `assets/items/{type}.png` (128 px, exported by `tools/export_item_icons.mts`), pasted with `paste_item_icon`. Inventory cards (`180px` tall) put a `116px` icon in the bottom-right corner under the name; shop cards (`190px`) right-align up to four `104px` icons in `122px` cells. Items with no icon keep a text-only card.
 - **No emoji in images:** Quattrocento has no emoji or symbol glyphs (`💰`, `✓`, `◯` render as dots). Draw amounts with `draw_fries_amount` and keep status labels plain text.
@@ -200,12 +201,14 @@ All sizes below are expressed in **1x logical canvas pixels** (on the `1600px`-w
 
 - **Inventory Grid (`generate_inventory_image`):**
   - `INVENTORY_GRID_COLUMNS = 4`, `INVENTORY_ITEMS_PER_PAGE = 12` (up to 3 rows)
-  - `INVENTORY_CARD_HEIGHT = 150px`, `INVENTORY_CARD_GAP = 24px`, card width = `360px`
-  - Bottom margin = `QUEUE_IMG_PADDING + 60` (`104px`) to house two-line centered pagination + attribution footer.
+  - `INVENTORY_CARD_HEIGHT = 180px`, `INVENTORY_CARD_GAP = 24px`, card width = `360px`
+  - Compact header (`_draw_compact_header`, shared with the shop; `INVENTORY_HEADER_HEIGHT = 128px`, flat `QUEUE_IMG_HEADER_BG` with a `2px` `QUEUE_IMG_ROW_DIVIDER` rule, no gradient): `40px` title and a `20px` muted subtitle (`"54 items · 13 unique · Page 1 of 2"`, plus `"9 Rare"` when filtered) on the left; right-aligned `16px` `"TOTAL VALUE"` label over a `36px` `QUEUE_IMG_ACCENT` amount with the Golden Fries icon (`compute_inventory_worth` of the whole inventory, whatever the filter). Grid starts `32px` below.
+  - Footer (`INVENTORY_FOOTER_HEIGHT = 56px`): attribution line only; the page number is in the subtitle and the embed footer.
+  - Saved with `save_palette_png` (256-colour palette, about a quarter of the size) so page switches upload faster.
 - **Shop Grid (`generate_shop_image`):**
   - `SHOP_GRID_COLUMNS = 2`, `SHOP_ITEMS_PER_PAGE = 6` (up to 3 rows)
-  - `SHOP_CARD_HEIGHT = 160px`, `SHOP_CARD_GAP = 24px`, card width = `744px`
-  - Bottom margin = `QUEUE_IMG_PADDING + 60` (`104px`).
+  - `SHOP_CARD_HEIGHT = 190px`, `SHOP_CARD_GAP = 24px`, card width = `744px`
+  - Same compact header and footer as the inventory (`_draw_compact_header`, `_draw_attribution_footer`): title `"{username}'s Shop"`, subtitle `"Weekly offers · 2 offers"` (plus `"Page X of Y"` only when there is more than one page), right-aligned `"BALANCE"` amount. Empty state `"No offers right now."`. Saved with `save_palette_png`.
 - **Compare Split Table (`generate_compare_image`):**
   - Full-width card from `x = 44px` to `1556px` (`1512px` wide), `card_top = 254px`
   - Player header block height: `name_block_height = 130px`

@@ -4,6 +4,8 @@ golden fries, and compare commands by combining survev.de API data with image_ut
 import asyncio
 import re
 import time
+from collections import OrderedDict
+from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -50,6 +52,63 @@ _inventory_cache: dict[int, dict] = {}
 _market_cache: dict[int, dict] = {}
 _tier_cache: dict[int, tuple[float, dict | None]] = {}
 _timeframe_cache: dict[tuple[int, int], tuple[float, dict]] = {}
+
+
+# Rendered /inventory and /market pages: ("inv"|"mkt", user_id, filter, page) -> (the cached data they were drawn
+# from, task giving the PNG bytes). Pages a click is likely to ask for next are rendered in the background, so a
+# click usually only has to upload. A refetched inventory or shop is a new object, so its pages are drawn again.
+RENDERED_PAGE_CACHE_SIZE = 96
+_rendered_page_cache: OrderedDict[tuple, tuple[dict, asyncio.Task]] = OrderedDict()
+
+
+def has_cached_inventory(user_id: int) -> bool:
+    return user_id in _inventory_cache
+
+
+def has_cached_market(user_id: int) -> bool:
+    return user_id in _market_cache
+
+
+def _png_bytes(render, *args) -> bytes:
+    return render(*args).getvalue()
+
+
+def _rendered_page_task(key: tuple, source: dict, render, *args) -> asyncio.Task:
+    """The (possibly still running) render for `key`, started now unless it is cached for this `source` object."""
+    cached = _rendered_page_cache.get(key)
+    if cached is not None and cached[0] is source:
+        task = cached[1]
+        if not task.done() or (not task.cancelled() and task.exception() is None):
+            _rendered_page_cache.move_to_end(key)
+            return task
+    task = asyncio.create_task(asyncio.to_thread(_png_bytes, render, *args))
+    # Background renders nobody awaits must not log "exception was never retrieved".
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    _rendered_page_cache[key] = (source, task)
+    _rendered_page_cache.move_to_end(key)
+    while len(_rendered_page_cache) > RENDERED_PAGE_CACHE_SIZE:
+        _rendered_page_cache.popitem(last=False)
+    return task
+
+
+def _inventory_page_task(user_id: int, inventory: dict, username: str, items: list[dict], page: int,
+                         rarity_key: str) -> asyncio.Task:
+    return _rendered_page_task(("inv", user_id, rarity_key, page), inventory,
+                               generate_inventory_image, username, items, page, rarity_key)
+
+
+def _market_page_task(user_id: int, market_data: dict, username: str, mode: str, page: int) -> asyncio.Task:
+    return _rendered_page_task(("mkt", user_id, mode, page), market_data,
+                               generate_shop_image, username, market_data, mode, page)
+
+
+def _market_total_pages(market_data: dict, mode: str) -> int:
+    offers = market_data.get("offers", [])
+    if mode == "daily":
+        offers = [o for o in offers if o.get("slot") in (0, 1)]
+    elif mode == "weekly":
+        offers = [o for o in offers if o.get("slot") in (2, 3)]
+    return max(1, -(-len(offers) // SHOP_ITEMS_PER_PAGE))
 
 
 def _store_cache_entry(cache: dict[int, dict], user_id: int, data: dict):
@@ -104,9 +163,14 @@ async def build_inventory_image_payload(
         grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
     total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
     clamped_page = max(0, min(page, total_pages - 1))
-    image_buffer = await asyncio.to_thread(generate_inventory_image, username, items, clamped_page, rarity_key)
+    png = await asyncio.shield(
+        _inventory_page_task(target_user.id, inventory, username, items, clamped_page, rarity_key)
+    )
+    for neighbour in (clamped_page + 1, clamped_page - 1):
+        if 0 <= neighbour < total_pages:
+            _inventory_page_task(target_user.id, inventory, username, items, neighbour, rarity_key)
     filename = f"inventory_{target_user.id}_p{clamped_page}.png"
-    file = discord.File(image_buffer, filename=filename)
+    file = discord.File(BytesIO(png), filename=filename)
     return f"{username}'s survev.de inventory", file, None, total_pages, filename, rarity_counts
 
 
@@ -129,21 +193,19 @@ async def build_shop_image_payload(
         _store_cache_entry(_market_cache, target_user.id, market_data)
 
     username = market_data.get("username") or str(target_user)
-    offers = market_data.get("offers", [])
-
-    if mode == "daily":
-        shown_offers = [o for o in offers if o.get("slot") in (0, 1)]
-    elif mode == "weekly":
-        shown_offers = [o for o in offers if o.get("slot") in (2, 3)]
-    else:
-        shown_offers = offers
-
-    total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
+    total_pages = _market_total_pages(market_data, mode)
     clamped_page = max(0, min(page, total_pages - 1))
 
-    image_buffer = await asyncio.to_thread(generate_shop_image, username, market_data, mode, clamped_page)
+    png = await asyncio.shield(_market_page_task(target_user.id, market_data, username, mode, clamped_page))
+    # Get the other modes' first pages and this mode's neighbours ready for the next click.
+    for other_mode in ("daily", "weekly", "all"):
+        if other_mode != mode:
+            _market_page_task(target_user.id, market_data, username, other_mode, 0)
+    for neighbour in (clamped_page + 1, clamped_page - 1):
+        if 0 <= neighbour < total_pages:
+            _market_page_task(target_user.id, market_data, username, mode, neighbour)
     filename = f"shop_{target_user.id}_{mode}_p{clamped_page}.png"
-    file = discord.File(image_buffer, filename=filename)
+    file = discord.File(BytesIO(png), filename=filename)
 
     mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
     content = f"{username}'s {mode_label} Offers"

@@ -46,9 +46,9 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | :--- | :--- |
 | `/profile [member]` | Opens on an **Overview**: 4v4 play time, average damage and impact (all-time and this month), and the player's survev.de Squad tier (for example `B- · rating 29 · EU`; needs a linked account). In a server, the **History** button shows their last 10 finished queues there as a card with a trend chart; switch the chart between Damage, Impact, and Kills with the buttons below it. |
 | `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
-| `/inventory [member]` | Paged inventory image with a rarity filter. Each card shows the item's icon, the same art as the survev.de locker. |
+| `/inventory [member]` | Paged inventory image with a rarity filter and the inventory's total value. Each card shows the item's icon, the same art as the survev.de locker. |
 | `/goldenfries [member]` | Golden Fries balance. |
-| `/market [member]` | Shop offers image with buttons to switch between Daily, Weekly, and All. Every offer shows each item's icon and name. |
+| `/market [member]` | Shop offers image with the player's Golden Fries balance and buttons to switch between Daily, Weekly, and All. Every offer shows each item's icon and name. |
 
 ### Queues
 

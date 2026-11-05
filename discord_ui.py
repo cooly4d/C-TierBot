@@ -23,6 +23,8 @@ from leaderboard_service import (
     build_seasonal_leaderboard_payload,
     build_shop_image_payload,
     generate_leaderboard_embed,
+    has_cached_inventory,
+    has_cached_market,
     normalize_season_stat,
 )
 from queue_stats_service import build_queue_game_payload, parse_queue_match_id, queue_games_unavailable
@@ -391,35 +393,57 @@ async def build_market_message(target_user: discord.abc.User, access_token: str,
     return embed, file, ShopPaginationView(target_user.id, page, total_pages, mode), None
 
 
+async def _tell_clicker(interaction: discord.Interaction, text: str, ephemeral: bool = True):
+    """Sends a message whether or not the click has been answered yet."""
+    if interaction.response.is_done():
+        await interaction.followup.send(text, ephemeral=ephemeral)
+    else:
+        await interaction.response.send_message(text, ephemeral=ephemeral)
+
+
+async def _show_page(interaction: discord.Interaction, file: discord.File, embed: discord.Embed, view):
+    """Swaps the clicked message to the new page: as the click's answer when possible (one request to Discord),
+    otherwise as an edit after the earlier defer."""
+    if interaction.response.is_done():
+        await interaction.message.edit(attachments=[file], embed=embed, view=view)
+    else:
+        await interaction.response.edit_message(attachments=[file], embed=embed, view=view)
+
+
 async def _paged_target(interaction: discord.Interaction, target_id: int):
     """(user, token) for the player a paged message belongs to, after telling the clicker if either is gone."""
     access_token = get_user_token(target_id)
     if not access_token:
-        await interaction.followup.send("That player's survev.de account is no longer linked.", ephemeral=True)
+        await _tell_clicker(interaction, "That player's survev.de account is no longer linked.")
         return None, None
     target = await _resolve_user(interaction, target_id)
     if target is None:
-        await interaction.followup.send("Couldn't find that player anymore.", ephemeral=True)
+        await _tell_clicker(interaction, "Couldn't find that player anymore.")
         return None, None
     return target, access_token
 
 
 async def refresh_market_message(interaction: discord.Interaction, target_id: int, mode: str, page: int):
-    """Shows another mode or page of a /market message, reusing the cached shop data when available."""
-    await interaction.response.defer()
+    """Shows another mode or page of a /market message, reusing the cached shop data when available. Like
+    refresh_inventory_message, a click on cached data is answered with the edit itself."""
+    if not has_cached_market(target_id):
+        await interaction.response.defer()  # the offers have to be fetched from survev.de first
     target_user, access_token = await _paged_target(interaction, target_id)
     if target_user is None:
         return
     embed, file, view, error_text = await build_market_message(target_user, access_token, mode, page, use_cache=True)
     if error_text:
-        await interaction.followup.send("Failed to reload shop offers.")
+        await _tell_clicker(interaction, "Failed to reload shop offers.", ephemeral=False)
         return
-    await interaction.message.edit(attachments=[file], embed=embed, view=view)
+    await _show_page(interaction, file, embed, view)
 
 
 async def refresh_inventory_message(interaction: discord.Interaction, target_id: int, rarity_filter: str, page: int):
-    """Shows another rarity or page of an /inventory message, reusing the cached inventory when available."""
-    await interaction.response.defer()
+    """Shows another rarity or page of an /inventory message, reusing the cached inventory when available.
+    With the inventory cached, the page is ready (usually pre-rendered) well inside Discord's 3-second window, so the
+    click is answered with the edit itself: one request to Discord instead of a defer followed by an edit."""
+    if not has_cached_inventory(target_id):
+        await interaction.response.defer()  # the inventory has to be fetched from survev.de first
     target_user, access_token = await _paged_target(interaction, target_id)
     if target_user is None:
         return
@@ -427,9 +451,9 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_id:
         target_user, access_token, rarity_filter, page, use_cache=True
     )
     if error_text:
-        await interaction.followup.send("Failed to reload inventory.")
+        await _tell_clicker(interaction, "Failed to reload inventory.", ephemeral=False)
         return
-    await interaction.message.edit(attachments=[file], embed=embed, view=view)
+    await _show_page(interaction, file, embed, view)
 
 
 PROFILE_TABS = ("overview", "history")

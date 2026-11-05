@@ -94,7 +94,7 @@ def load_item_manifest() -> dict[str, dict]:
     return items if isinstance(items, dict) else {}
 
 
-@functools.lru_cache(maxsize=256)
+@functools.lru_cache(maxsize=512)
 def load_item_icon(item_type: str | None) -> Image.Image | None:
     """The item's square RGBA icon, or None for unknown types. The type comes from the survev.de API, so it is
     checked before it becomes part of a file path."""
@@ -109,13 +109,19 @@ def load_item_icon(item_type: str | None) -> Image.Image | None:
 
 def paste_item_icon(image: Image.Image, item_type: str | None, x: int, y: int, size: int) -> bool:
     """Draws the item's icon as a size x size square at (x, y). Returns False when there's no icon."""
-    icon = load_item_icon(item_type)
+    icon = _sized_item_icon(item_type, size)
     if icon is None:
         return False
-    if icon.size != (size, size):
-        icon = icon.resize((size, size), Image.LANCZOS)
     image.paste(icon, (x, y), icon)
     return True
+
+
+@functools.lru_cache(maxsize=1024)
+def _sized_item_icon(item_type: str | None, size: int) -> Image.Image | None:
+    icon = load_item_icon(item_type)
+    if icon is None or icon.size == (size, size):
+        return icon
+    return icon.resize((size, size), Image.LANCZOS)
 
 
 @functools.lru_cache(maxsize=1)
@@ -128,16 +134,22 @@ def _load_fries_icon() -> Image.Image | None:
 
 
 def draw_fries_amount(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int], amount: int, font, fill,
-                      prefix: str = "") -> None:
-    """Draws "{prefix}{amount:,}" followed by the Golden Fries icon (or the word "fries" without the icon)."""
+                      prefix: str = "", align: str = "left") -> None:
+    """Draws "{prefix}{amount:,}" followed by the Golden Fries icon (or the word "fries" without the icon).
+    With align="right", xy[0] is where the icon (or text) ends instead of where the text starts."""
     text = f"{prefix}{amount:,}"
     icon = _load_fries_icon()
     if icon is None:
-        draw.text(xy, f"{text} fries", font=font, fill=fill)
-        return
-    draw.text(xy, text, font=font, fill=fill)
-    left, top, right, bottom = draw.textbbox(xy, text, font=font)
+        text = f"{text} fries"
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
     size = max(12, round((bottom - top) * 1.25))
+    x, y = xy
+    if align == "right":
+        x -= (right - left) + (size + 6 if icon is not None else 0)
+    draw.text((x, y), text, font=font, fill=fill)
+    if icon is None:
+        return
+    left, top, right, bottom = draw.textbbox((x, y), text, font=font)
     icon = icon.resize((size, size), Image.LANCZOS)
     image.paste(icon, (int(right + 6), int((top + bottom) / 2 - size / 2)), icon)
 
@@ -285,6 +297,8 @@ INVENTORY_CARD_HEIGHT = 180
 INVENTORY_CARD_GAP = 24
 INVENTORY_ITEMS_PER_PAGE = 12
 INVENTORY_ICON_SIZE = 116
+INVENTORY_HEADER_HEIGHT = 128
+INVENTORY_FOOTER_HEIGHT = 56
 
 SHOP_GRID_COLUMNS = 2
 SHOP_CARD_HEIGHT = 190
@@ -797,53 +811,88 @@ def generate_queue_game_image(
     )
 
 
+def save_palette_png(image: Image.Image) -> BytesIO:
+    """PNG with a 256-colour palette: about a quarter of the size of a full-colour PNG for these flat-colour cards,
+    so Discord uploads and shows a new page faster."""
+    buffer = BytesIO()
+    image.quantize(256, method=Image.Quantize.FASTOCTREE).save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
+def _draw_compact_header(image: Image.Image, draw: ImageDraw.ImageDraw, title: str, subtitle: str,
+                         amount_label: str, amount: int) -> None:
+    """The /inventory and /market header: title and muted subtitle on the left, a labelled Golden Fries amount on the
+    right (the inventory's total value or the player's balance)."""
+    draw.rectangle([0, 0, QUEUE_IMG_WIDTH, INVENTORY_HEADER_HEIGHT], fill=QUEUE_IMG_HEADER_BG)
+    draw.line([(0, INVENTORY_HEADER_HEIGHT), (QUEUE_IMG_WIDTH, INVENTORY_HEADER_HEIGHT)],
+              fill=QUEUE_IMG_ROW_DIVIDER, width=2)
+    label_font = load_font(16, "bold")
+    amount_font = load_font(36, "bold")
+    right_edge = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+    label_width = draw.textbbox((0, 0), amount_label, font=label_font)[2]
+    draw.text((right_edge - label_width, 24), amount_label, font=label_font, fill=QUEUE_IMG_MUTED)
+    draw_fries_amount(image, draw, (right_edge, 50), amount, amount_font, QUEUE_IMG_ACCENT, align="right")
+    amount_width = max(label_width, draw.textbbox((0, 0), f"{amount:,}", font=amount_font)[2] + 60)
+
+    text_width = right_edge - amount_width - QUEUE_IMG_PADDING - 32
+    title_font = load_font(40, "bold")
+    subtitle_font = load_font(20, "bold")
+    draw.text((QUEUE_IMG_PADDING, 20), truncate_to_width(draw, title, title_font, text_width),
+              font=title_font, fill=QUEUE_IMG_TEXT)
+    draw.text((QUEUE_IMG_PADDING, 76), truncate_to_width(draw, subtitle, subtitle_font, text_width),
+              font=subtitle_font, fill=QUEUE_IMG_MUTED)
+
+
+def _draw_attribution_footer(draw: ImageDraw.ImageDraw, height: int) -> None:
+    footer_font = load_font(15)
+    footer_text = "Data courtesy of survev.de API :)"
+    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
+    draw.text(((QUEUE_IMG_WIDTH - footer_width) / 2, height - 36), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+
+
 def generate_inventory_image(username: str, items: list[dict], page: int = 0, rarity_filter: str = "all") -> BytesIO:
     rarity_key = normalize_inventory_rarity_filter(rarity_filter)
 
-    grouped_items = group_inventory_items(items)
+    all_grouped = group_inventory_items(items)
+    grouped_items = all_grouped
     if rarity_key != "all":
         rarity_value = int(rarity_key)
         grouped_items = [entry for entry in grouped_items if int(entry.get("rarity", -1)) == rarity_value]
-    grouped_items.sort(key=lambda entry: (entry["rarity"], entry["value"] or 0), reverse=True)
-    
-    start_idx = page * INVENTORY_ITEMS_PER_PAGE
-    end_idx = start_idx + INVENTORY_ITEMS_PER_PAGE
-    shown_items = grouped_items[start_idx:end_idx]
-    total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
+    grouped_items = sorted(grouped_items, key=lambda entry: (entry["rarity"], entry["value"] or 0), reverse=True)
 
-    header_height = QUEUE_IMG_HEADER_HEIGHT
-    grid_top = header_height + QUEUE_IMG_PADDING
+    total_pages = max(1, -(-len(grouped_items) // INVENTORY_ITEMS_PER_PAGE))
+    page = max(0, min(page, total_pages - 1))
+    shown_items = grouped_items[page * INVENTORY_ITEMS_PER_PAGE:(page + 1) * INVENTORY_ITEMS_PER_PAGE]
+
+    grid_top = INVENTORY_HEADER_HEIGHT + 32
     grid_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
     card_width = (grid_width - INVENTORY_CARD_GAP * (INVENTORY_GRID_COLUMNS - 1)) // INVENTORY_GRID_COLUMNS
     rows = max(1, -(-len(shown_items) // INVENTORY_GRID_COLUMNS))
-    height = grid_top + rows * (INVENTORY_CARD_HEIGHT + INVENTORY_CARD_GAP) + QUEUE_IMG_PADDING + 60
+    height = grid_top + rows * INVENTORY_CARD_HEIGHT + (rows - 1) * INVENTORY_CARD_GAP + INVENTORY_FOOTER_HEIGHT
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(44, "bold")
-    subtitle_font = load_font(22, "bold")
     name_font = load_font(21, "bold")
     count_font = load_font(18, "bold")
     value_font = load_font(20, "bold")
-    footer_font = load_font(15)
 
-    _draw_header_gradient(draw, header_height)
-
-    draw.text((QUEUE_IMG_PADDING, 26), f"{username}'s Inventory", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text(
-        (QUEUE_IMG_PADDING, 86),
-        f"Page {page + 1}/{total_pages} ({len(shown_items)} of {len(grouped_items)} unique skins)",
-        font=subtitle_font,
-        fill=QUEUE_IMG_MUTED
-    )
+    # Whose inventory and what's in it on the left, its total worth (whatever the filter) on the right.
+    item_count = len(items)
+    subtitle_parts = [f"{item_count:,} item{'' if item_count == 1 else 's'}", f"{len(all_grouped):,} unique"]
+    if rarity_key != "all":
+        subtitle_parts.append(f"{len(grouped_items):,} {INVENTORY_RARITY_FILTERS[rarity_key]}")
+    subtitle_parts.append(f"Page {page + 1} of {total_pages}")
+    _draw_compact_header(image, draw, f"{username}'s Inventory", " · ".join(subtitle_parts), "TOTAL VALUE",
+                         compute_inventory_worth(items))
 
     if not shown_items:
         empty_text = "No items in this rarity."
         empty_font = load_font(30, "bold")
         empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
         empty_x = (QUEUE_IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) / 2
-        empty_y = grid_top + (INVENTORY_CARD_HEIGHT / 2)
+        empty_y = grid_top + (INVENTORY_CARD_HEIGHT - (empty_bbox[3] - empty_bbox[1])) / 2
         draw.text((empty_x, empty_y), empty_text, font=empty_font, fill=QUEUE_IMG_MUTED)
 
     for idx, entry in enumerate(shown_items):
@@ -875,20 +924,8 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
         else:
             draw.text((x0 + 16, y1 - 42), "Stock", font=value_font, fill=QUEUE_IMG_ACCENT)
 
-    page_text = f"Page {page + 1} of {total_pages}"
-    page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
-    page_x = (QUEUE_IMG_WIDTH - page_width) / 2
-    draw.text((page_x, height - 52), page_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
+    _draw_attribution_footer(draw, height)
+    return save_palette_png(image)
 
 
 def generate_shop_image(username: str, market_data: dict, mode: str = "all", page: int = 0) -> BytesIO:
@@ -898,13 +935,13 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     # Filter by mode
     if mode == "daily":
         shown_offers = [offer for offer in offers if offer.get("slot") in (0, 1)]
-        mode_label = "Daily Offers"
+        mode_label = "Daily offers"
     elif mode == "weekly":
         shown_offers = [offer for offer in offers if offer.get("slot") in (2, 3)]
-        mode_label = "Weekly Offers"
+        mode_label = "Weekly offers"
     else:
         shown_offers = offers[:]
-        mode_label = "All Offers"
+        mode_label = "All offers"
 
     shown_offers = sorted(shown_offers, key=lambda o: o.get("slot", 0))
     total_pages = max(1, -(-len(shown_offers) // SHOP_ITEMS_PER_PAGE))
@@ -916,37 +953,34 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     end_idx = start_idx + SHOP_ITEMS_PER_PAGE
     page_offers = shown_offers[start_idx:end_idx]
 
-    header_height = QUEUE_IMG_HEADER_HEIGHT
-    grid_top = header_height + QUEUE_IMG_PADDING
+    grid_top = INVENTORY_HEADER_HEIGHT + 32
     grid_width = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING * 2
     card_width = (grid_width - SHOP_CARD_GAP * (SHOP_GRID_COLUMNS - 1)) // SHOP_GRID_COLUMNS
     rows = max(1, -(-len(page_offers) // SHOP_GRID_COLUMNS))
-    height = grid_top + rows * (SHOP_CARD_HEIGHT + SHOP_CARD_GAP) + QUEUE_IMG_PADDING + 60
+    height = grid_top + rows * SHOP_CARD_HEIGHT + (rows - 1) * SHOP_CARD_GAP + INVENTORY_FOOTER_HEIGHT
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(44, "bold")
-    subtitle_font = load_font(22, "bold")
     item_font = load_font(18, "bold")
     price_font = load_font(20, "bold")
     status_font = load_font(16)
     caption_font = load_font(15, "bold")
-    footer_font = load_font(15)
 
-    # Gradient header
-    _draw_header_gradient(draw, header_height)
+    # Whose shop and which offers on the left, their Golden Fries balance on the right.
+    subtitle_parts = [mode_label, f"{len(shown_offers)} offer{'' if len(shown_offers) == 1 else 's'}"]
+    if total_pages > 1:
+        subtitle_parts.append(f"Page {page + 1} of {total_pages}")
+    _draw_compact_header(image, draw, f"{username}'s Shop", " · ".join(subtitle_parts), "BALANCE",
+                         int(balance or 0))
 
-    draw.text((QUEUE_IMG_PADDING, 26), "survev.de Shop", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text(
-        (QUEUE_IMG_PADDING, 86),
-        f"{username}'s {mode_label} — Page {page + 1}/{total_pages} ({len(page_offers)} of {len(shown_offers)} offers)",
-        font=subtitle_font,
-        fill=QUEUE_IMG_MUTED
-    )
-
-    draw_fries_amount(image, draw, (QUEUE_IMG_PADDING, 130), int(balance or 0), status_font, QUEUE_IMG_ACCENT,
-                      prefix="Balance: ")
+    if not page_offers:
+        empty_text = "No offers right now."
+        empty_font = load_font(30, "bold")
+        empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
+        draw.text(((QUEUE_IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) / 2,
+                   grid_top + (SHOP_CARD_HEIGHT - (empty_bbox[3] - empty_bbox[1])) / 2),
+                  empty_text, font=empty_font, fill=QUEUE_IMG_MUTED)
 
     # Render cards
     for idx, offer in enumerate(page_offers):
@@ -1010,21 +1044,8 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
         status_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
         draw.text((x0 + 16, y1 - 36), status_text, font=status_font, fill=status_color)
 
-    # Page indicator
-    page_text = f"Page {page + 1} of {total_pages}"
-    page_width = draw.textbbox((0, 0), page_text, font=footer_font)[2]
-    page_x = (QUEUE_IMG_WIDTH - page_width) / 2
-    draw.text((page_x, height - 52), page_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
+    _draw_attribution_footer(draw, height)
+    return save_palette_png(image)
 
 
 def _pick_compare_row_colors(left_num: float | None, right_num: float | None) -> tuple:

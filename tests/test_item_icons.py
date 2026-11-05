@@ -61,7 +61,7 @@ class CardIconTests(unittest.TestCase):
         without = _render(image_utils.generate_inventory_image, "Awang", [{**item, "type": "noSuchItem"}])
         self.assertEqual(with_icon.size, without.size)
         x0 = image_utils.QUEUE_IMG_PADDING
-        y0 = image_utils.QUEUE_IMG_HEADER_HEIGHT + image_utils.QUEUE_IMG_PADDING
+        y0 = image_utils.INVENTORY_HEADER_HEIGHT + 32
         card_width = (image_utils.QUEUE_IMG_WIDTH - 2 * x0 - image_utils.INVENTORY_CARD_GAP * 3) // 4
         size = image_utils.INVENTORY_ICON_SIZE
         icon_box = (x0 + card_width - 14 - size, y0 + image_utils.INVENTORY_CARD_HEIGHT - 12 - size,
