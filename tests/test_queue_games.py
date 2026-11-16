@@ -432,25 +432,33 @@ class BreakdownHandlerTests(unittest.IsolatedAsyncioTestCase):
         interaction.guild_id = 10
         interaction.message = SimpleNamespace(attachments=[SimpleNamespace(filename=n) for n in filenames], content="")
         interaction.response.defer = AsyncMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
         interaction.followup.send = AsyncMock()
         interaction.edit_original_response = AsyncMock()
         return interaction
+
+    def assert_answered_in_one_request(self, interaction):
+        """The card is the click's answer itself: no defer, and nothing sent or edited afterwards."""
+        interaction.response.defer.assert_not_awaited()
+        interaction.followup.send.assert_not_awaited()
+        interaction.edit_original_response.assert_not_awaited()
 
     async def test_the_button_opens_the_first_game_as_an_ephemeral_message(self):
         interaction, embed, file, view = self.interaction(), object(), object(), object()
         with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(embed, file, view, None))) as build:
             await show_queue_game_breakdown(interaction)
 
-        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         build.assert_awaited_once_with(10, "3674", 0)
-        interaction.followup.send.assert_awaited_once_with(embed=embed, file=file, ephemeral=True, view=view)
+        interaction.response.send_message.assert_awaited_once_with(embed=embed, file=file, ephemeral=True, view=view)
+        self.assert_answered_in_one_request(interaction)
 
     async def test_a_single_game_queue_is_sent_without_a_view(self):
         interaction, embed, file = self.interaction(), object(), object()
         with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(embed, file, None, None))):
             await show_queue_game_breakdown(interaction)
 
-        interaction.followup.send.assert_awaited_once_with(embed=embed, file=file, ephemeral=True)
+        interaction.response.send_message.assert_awaited_once_with(embed=embed, file=file, ephemeral=True)
 
     async def test_a_message_that_is_not_a_queue_result_gets_the_generic_notice(self):
         interaction = self.interaction(filenames=())
@@ -458,32 +466,42 @@ class BreakdownHandlerTests(unittest.IsolatedAsyncioTestCase):
             await show_queue_game_breakdown(interaction)
 
         build.assert_not_awaited()
-        interaction.followup.send.assert_awaited_once_with(queue_games_unavailable(None), ephemeral=True)
+        interaction.response.send_message.assert_awaited_once_with(queue_games_unavailable(None), ephemeral=True)
+        self.assert_answered_in_one_request(interaction)
 
     async def test_missing_data_is_reported_privately(self):
         interaction = self.interaction()
         with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(None, None, None, "gone"))):
             await show_queue_game_breakdown(interaction)
 
-        interaction.followup.send.assert_awaited_once_with("gone", ephemeral=True)
+        interaction.response.send_message.assert_awaited_once_with("gone", ephemeral=True)
+        self.assert_answered_in_one_request(interaction)
 
-    async def test_paging_swaps_the_ephemeral_message_through_the_interaction(self):
+    async def test_paging_swaps_the_ephemeral_message_as_the_answer(self):
         interaction, embed, file, view = self.interaction(), object(), object(), object()
         with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(embed, file, view, None))) as build:
             await refresh_queue_game_message(interaction, "3674", 2)
 
-        interaction.response.defer.assert_awaited_once_with()
         build.assert_awaited_once_with(10, "3674", 2)
-        interaction.edit_original_response.assert_awaited_once_with(embed=embed, attachments=[file], view=view)
-        interaction.followup.send.assert_not_awaited()
+        interaction.response.edit_message.assert_awaited_once_with(embed=embed, attachments=[file], view=view)
+        interaction.response.send_message.assert_not_awaited()
+        self.assert_answered_in_one_request(interaction)
+
+    async def test_paging_a_single_game_queue_clears_the_buttons(self):
+        interaction, embed, file = self.interaction(), object(), object()
+        with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(embed, file, None, None))):
+            await refresh_queue_game_message(interaction, "3674", 0)
+
+        interaction.response.edit_message.assert_awaited_once_with(embed=embed, attachments=[file], view=None)
 
     async def test_paging_reports_missing_data_instead_of_editing(self):
         interaction = self.interaction()
         with patch("discord_ui.build_queue_game_message", new=AsyncMock(return_value=(None, None, None, "gone"))):
             await refresh_queue_game_message(interaction, "3674", 2)
 
-        interaction.edit_original_response.assert_not_awaited()
-        interaction.followup.send.assert_awaited_once_with("gone", ephemeral=True)
+        interaction.response.edit_message.assert_not_awaited()
+        interaction.response.send_message.assert_awaited_once_with("gone", ephemeral=True)
+        self.assert_answered_in_one_request(interaction)
 
 
 class BreakdownRoutingTests(unittest.IsolatedAsyncioTestCase):

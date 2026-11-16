@@ -360,6 +360,16 @@ class HistoryImageRenderingTests(unittest.TestCase):
                 img = Image.open(io.BytesIO(buf.getvalue()))
                 self.assertEqual(img.width, image_utils.QUEUE_IMG_WIDTH)
 
+    def test_the_area_under_the_trend_line_is_tinted(self):
+        # The translucent fill is blended into just its own box of the card; its inside must still carry the tint.
+        tinted = Image.alpha_composite(
+            Image.new("RGBA", (1, 1), (*image_utils.QUEUE_IMG_CARD_BG, 255)),
+            Image.new("RGBA", (1, 1), (255, 165, 50, 28)),
+        ).convert("RGB").getpixel((0, 0))
+        buf = image_utils.generate_history_image("Awang", self.sample_history(5), metric="damage")
+        counts = {color: n for n, color in Image.open(io.BytesIO(buf.getvalue())).convert("RGB").getcolors(1 << 22)}
+        self.assertGreater(counts.get(tinted, 0), 10_000)
+
     def test_extreme_and_zero_values_render_cleanly(self):
         rows = self.sample_history(2)
         rows[0]["avg_damage"] = 0.0

@@ -229,22 +229,39 @@ class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(_buttons(view), [])
             self.assertEqual([c.custom_id for c in view.children], ["season_stat:2026-09"])
 
-    async def test_refresh_edits_message_with_requested_page(self):
+    @staticmethod
+    def _refresh_interaction(already_answered=False):
         interaction = MagicMock()
         interaction.guild_id = 10
-        interaction.response.is_done.return_value = False
+        interaction.response.is_done.return_value = already_answered
         interaction.response.defer = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
         interaction.message.edit = AsyncMock()
+        return interaction
+
+    async def test_refresh_answers_the_click_with_the_requested_page(self):
+        interaction = self._refresh_interaction()
 
         with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
             await refresh_seasonal_leaderboard_message(interaction, "2026-09", 2)
 
-        interaction.response.defer.assert_awaited_once()
-        edit_kwargs = interaction.message.edit.await_args.kwargs
+        # One request to Discord: the edit is the click's answer, with no defer before it.
+        interaction.response.defer.assert_not_awaited()
+        interaction.message.edit.assert_not_awaited()
+        edit_kwargs = interaction.response.edit_message.await_args.kwargs
         self.assertEqual(edit_kwargs["embed"].fields[0].name, "Ranks 21-23")
         view = edit_kwargs["view"]
         self.assertEqual([c.custom_id for c in _buttons(view)], ["season_prev:2026-09:damage:1", "season_next:2026-09:damage:2"])
         self.assertEqual([c.disabled for c in _buttons(view)], [False, True])
+
+    async def test_refresh_after_the_click_was_answered_edits_the_message(self):
+        interaction = self._refresh_interaction(already_answered=True)
+
+        with patch("leaderboard_service.get_seasonal_queue_stats", return_value=_fake_leaderboard_rows(23)):
+            await refresh_seasonal_leaderboard_message(interaction, "2026-09", 2)
+
+        interaction.response.edit_message.assert_not_awaited()
+        self.assertEqual(interaction.message.edit.await_args.kwargs["embed"].fields[0].name, "Ranks 21-23")
 
     async def test_paging_button_click_routes_to_refresh(self):
         # Messages sent before the stat picker have 3-part ids, which rank by damage.

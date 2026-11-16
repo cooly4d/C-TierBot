@@ -243,6 +243,19 @@ class HasImpactScoresTests(unittest.TestCase):
         self.assertFalse(shows_impact_column([team_a(impact=False), team_b(impact=False)]))
 
 
+class UnlinkedIconTests(unittest.TestCase):
+    def test_each_size_is_built_once_and_reused(self):
+        icon = image_utils._build_unlinked_icon(36)
+        self.assertIs(image_utils._build_unlinked_icon(36), icon)
+        self.assertEqual(icon.size, (36, 36))
+        self.assertEqual(image_utils._build_unlinked_icon(48).size, (48, 48))
+
+    def test_reusing_the_icon_leaves_cards_unchanged(self):
+        first = decode(generate_queue_result_image("3674", [team_a(), team_b()], 0, [True], [1, 0]))
+        second = decode(generate_queue_result_image("3674", [team_a(), team_b()], 0, [True], [1, 0]))
+        self.assertFalse(differs(first, second))
+
+
 class GameCardTests(unittest.TestCase):
     HISTORY = [True, False, True]
 

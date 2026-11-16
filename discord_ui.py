@@ -165,9 +165,10 @@ async def build_seasonal_leaderboard_message(guild_id: int, month: str | None = 
 
 
 async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction, month: str, page: int, stat: str = "damage"):
-    await _defer_update(interaction)
+    """Shows another page or stat of a /leaderboard_season message. It is built from the local database in
+    milliseconds, so the click is answered with the edit itself: one request to Discord instead of a defer and an edit."""
     embed, view = await build_seasonal_leaderboard_message(interaction.guild_id, month, page, stat)
-    await interaction.message.edit(embed=embed, view=view)
+    await _answer_with_edit(interaction, embed=embed, view=view)
 
 
 class QueueResultView(discord.ui.View):
@@ -238,30 +239,29 @@ async def build_queue_game_message(guild_id: int | None, match_id: str, page: in
 
 
 async def show_queue_game_breakdown(interaction: discord.Interaction):
-    """Game breakdown button: opens the first game as an ephemeral message only the clicker sees."""
-    await interaction.response.defer(ephemeral=True)
+    """Game breakdown button: opens the first game as an ephemeral message only the clicker sees. The card is drawn
+    from the saved snapshot well inside Discord's 3-second window, so it is sent as the click's answer (no defer)."""
     match_id = parse_queue_match_id(interaction.message)
     if match_id is None:
-        await interaction.followup.send(queue_games_unavailable(None), ephemeral=True)
+        await interaction.response.send_message(queue_games_unavailable(None), ephemeral=True)
         return
 
     embed, file, view, error_text = await build_queue_game_message(interaction.guild_id, match_id, 0)
     if error_text:
-        await interaction.followup.send(error_text, ephemeral=True)
+        await interaction.response.send_message(error_text, ephemeral=True)
         return
-    options = {"view": view} if view is not None else {}  # followup.send rejects view=None
-    await interaction.followup.send(embed=embed, file=file, ephemeral=True, **options)
+    options = {"view": view} if view is not None else {}  # send_message rejects view=None
+    await interaction.response.send_message(embed=embed, file=file, ephemeral=True, **options)
 
 
 async def refresh_queue_game_message(interaction: discord.Interaction, match_id: str, page: int):
-    """Previous/Next buttons: swaps the ephemeral breakdown message over to another game."""
-    await interaction.response.defer()
+    """Previous/Next buttons: swaps the ephemeral breakdown message over to another game, as the click's answer
+    (one request to Discord). Ephemeral messages can only be edited through the interaction, not interaction.message."""
     embed, file, view, error_text = await build_queue_game_message(interaction.guild_id, match_id, page)
     if error_text:
-        await interaction.followup.send(error_text, ephemeral=True)
+        await interaction.response.send_message(error_text, ephemeral=True)
         return
-    # Ephemeral messages can only be edited through the interaction itself, not interaction.message.edit.
-    await interaction.edit_original_response(embed=embed, attachments=[file], view=view)
+    await interaction.response.edit_message(embed=embed, attachments=[file], view=view)
 
 
 class InventoryRaritySelect(discord.ui.Select):
@@ -401,13 +401,18 @@ async def _tell_clicker(interaction: discord.Interaction, text: str, ephemeral: 
         await interaction.response.send_message(text, ephemeral=ephemeral)
 
 
-async def _show_page(interaction: discord.Interaction, file: discord.File, embed: discord.Embed, view):
-    """Swaps the clicked message to the new page: as the click's answer when possible (one request to Discord),
-    otherwise as an edit after the earlier defer."""
+async def _answer_with_edit(interaction: discord.Interaction, **fields):
+    """Updates the clicked message: as the click's answer when possible (one request to Discord), otherwise as an
+    edit after an earlier defer."""
     if interaction.response.is_done():
-        await interaction.message.edit(attachments=[file], embed=embed, view=view)
+        await interaction.message.edit(**fields)
     else:
-        await interaction.response.edit_message(attachments=[file], embed=embed, view=view)
+        await interaction.response.edit_message(**fields)
+
+
+async def _show_page(interaction: discord.Interaction, file: discord.File, embed: discord.Embed, view):
+    """Swaps the clicked message to the new page (see _answer_with_edit)."""
+    await _answer_with_edit(interaction, attachments=[file], embed=embed, view=view)
 
 
 async def _paged_target(interaction: discord.Interaction, target_id: int):

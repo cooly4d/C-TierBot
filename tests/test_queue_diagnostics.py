@@ -222,6 +222,10 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ApiDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        survev_client.clear_scoreboard_cache()
+        self.addCleanup(survev_client.clear_scoreboard_cache)
+
     async def test_partial_history_reports_failed_page_without_logging_response_or_token(self):
         session = SimpleNamespace(post=MagicMock(side_effect=[
             response(data=[{"guid": "g1"}] * 200), response(status=429, data={"secret": "private-token"}),
@@ -254,8 +258,65 @@ class ApiDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     async def test_scoreboard_status_is_recorded(self):
         for status, data in ((200, lobby("A")), (200, []), (503, None)):
             with self.subTest(status=status, data=data):
+                survev_client.clear_scoreboard_cache()
                 diag = {}
                 session = SimpleNamespace(post=MagicMock(return_value=response(status, data)))
                 board = await survev_client.fetch_public_match_data(session, "g1", diagnostics=diag)
                 self.assertEqual(board, data)
                 self.assertEqual(diag["http_status"], status)
+
+
+class ScoreboardCacheTests(unittest.IsolatedAsyncioTestCase):
+    """A finished game's scoreboard is fetched once, so a series' repeat lookups only ask survev.de for new games."""
+
+    def setUp(self):
+        survev_client.clear_scoreboard_cache()
+        self.addCleanup(survev_client.clear_scoreboard_cache)
+
+    async def fetch(self, session, guid="g1"):
+        diag = {}
+        return await survev_client.fetch_public_match_data(session, guid, diagnostics=diag), diag
+
+    async def test_a_fetched_board_is_reused_without_a_request(self):
+        session = SimpleNamespace(post=MagicMock(return_value=response(data=lobby("A"))))
+        first, _ = await self.fetch(session)
+        again, diag = await self.fetch(session)
+        self.assertEqual(again, first)
+        self.assertEqual(diag, {"cache_hit": True})
+        self.assertEqual(session.post.call_count, 1)
+        await self.fetch(session, "g2")
+        self.assertEqual(session.post.call_count, 2)
+
+    async def test_failures_and_empty_boards_are_retried(self):
+        for status, data in ((503, None), (429, None), (200, []), (200, {"not": "a list"})):
+            with self.subTest(status=status, data=data):
+                session = SimpleNamespace(post=MagicMock(side_effect=[response(status, data), response(data=lobby("A"))]))
+                await self.fetch(session)
+                board, diag = await self.fetch(session)
+                self.assertEqual(board, lobby("A"))
+                self.assertEqual(diag["http_status"], 200)
+                survev_client.clear_scoreboard_cache()
+
+    async def test_a_caller_changing_its_board_does_not_change_the_cache(self):
+        session = SimpleNamespace(post=MagicMock(return_value=response(data=lobby("A"))))
+        board, _ = await self.fetch(session)
+        board[0]["kills"] = 999
+        board.pop()
+        cached, _ = await self.fetch(session)
+        cached[0]["slug"] = "changed"
+        self.assertEqual((await self.fetch(session))[0], lobby("A"))
+
+    async def test_boards_expire_and_the_cache_stays_bounded(self):
+        session = SimpleNamespace(post=MagicMock(side_effect=lambda *a, **k: response(data=lobby("A"))))
+        with patch.object(survev_client.time, "monotonic", return_value=1000.0):
+            await self.fetch(session)
+        with patch.object(survev_client.time, "monotonic",
+                          return_value=1000.0 + survev_client.SCOREBOARD_CACHE_TTL_SECONDS):
+            _, diag = await self.fetch(session)
+        self.assertEqual(diag["http_status"], 200)
+        self.assertEqual(session.post.call_count, 2)
+
+        with patch.object(survev_client, "SCOREBOARD_CACHE_SIZE", 3):
+            for guid in ("g1", "g2", "g3", "g4"):
+                await self.fetch(session, guid)
+        self.assertEqual(list(survev_client._scoreboard_cache), ["g2", "g3", "g4"])

@@ -4,6 +4,7 @@ timeframe stats, inventory, and market/shop data.
 import asyncio
 import logging
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 
 import aiohttp
@@ -401,12 +402,53 @@ def extract_squad_tier(stats: dict | None) -> dict | None:
     return None
 
 
+# Public scoreboards already fetched, by game guid: guid -> (monotonic time cached, board). survev.de saves all of a
+# game's rows in one insert when the game ends, so a guid that shows up in someone's match history already has its
+# complete board, and repeat lookups (a "score?" after each game of a series, a second `c <number>`) only fetch the
+# games they haven't seen. Entries still expire, because survev.de joins in each player's current slug when it answers
+# and moderators can void or delete a game.
+SCOREBOARD_CACHE_SIZE = 200
+SCOREBOARD_CACHE_TTL_SECONDS = 3600
+_scoreboard_cache: OrderedDict[str, tuple[float, list[dict]]] = OrderedDict()
+
+
+def clear_scoreboard_cache():
+    _scoreboard_cache.clear()
+
+
+def _cached_scoreboard(guid: str) -> list[dict] | None:
+    cached = _scoreboard_cache.get(guid)
+    if cached is None:
+        return None
+    cached_at, board = cached
+    if time.monotonic() - cached_at >= SCOREBOARD_CACHE_TTL_SECONDS:
+        del _scoreboard_cache[guid]
+        return None
+    _scoreboard_cache.move_to_end(guid)
+    return [dict(row) for row in board]  # a copy, so a caller can never change the cached board
+
+
+def _cache_scoreboard(guid: str, board: list) -> None:
+    """Keeps a successful, non-empty board. Errors and empty answers are never cached, so they are retried."""
+    if not board or not all(isinstance(row, dict) for row in board):
+        return
+    _scoreboard_cache[guid] = (time.monotonic(), [dict(row) for row in board])
+    _scoreboard_cache.move_to_end(guid)
+    while len(_scoreboard_cache) > SCOREBOARD_CACHE_SIZE:
+        _scoreboard_cache.popitem(last=False)
+
+
 async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str,
                                  diagnostics: dict | None = None) -> list[dict] | None:
     """Public per-match scoreboard (no auth needed) — every player in that one game, including guests
-    with no survev.de account at all (they still show up with a username, just slug=None)."""
+    with no survev.de account at all (they still show up with a username, just slug=None). Boards fetched in the
+    last SCOREBOARD_CACHE_TTL_SECONDS come from the cache (diagnostics["cache_hit"]) without a request."""
     if diagnostics is None:
         diagnostics = {}
+    cached = _cached_scoreboard(guid)
+    if cached is not None:
+        diagnostics["cache_hit"] = True
+        return cached
     try:
         async with api_slot(), session.post("https://survev.de/api/match_data", json={"gameId": guid}) as resp:
             diagnostics["http_status"] = resp.status
@@ -419,4 +461,6 @@ async def fetch_public_match_data(session: aiohttp.ClientSession, guid: str,
         return None
     if not isinstance(data, list):
         diagnostics["error"] = "unexpected_response_type"
-    return data if isinstance(data, list) else None
+        return None
+    _cache_scoreboard(guid, data)
+    return data

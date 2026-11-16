@@ -28,7 +28,10 @@ QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECON
 QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS = int(os.getenv("QUEUE_RESULT_MAX_MESSAGE_AGE_HOURS", "24")) * 3600
 # Last-resort window length when NeatQueue gives us no usable end-of-match signal at all.
 QUEUE_MATCH_FALLBACK_DURATION_MS = int(os.getenv("QUEUE_MATCH_FALLBACK_DURATION_MINUTES", "10")) * 60 * 1000
-API_CONCURRENCY_LIMIT = int(os.getenv("API_CONCURRENCY_LIMIT", "5"))
+# How many survev.de requests may run at once. survev.de's limits count requests per minute (60/min for the bot's
+# OAuth app, 40/min per IP for scoreboards), not concurrent ones, so this only sets how fast a lookup goes: at 10, a
+# 4v4 queue's player histories and then its scoreboards usually go out in one batch each instead of two.
+API_CONCURRENCY_LIMIT = int(os.getenv("API_CONCURRENCY_LIMIT", "10"))
 VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "300"))
 # Console log level (DEBUG also shows every button/menu click). Diagnostic JSON logs go to QUEUE_STATS_LOG_DIR.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

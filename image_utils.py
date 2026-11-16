@@ -5,6 +5,7 @@ generated and unit-tested independently of the rest of the bot.
 """
 import functools
 import json
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -348,12 +349,14 @@ def _vcenter_y(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, box_top:
     return box_top + (box_bottom - box_top - (bbox[3] - bbox[1])) / 2 - bbox[1]
 
 
+@functools.lru_cache(maxsize=16)
 def _build_unlinked_icon(
     size_px: int,
     link_color: tuple[int, int, int] = QUEUE_IMG_MUTED,
     slash_color: tuple[int, int, int] = QUEUE_IMG_LOSE,
 ) -> Image.Image:
-    """Renders an anti-aliased vector 'broken/slashed chain link' RGBA icon of `size_px` x `size_px`."""
+    """Renders an anti-aliased vector 'broken/slashed chain link' RGBA icon of `size_px` x `size_px`.
+    Built once per size and shared between renders, so paste it but never draw on it."""
     ss = 4
     n = max(16, size_px * ss)
     layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
@@ -1382,10 +1385,17 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
         coords = [pt_coords(idx, val) for idx, val in valid_points]
         if len(coords) > 1:
             area_poly = [(coords[0][0], area_base_y)] + coords + [(coords[-1][0], area_base_y)]
-            area_layer = Image.new("RGBA", (QUEUE_IMG_WIDTH * S, height * S), (0, 0, 0, 0))
+            # Blend the translucent fill only inside the area's bounding box (plus a margin): the layer is fully
+            # transparent everywhere else, so blending the whole canvas gave the same pixels for far more work.
+            left = max(0, math.floor(min(x for x, _ in area_poly)) - 2)
+            top = max(0, math.floor(min(y for _, y in area_poly)) - 2)
+            right = min(image.width, math.ceil(max(x for x, _ in area_poly)) + 3)
+            bottom = min(image.height, math.ceil(max(y for _, y in area_poly)) + 3)
+            area_layer = Image.new("RGBA", (right - left, bottom - top), (0, 0, 0, 0))
             area_draw = ImageDraw.Draw(area_layer)
-            area_draw.polygon(area_poly, fill=(255, 165, 50, 28))
-            image.paste(Image.alpha_composite(image.convert("RGBA"), area_layer).convert("RGB"))
+            area_draw.polygon([(x - left, y - top) for x, y in area_poly], fill=(255, 165, 50, 28))
+            region = image.crop((left, top, right, bottom)).convert("RGBA")
+            image.paste(Image.alpha_composite(region, area_layer).convert("RGB"), (left, top))
             draw = ImageDraw.Draw(image)
 
             draw.line(coords, fill=QUEUE_IMG_ACCENT, width=4 * S, joint="curve")

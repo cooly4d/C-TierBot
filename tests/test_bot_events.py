@@ -56,6 +56,13 @@ class RawMessageEditTests(unittest.IsolatedAsyncioTestCase):
                 await self.edit(message)
         self.post.assert_not_awaited()
 
+    async def test_edits_in_untracked_channels_are_ignored_without_fetching_the_message(self):
+        self.channel.fetch_message = AsyncMock(return_value=neatqueue_message("Results for Queue#4620", channel_id=77))
+        await app.on_raw_message_edit(SimpleNamespace(guild_id=10, channel_id=77, message_id=999))
+        self.channel.fetch_message.assert_not_awaited()
+        self.get_channel.assert_not_called()
+        self.post.assert_not_awaited()
+
     async def test_a_message_that_cannot_be_fetched_is_skipped(self):
         await self.edit(fetch_error=discord.NotFound(MagicMock(status=404), "Unknown Message"))
         self.post.assert_not_awaited()

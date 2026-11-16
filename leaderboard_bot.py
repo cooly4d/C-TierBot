@@ -599,6 +599,10 @@ async def on_raw_message_edit(payload: discord.RawMessageUpdateEvent):
     # discord.py's message cache, and these messages are often edited long after they scroll out of cache.
     if payload.guild_id is None:
         return
+    # Only tracked results channels can hold a NeatQueue result (find_neatqueue_embed_match checks this too). Checking
+    # first saves fetching every message edited anywhere else in the server from Discord.
+    if payload.channel_id not in get_guild_queue_channels(payload.guild_id):
+        return
 
     channel = bot.get_channel(payload.channel_id)
     if channel is None:
