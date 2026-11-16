@@ -13,7 +13,6 @@ import discord
 from discord.ext import tasks
 
 from bot_config import (
-    BOT_COMMAND_CHANNEL_NAME,
     DISCORD_BOT_TOKEN,
     LOG_LEVEL,
     NEATQUEUE_BOT_ID,
@@ -83,8 +82,9 @@ _queue_mention_cooldowns: dict[tuple[int, int], float] = {}
 _prefix_queue_busy: set[tuple[int, int, str]] = set()
 # "score?" anywhere in a message, as its own word (so "what is the score?" counts but "underscore?" doesn't).
 SCORE_QUESTION_PATTERN = re.compile(r"\bscore\?", re.IGNORECASE)
-# "c <arg>" or "c<queue_number>" prefix in the dedicated bot channel (e.g. "c4123", "c 4123", "C 4123", "c #4123").
-PREFIX_COMMAND_PATTERN = re.compile(r"^\s*c(?:\s+(.+?)|(#?[0-9]{1,7}))\s*$", re.IGNORECASE | re.DOTALL)
+# "?c <arg>" or "?c<queue_number>" in any server channel the bot can post in (e.g. "?c4123", "?c 4123", "?C #4123").
+# A word argument needs the space, so "?cool" is never a command.
+PREFIX_COMMAND_PATTERN = re.compile(r"^\s*\?c(?:\s+(.+?)|(#?[0-9]{1,7}))\s*$", re.IGNORECASE | re.DOTALL)
 PREFIX_QUEUE_NUMBER_PATTERN = re.compile(r"^#?([0-9]{1,7})$")
 
 
@@ -547,18 +547,28 @@ async def reply_to_queue_mention(message: discord.Message) -> bool:
     return True
 
 
-async def reply_to_bot_channel_prefix(message: discord.Message) -> bool:
-    """Handle 'c <command>' shortcuts in the dedicated bot channel (currently 'c <queue_number>')."""
+def _can_post_queue_card(message: discord.Message) -> bool:
+    """Whether the bot may answer this message with a stats card: send messages (in a thread, send in threads), attach
+    the image, and read message history, which Discord requires for replies. Being able to read a channel isn't enough."""
+    channel = message.channel
+    try:
+        permissions = channel.permissions_for(message.guild.me)
+    except discord.ClientException:  # a thread whose parent channel isn't cached
+        return False
+    can_send = permissions.send_messages_in_threads if isinstance(channel, discord.Thread) else permissions.send_messages
+    return can_send and permissions.attach_files and permissions.read_message_history
+
+
+async def reply_to_prefix_command(message: discord.Message) -> bool:
+    """Handle '?c <command>' shortcuts in any server channel the bot can post in (currently '?c <queue_number>').
+    A matching message in a channel the bot can't answer in is consumed silently, so no lookup is wasted on it."""
     if message.guild is None or message.author.bot or message.webhook_id is not None:
         return False
-    channel_name = (getattr(message.channel, "name", "") or "").lower()
-    target_channel = BOT_COMMAND_CHANNEL_NAME.strip().lstrip("#").lower()
-    if not target_channel or channel_name != target_channel:
-        return False
-
     prefix_match = PREFIX_COMMAND_PATTERN.match(message.content or "")
     if prefix_match is None:
         return False
+    if not _can_post_queue_card(message):
+        return True
     arg = (prefix_match.group(1) or prefix_match.group(2)).strip()
 
     queue_match = PREFIX_QUEUE_NUMBER_PATTERN.fullmatch(arg)
@@ -581,7 +591,7 @@ async def reply_to_bot_channel_prefix(message: discord.Message) -> bool:
 async def on_message(message: discord.Message):
     if await reply_to_queue_mention(message):
         return
-    if await reply_to_bot_channel_prefix(message):
+    if await reply_to_prefix_command(message):
         return
     if message.guild is not None and message.author.id != bot.user.id:
         # The winner announcement is sometimes already complete when first posted...

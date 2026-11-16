@@ -108,7 +108,7 @@ def write_queue_stats_log(
     requested_by: discord.abc.User | None = None,
 ):
     """Write one JSON diagnostic log for a queue lookup: /queue_stats, an automatic result post, a startup
-    catch-up, a mention/`score?` reply in a queue channel, or a `c <number>` reply in the bot channel
+    catch-up, a mention/`score?` reply in a queue channel, or a `?c <number>` reply in any channel
     (`trigger`, one of QUEUE_LOG_TRIGGERS). Never includes tokens or raw API responses."""
     os.makedirs(QUEUE_STATS_LOG_DIR, exist_ok=True)
 

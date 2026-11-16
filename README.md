@@ -61,7 +61,7 @@ You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel*
 
 Both shortcuts share a **30-second cooldown per channel** after a stats or lookup-error reply. Requests during the cooldown or while a lookup is running are silently ignored, with no wait message or DM. Bot/webhook messages, NeatQueue's recurring winner-vote panels, and implicit reply pings do not trigger these shortcuts. Checking stats this way does not mark the queue as automatically posted. The `score?` shortcut requires the Message Content Intent described in setup below.
 
-In the dedicated bot channel (`#coolys-bot-thing` by default, configurable via `BOT_COMMAND_CHANNEL_NAME`), you can also type **`c <queue_number>`** or **`c<queue_number>`** (for example `c 4123`, `c4123`, or `c #4123`, case-insensitive) to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back.
+In any server channel, you can also type **`?c <queue_number>`** or **`?c<queue_number>`** (for example `?c 4123`, `?c4123`, or `?c #4123`, case-insensitive) at the start of a message to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back. The bot answers only where it can send messages, attach files and read message history (in threads: send messages in threads); elsewhere it ignores the command without looking anything up. It doesn't work in DMs, because a queue number belongs to a server.
 
 ### Admin
 
@@ -143,7 +143,6 @@ Optional settings:
 | `QUEUE_MATCH_FALLBACK_DURATION_MINUTES` | `10` | Last-resort match window when NeatQueue gives no usable end time. |
 | `API_CONCURRENCY_LIMIT` | `10` | How many survev.de requests the bot sends at once. survev.de's rate limits count requests per minute, so this only changes how quickly a lookup finishes. |
 | `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of queue lookup diagnostic JSON logs retained in `log/`. |
-| `BOT_COMMAND_CHANNEL_NAME` | `coolys-bot-thing` | Channel name where `c <queue_number>` prefix shortcuts are accepted. |
 | `LOG_LEVEL` | `INFO` | Console log level. `DEBUG` also logs every button and menu click. |
 | `LEADERBOARD_BANNER_URL` | a Giphy GIF | Banner image on the weekly and monthly leaderboards. |
 | `QUEUE_FONT_PATH` / `QUEUE_FONT_BOLD_PATH` | auto-detected | Custom fonts for the generated images. |

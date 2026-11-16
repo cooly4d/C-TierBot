@@ -37,8 +37,6 @@ VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "30
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 QUEUE_STATS_LOG_DIR = "log"
 QUEUE_STATS_LOG_MAX_FILES = int(os.getenv("QUEUE_STATS_LOG_MAX_FILES", "200"))
-# Dedicated bot channel where "c <queue_number>" shortcuts are accepted.
-BOT_COMMAND_CHANNEL_NAME = os.getenv("BOT_COMMAND_CHANNEL_NAME", "coolys-bot-thing").strip().lstrip("#")
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
 QUEUE_WINNER_TITLE_PATTERN = re.compile(r"Winner For Queue#(\d+)", re.IGNORECASE)

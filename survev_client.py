@@ -404,7 +404,7 @@ def extract_squad_tier(stats: dict | None) -> dict | None:
 
 # Public scoreboards already fetched, by game guid: guid -> (monotonic time cached, board). survev.de saves all of a
 # game's rows in one insert when the game ends, so a guid that shows up in someone's match history already has its
-# complete board, and repeat lookups (a "score?" after each game of a series, a second `c <number>`) only fetch the
+# complete board, and repeat lookups (a "score?" after each game of a series, a second `?c <number>`) only fetch the
 # games they haven't seen. Entries still expire, because survev.de joins in each player's current slug when it answers
 # and moderators can void or delete a game.
 SCOREBOARD_CACHE_SIZE = 200

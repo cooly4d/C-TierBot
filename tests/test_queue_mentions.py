@@ -241,7 +241,12 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(app._queue_mention_cooldowns)
 
 
-class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
+CAN_POST = discord.Permissions(send_messages=True, attach_files=True, read_message_history=True)
+
+
+class PrefixCommandTests(unittest.IsolatedAsyncioTestCase):
+    """'?c <queue_number>' works in any server channel the bot can post a stats card in."""
+
     def setUp(self):
         self.bot_user = SimpleNamespace(id=123)
         self.enterContext(patch.object(app.bot._connection, "user", self.bot_user))
@@ -259,16 +264,19 @@ class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
         self.channels = self.enterContext(patch.object(app, "get_guild_queue_channels", return_value=[]))
         self.save_log = self.enterContext(patch.object(app, "save_queue_stats_log", new_callable=AsyncMock))
 
-    def message(self, content="c 4123", name="coolys-bot-thing", channel_id=77):
-        channel = SimpleNamespace(id=channel_id, name=name, typing=MagicMock(return_value=AsyncMock()))
+    def message(self, content="?c 4123", name="general", channel_id=77, permissions=CAN_POST, channel=None):
+        if channel is None:
+            channel = SimpleNamespace(id=channel_id, name=name)
+        channel.typing = MagicMock(return_value=AsyncMock())
+        channel.permissions_for = MagicMock(return_value=permissions)
         return SimpleNamespace(
-            guild=SimpleNamespace(id=10), channel=channel,
+            guild=SimpleNamespace(id=10, me=SimpleNamespace(id=self.bot_user.id)), channel=channel,
             author=SimpleNamespace(id=99, bot=False), webhook_id=None,
             content=content, mentions=[], embeds=[], reply=AsyncMock(),
         )
 
-    async def test_prefix_number_in_bot_channel_replies_with_queue_stats(self):
-        for content in ("c4123", "C4123", "c#4123", "c 4123", "C 4123", "c #4123", "  c   #4123  \n"):
+    async def test_prefix_number_replies_with_queue_stats(self):
+        for content in ("?c4123", "?C4123", "?c#4123", "?c 4123", "?C 4123", "?c #4123", "  ?c   #4123  \n"):
             with self.subTest(content=content):
                 self.payload.reset_mock()
                 self.save_log.reset_mock()
@@ -289,35 +297,68 @@ class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
         self.updated.assert_not_called()
         self.process.assert_not_awaited()
 
-    async def test_ignores_other_channels_non_matching_messages_and_bots(self):
+    async def test_works_in_any_channel_the_bot_can_post_in(self):
+        for name in ("general", "coolys-bot-thing", "queue-4123", "off-topic"):
+            with self.subTest(name=name):
+                message = self.message(name=name)
+                await app.on_message(message)
+                message.reply.assert_awaited_once()
+        self.assertEqual(self.payload.await_count, 4)
+
+    async def test_ignores_non_matching_messages_bots_and_the_old_c_prefix(self):
         ignored_cases = [
-            ("general", "c 4123", {}),
-            ("general", "c4123", {}),
-            ("queue-4123", "c 4123", {}),
-            ("coolys-bot-thing-2", "c 4123", {}),
-            ("coolys-bot-thing", "4123", {}),
-            ("coolys-bot-thing", "c", {}),
-            ("coolys-bot-thing", "cool", {}),
-            ("coolys-bot-thing", "c hello", {}),
-            ("coolys-bot-thing", "c 4123 4124", {}),
-            ("coolys-bot-thing", "c 123456789012345678", {}),
-            ("coolys-bot-thing", "c123456789012345678", {}),
-            ("coolys-bot-thing", "c 4123", {"author": SimpleNamespace(id=123, bot=True)}),
-            ("coolys-bot-thing", "c 4123", {"webhook_id": 456}),
-            ("coolys-bot-thing", "c 4123", {"guild": None}),
+            ("c 4123", {}),
+            ("c4123", {}),
+            ("C #4123", {}),
+            ("4123", {}),
+            ("?4123", {}),
+            ("?c", {}),
+            ("?cool", {}),
+            ("?c hello", {}),
+            ("?c 4123 4124", {}),
+            ("? c 4123", {}),
+            ("hey ?c 4123", {}),
+            ("?c 123456789012345678", {}),
+            ("?c123456789012345678", {}),
+            ("?c 4123", {"author": SimpleNamespace(id=123, bot=True)}),
+            ("?c 4123", {"webhook_id": 456}),
+            ("?c 4123", {"guild": None}),
         ]
-        for name, content, overrides in ignored_cases:
-            with self.subTest(name=name, content=content, overrides=overrides):
-                message = self.message(content=content, name=name)
+        for content, overrides in ignored_cases:
+            with self.subTest(content=content, overrides=overrides):
+                message = self.message(content=content)
                 for key, value in overrides.items():
                     setattr(message, key, value)
                 await app.on_message(message)
                 message.reply.assert_not_awaited()
         self.payload.assert_not_awaited()
 
+    async def test_channels_the_bot_cannot_answer_in_get_no_lookup(self):
+        for missing in ("send_messages", "attach_files", "read_message_history"):
+            permissions = discord.Permissions(**{key: key != missing for key in
+                                                 ("send_messages", "attach_files", "read_message_history")})
+            with self.subTest(missing=missing):
+                message = self.message(permissions=permissions)
+                await app.on_message(message)
+                message.reply.assert_not_awaited()
+        self.payload.assert_not_awaited()
+        self.process.assert_not_awaited()  # consumed, not passed on
+
+    async def test_threads_need_send_in_threads(self):
+        for can_send_in_threads in (False, True):
+            thread = MagicMock(spec=discord.Thread)
+            thread.id, thread.name = 88, "queue chat"
+            permissions = discord.Permissions(send_messages=True, attach_files=True, read_message_history=True,
+                                              send_messages_in_threads=can_send_in_threads)
+            with self.subTest(can_send_in_threads=can_send_in_threads):
+                message = self.message(channel=thread, permissions=permissions)
+                await app.on_message(message)
+                self.assertEqual(message.reply.await_count, int(can_send_in_threads))
+        self.payload.assert_awaited_once_with("4123", 10)
+
     async def test_back_to_back_requests_have_no_cooldown(self):
         for match_id in ("4123", "4124", "4123"):
-            message = self.message(content=f"c {match_id}")
+            message = self.message(content=f"?c {match_id}")
             await app.on_message(message)
             message.reply.assert_awaited_once()
         self.assertEqual([call.args[0] for call in self.payload.await_args_list], ["4123", "4124", "4123"])
@@ -332,14 +373,14 @@ class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
             return f"stats {match_id}", None, None, {"is_final": False}
 
         self.payload.side_effect = controlled_payload
-        first = asyncio.create_task(app.on_message(self.message(content="c 4123")))
+        first = asyncio.create_task(app.on_message(self.message(content="?c 4123")))
         try:
             await entered_4123.wait()
-            duplicate = self.message(content="c #4123")
+            duplicate = self.message(content="?c #4123")
             await app.on_message(duplicate)
             duplicate.reply.assert_not_awaited()
 
-            other_queue = self.message(content="c 4124")
+            other_queue = self.message(content="?c 4124")
             await app.on_message(other_queue)
             other_queue.reply.assert_awaited_once()
             self.assertEqual([call.args[0] for call in self.payload.await_args_list], ["4123", "4124"])
