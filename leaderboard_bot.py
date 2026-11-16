@@ -13,6 +13,7 @@ import discord
 from discord.ext import tasks
 
 from bot_config import (
+    BOT_COMMAND_CHANNEL_NAME,
     DISCORD_BOT_TOKEN,
     LOG_LEVEL,
     NEATQUEUE_BOT_ID,
@@ -79,8 +80,12 @@ SLUG_BACKFILL_INTERVAL_MINUTES = 30
 QUEUE_MENTION_COOLDOWN_SECONDS = 30
 _queue_mention_busy: set[tuple[int, int]] = set()
 _queue_mention_cooldowns: dict[tuple[int, int], float] = {}
+_prefix_queue_busy: set[tuple[int, int, str]] = set()
 # "score?" anywhere in a message, as its own word (so "what is the score?" counts but "underscore?" doesn't).
 SCORE_QUESTION_PATTERN = re.compile(r"\bscore\?", re.IGNORECASE)
+# "c <arg>" prefix in the dedicated bot channel (e.g. "c 4123", "C 4123", "c #4123").
+PREFIX_COMMAND_PATTERN = re.compile(r"^\s*c\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+PREFIX_QUEUE_NUMBER_PATTERN = re.compile(r"^#?([0-9]{1,7})$")
 
 
 @tasks.loop(minutes=SLUG_BACKFILL_INTERVAL_MINUTES)
@@ -468,6 +473,42 @@ async def post_queue_result(message: discord.Message, match_id: str):
     update_guild_last_updated(message.guild.id, datetime.now(timezone.utc).isoformat())
 
 
+async def _send_queue_stats_reply(message: discord.Message, match_id: str, *, trigger: str) -> bool:
+    """Fetches and replies with queue stats for match_id. Returns True when stats or a lookup error were sent."""
+    reply_options = {"allowed_mentions": discord.AllowedMentions.none(), "mention_author": False}
+    file = None
+    try:
+        async with message.channel.typing():
+            content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
+            await save_queue_stats_log(
+                match_id, match_result, error_text, trigger=trigger,
+                guild_id=message.guild.id, channel_id=message.channel.id, requested_by=message.author,
+            )
+            if error_text:
+                await message.reply(error_text, **reply_options)
+            else:
+                await message.reply(
+                    content=content, file=file,
+                    view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
+                    **reply_options,
+                )
+        return True
+    except discord.HTTPException as exc:
+        # Missing send permissions or a deleted request/channel must not break the listener.
+        log.warning("Could not reply in the Queue#%s channel: %s", match_id, type(exc).__name__)
+        return False
+    except Exception as exc:
+        log.warning("Queue#%s lookup for %s failed: %s", match_id, trigger, type(exc).__name__)
+        try:
+            await message.reply("I couldn't fetch this queue's stats. Please try again shortly.", **reply_options)
+        except discord.HTTPException as reply_exc:
+            log.warning("Could not reply in the Queue#%s channel: %s", match_id, type(reply_exc).__name__)
+        return False
+    finally:
+        if file is not None:
+            file.close()
+
+
 async def reply_to_queue_mention(message: discord.Message) -> bool:
     """Reply to human mentions or 'score?' in queue channels without consuming automatic result tracking."""
     if message.guild is None or message.author.bot or message.webhook_id is not None or bot.user is None:
@@ -488,53 +529,59 @@ async def reply_to_queue_mention(message: discord.Message) -> bool:
     for expired_key, deadline in list(_queue_mention_cooldowns.items()):
         if deadline <= now:
             del _queue_mention_cooldowns[expired_key]
-    reply_options = {"allowed_mentions": discord.AllowedMentions.none(), "mention_author": False}
 
+    # Silently consume repeated requests so the cooldown cannot itself spam the channel.
+    if key in _queue_mention_busy:
+        return True
+    remaining = _queue_mention_cooldowns.get(key, now) - now
+    if remaining > 0:
+        return True
+
+    # Claim before the first await so simultaneous pings cannot start duplicate lookups.
+    _queue_mention_busy.add(key)
     try:
-        # Silently consume repeated requests so the cooldown cannot itself spam the channel.
-        if key in _queue_mention_busy:
-            return True
-        remaining = _queue_mention_cooldowns.get(key, now) - now
-        if remaining > 0:
-            return True
-
-        # Claim before the first await so simultaneous pings cannot start duplicate lookups.
-        _queue_mention_busy.add(key)
-        file = None
-        try:
-            async with message.channel.typing():
-                content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
-                await save_queue_stats_log(
-                    match_id, match_result, error_text, trigger="queue_channel_reply",
-                    guild_id=message.guild.id, channel_id=message.channel.id, requested_by=message.author,
-                )
-                if error_text:
-                    await message.reply(error_text, **reply_options)
-                else:
-                    await message.reply(
-                        content=content, file=file,
-                        view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
-                        **reply_options,
-                    )
+        if await _send_queue_stats_reply(message, match_id, trigger="queue_channel_reply"):
             _queue_mention_cooldowns[key] = time.monotonic() + QUEUE_MENTION_COOLDOWN_SECONDS
-        except discord.HTTPException:
-            raise
-        except Exception as exc:
-            log.warning("Queue#%s lookup for a queue-channel reply failed: %s", match_id, type(exc).__name__)
-            await message.reply("I couldn't fetch this queue's stats. Please try again shortly.", **reply_options)
-        finally:
-            _queue_mention_busy.discard(key)
-            if file is not None:
-                file.close()
-    except discord.HTTPException as exc:
-        # Missing send permissions or a deleted request/channel must not break the listener.
-        log.warning("Could not reply in the Queue#%s channel: %s", match_id, type(exc).__name__)
+    finally:
+        _queue_mention_busy.discard(key)
     return True
+
+
+async def reply_to_bot_channel_prefix(message: discord.Message) -> bool:
+    """Handle 'c <command>' shortcuts in the dedicated bot channel (currently 'c <queue_number>')."""
+    if message.guild is None or message.author.bot or message.webhook_id is not None:
+        return False
+    channel_name = (getattr(message.channel, "name", "") or "").lower()
+    target_channel = BOT_COMMAND_CHANNEL_NAME.strip().lstrip("#").lower()
+    if not target_channel or channel_name != target_channel:
+        return False
+
+    prefix_match = PREFIX_COMMAND_PATTERN.match(message.content or "")
+    if prefix_match is None:
+        return False
+    arg = prefix_match.group(1).strip()
+
+    queue_match = PREFIX_QUEUE_NUMBER_PATTERN.fullmatch(arg)
+    if queue_match is not None:
+        match_id = queue_match.group(1)
+        busy_key = (message.guild.id, message.channel.id, match_id)
+        if busy_key in _prefix_queue_busy:
+            return True
+        _prefix_queue_busy.add(busy_key)
+        try:
+            await _send_queue_stats_reply(message, match_id, trigger="queue_prefix_command")
+        finally:
+            _prefix_queue_busy.discard(busy_key)
+        return True
+
+    return False
 
 
 @bot.event
 async def on_message(message: discord.Message):
     if await reply_to_queue_mention(message):
+        return
+    if await reply_to_bot_channel_prefix(message):
         return
     if message.guild is not None and message.author.id != bot.user.id:
         # The winner announcement is sometimes already complete when first posted...

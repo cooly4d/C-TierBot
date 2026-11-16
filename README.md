@@ -61,6 +61,8 @@ You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel*
 
 Both shortcuts share a **30-second cooldown per channel** after a stats or lookup-error reply. Requests during the cooldown or while a lookup is running are silently ignored, with no wait message or DM. Bot/webhook messages, NeatQueue's recurring winner-vote panels, and implicit reply pings do not trigger these shortcuts. Checking stats this way does not mark the queue as automatically posted. The `score?` shortcut requires the Message Content Intent described in setup below.
 
+In the dedicated bot channel (`#coolys-bot-thing` by default, configurable via `BOT_COMMAND_CHANNEL_NAME`), you can also type **`c <queue_number>`** (for example `c 4123` or `c #4123`, case-insensitive) to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back.
+
 ### Admin
 
 Admin-only commands are hidden from members without the **Administrator** permission.
@@ -140,6 +142,7 @@ Optional settings:
 | `QUEUE_RESULT_FETCH_DELAY_SECONDS` | `5` | Wait before fetching stats after a queue ends, so survev.de has time to save the games. |
 | `QUEUE_MATCH_FALLBACK_DURATION_MINUTES` | `10` | Last-resort match window when NeatQueue gives no usable end time. |
 | `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of queue lookup diagnostic JSON logs retained in `log/`. |
+| `BOT_COMMAND_CHANNEL_NAME` | `coolys-bot-thing` | Channel name where `c <queue_number>` prefix shortcuts are accepted. |
 | `LOG_LEVEL` | `INFO` | Console log level. `DEBUG` also logs every button and menu click. |
 | `LEADERBOARD_BANNER_URL` | a Giphy GIF | Banner image on the weekly and monthly leaderboards. |
 | `QUEUE_FONT_PATH` / `QUEUE_FONT_BOLD_PATH` | auto-detected | Custom fonts for the generated images. |

@@ -88,7 +88,13 @@ def prune_queue_stats_logs(log_dir: str | None = None, max_files: int | None = N
 
 
 # What started a queue lookup, as recorded in its diagnostic log's "event".
-QUEUE_LOG_TRIGGERS = ("queue_stats_command", "auto_post", "catch_up", "queue_channel_reply")
+QUEUE_LOG_TRIGGERS = (
+    "queue_stats_command",
+    "auto_post",
+    "catch_up",
+    "queue_channel_reply",
+    "queue_prefix_command",
+)
 
 
 def write_queue_stats_log(
@@ -102,8 +108,8 @@ def write_queue_stats_log(
     requested_by: discord.abc.User | None = None,
 ):
     """Write one JSON diagnostic log for a queue lookup: /queue_stats, an automatic result post, a startup
-    catch-up, or a mention/`score?` reply in a queue channel (`trigger`, one of QUEUE_LOG_TRIGGERS). Never
-    includes tokens or raw API responses."""
+    catch-up, a mention/`score?` reply in a queue channel, or a `c <number>` reply in the bot channel
+    (`trigger`, one of QUEUE_LOG_TRIGGERS). Never includes tokens or raw API responses."""
     os.makedirs(QUEUE_STATS_LOG_DIR, exist_ok=True)
 
     now_utc = datetime.now(timezone.utc)

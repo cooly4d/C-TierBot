@@ -241,5 +241,111 @@ class QueueMentionTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(app._queue_mention_cooldowns)
 
 
+class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.bot_user = SimpleNamespace(id=123)
+        self.enterContext(patch.object(app.bot._connection, "user", self.bot_user))
+        self.enterContext(patch.object(app, "_prefix_queue_busy", set()))
+        self.payload = self.enterContext(patch.object(app, "build_queue_stats_payload", new_callable=AsyncMock))
+        self.payload.side_effect = lambda match_id, *_: (
+            f"Queue stats for NeatQueue#{match_id}",
+            discord.File(io.BytesIO(b"png"), filename=f"queue_stats_{match_id}.png"),
+            None,
+            {"is_final": True},
+        )
+        self.process = self.enterContext(patch.object(app.bot, "process_commands", new_callable=AsyncMock))
+        self.mark = self.enterContext(patch.object(app, "try_mark_match_processed"))
+        self.updated = self.enterContext(patch.object(app, "update_guild_last_updated"))
+        self.channels = self.enterContext(patch.object(app, "get_guild_queue_channels", return_value=[]))
+        self.save_log = self.enterContext(patch.object(app, "save_queue_stats_log", new_callable=AsyncMock))
+
+    def message(self, content="c 4123", name="coolys-bot-thing", channel_id=77):
+        channel = SimpleNamespace(id=channel_id, name=name, typing=MagicMock(return_value=AsyncMock()))
+        return SimpleNamespace(
+            guild=SimpleNamespace(id=10), channel=channel,
+            author=SimpleNamespace(id=99, bot=False), webhook_id=None,
+            content=content, mentions=[], embeds=[], reply=AsyncMock(),
+        )
+
+    async def test_prefix_number_in_bot_channel_replies_with_queue_stats(self):
+        for content in ("c 4123", "C 4123", "c #4123", "  c   #4123  \n"):
+            with self.subTest(content=content):
+                self.payload.reset_mock()
+                self.save_log.reset_mock()
+                message = self.message(content=content)
+                await app.on_message(message)
+                self.payload.assert_awaited_once_with("4123", 10)
+                self.assertEqual(self.save_log.await_args.kwargs["trigger"], "queue_prefix_command")
+                self.assertIs(self.save_log.await_args.kwargs["requested_by"], message.author)
+                sent = message.reply.await_args.kwargs
+                self.assertEqual(sent["file"].filename, "queue_stats_4123.png")
+                self.assertEqual(
+                    [item.custom_id for item in sent["view"].children],
+                    ["queue_result_games", "queue_result_verify"],
+                )
+                self.assertEqual(sent["allowed_mentions"].to_dict(), {"parse": []})
+                self.assertFalse(sent["mention_author"])
+        self.mark.assert_not_called()
+        self.updated.assert_not_called()
+        self.process.assert_not_awaited()
+
+    async def test_ignores_other_channels_non_matching_messages_and_bots(self):
+        ignored_cases = [
+            ("general", "c 4123", {}),
+            ("queue-4123", "c 4123", {}),
+            ("coolys-bot-thing-2", "c 4123", {}),
+            ("coolys-bot-thing", "4123", {}),
+            ("coolys-bot-thing", "c", {}),
+            ("coolys-bot-thing", "c4123", {}),
+            ("coolys-bot-thing", "c hello", {}),
+            ("coolys-bot-thing", "c 4123 4124", {}),
+            ("coolys-bot-thing", "c 123456789012345678", {}),
+            ("coolys-bot-thing", "c 4123", {"author": SimpleNamespace(id=123, bot=True)}),
+            ("coolys-bot-thing", "c 4123", {"webhook_id": 456}),
+            ("coolys-bot-thing", "c 4123", {"guild": None}),
+        ]
+        for name, content, overrides in ignored_cases:
+            with self.subTest(name=name, content=content, overrides=overrides):
+                message = self.message(content=content, name=name)
+                for key, value in overrides.items():
+                    setattr(message, key, value)
+                await app.on_message(message)
+                message.reply.assert_not_awaited()
+        self.payload.assert_not_awaited()
+
+    async def test_back_to_back_requests_have_no_cooldown(self):
+        for match_id in ("4123", "4124", "4123"):
+            message = self.message(content=f"c {match_id}")
+            await app.on_message(message)
+            message.reply.assert_awaited_once()
+        self.assertEqual([call.args[0] for call in self.payload.await_args_list], ["4123", "4124", "4123"])
+
+    async def test_in_flight_guard_blocks_only_identical_queue_number(self):
+        entered_4123, release_4123 = asyncio.Event(), asyncio.Event()
+
+        async def controlled_payload(match_id, *_):
+            if match_id == "4123":
+                entered_4123.set()
+                await release_4123.wait()
+            return f"stats {match_id}", None, None, {"is_final": False}
+
+        self.payload.side_effect = controlled_payload
+        first = asyncio.create_task(app.on_message(self.message(content="c 4123")))
+        try:
+            await entered_4123.wait()
+            duplicate = self.message(content="c #4123")
+            await app.on_message(duplicate)
+            duplicate.reply.assert_not_awaited()
+
+            other_queue = self.message(content="c 4124")
+            await app.on_message(other_queue)
+            other_queue.reply.assert_awaited_once()
+            self.assertEqual([call.args[0] for call in self.payload.await_args_list], ["4123", "4124"])
+        finally:
+            release_4123.set()
+            await first
+        self.assertFalse(app._prefix_queue_busy)
+
+
 if __name__ == "__main__":
     unittest.main()
