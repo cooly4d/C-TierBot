@@ -83,8 +83,8 @@ _queue_mention_cooldowns: dict[tuple[int, int], float] = {}
 _prefix_queue_busy: set[tuple[int, int, str]] = set()
 # "score?" anywhere in a message, as its own word (so "what is the score?" counts but "underscore?" doesn't).
 SCORE_QUESTION_PATTERN = re.compile(r"\bscore\?", re.IGNORECASE)
-# "c <arg>" prefix in the dedicated bot channel (e.g. "c 4123", "C 4123", "c #4123").
-PREFIX_COMMAND_PATTERN = re.compile(r"^\s*c\s+(.+?)\s*$", re.IGNORECASE | re.DOTALL)
+# "c <arg>" or "c<queue_number>" prefix in the dedicated bot channel (e.g. "c4123", "c 4123", "C 4123", "c #4123").
+PREFIX_COMMAND_PATTERN = re.compile(r"^\s*c(?:\s+(.+?)|(#?[0-9]{1,7}))\s*$", re.IGNORECASE | re.DOTALL)
 PREFIX_QUEUE_NUMBER_PATTERN = re.compile(r"^#?([0-9]{1,7})$")
 
 
@@ -559,7 +559,7 @@ async def reply_to_bot_channel_prefix(message: discord.Message) -> bool:
     prefix_match = PREFIX_COMMAND_PATTERN.match(message.content or "")
     if prefix_match is None:
         return False
-    arg = prefix_match.group(1).strip()
+    arg = (prefix_match.group(1) or prefix_match.group(2)).strip()
 
     queue_match = PREFIX_QUEUE_NUMBER_PATTERN.fullmatch(arg)
     if queue_match is not None:

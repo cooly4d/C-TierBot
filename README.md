@@ -61,7 +61,7 @@ You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel*
 
 Both shortcuts share a **30-second cooldown per channel** after a stats or lookup-error reply. Requests during the cooldown or while a lookup is running are silently ignored, with no wait message or DM. Bot/webhook messages, NeatQueue's recurring winner-vote panels, and implicit reply pings do not trigger these shortcuts. Checking stats this way does not mark the queue as automatically posted. The `score?` shortcut requires the Message Content Intent described in setup below.
 
-In the dedicated bot channel (`#coolys-bot-thing` by default, configurable via `BOT_COMMAND_CHANNEL_NAME`), you can also type **`c <queue_number>`** (for example `c 4123` or `c #4123`, case-insensitive) to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back.
+In the dedicated bot channel (`#coolys-bot-thing` by default, configurable via `BOT_COMMAND_CHANNEL_NAME`), you can also type **`c <queue_number>`** or **`c<queue_number>`** (for example `c 4123`, `c4123`, or `c #4123`, case-insensitive) to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back.
 
 ### Admin
 

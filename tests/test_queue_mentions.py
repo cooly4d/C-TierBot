@@ -268,7 +268,7 @@ class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_prefix_number_in_bot_channel_replies_with_queue_stats(self):
-        for content in ("c 4123", "C 4123", "c #4123", "  c   #4123  \n"):
+        for content in ("c4123", "C4123", "c#4123", "c 4123", "C 4123", "c #4123", "  c   #4123  \n"):
             with self.subTest(content=content):
                 self.payload.reset_mock()
                 self.save_log.reset_mock()
@@ -292,14 +292,16 @@ class BotChannelPrefixTests(unittest.IsolatedAsyncioTestCase):
     async def test_ignores_other_channels_non_matching_messages_and_bots(self):
         ignored_cases = [
             ("general", "c 4123", {}),
+            ("general", "c4123", {}),
             ("queue-4123", "c 4123", {}),
             ("coolys-bot-thing-2", "c 4123", {}),
             ("coolys-bot-thing", "4123", {}),
             ("coolys-bot-thing", "c", {}),
-            ("coolys-bot-thing", "c4123", {}),
+            ("coolys-bot-thing", "cool", {}),
             ("coolys-bot-thing", "c hello", {}),
             ("coolys-bot-thing", "c 4123 4124", {}),
             ("coolys-bot-thing", "c 123456789012345678", {}),
+            ("coolys-bot-thing", "c123456789012345678", {}),
             ("coolys-bot-thing", "c 4123", {"author": SimpleNamespace(id=123, bot=True)}),
             ("coolys-bot-thing", "c 4123", {"webhook_id": 456}),
             ("coolys-bot-thing", "c 4123", {"guild": None}),
