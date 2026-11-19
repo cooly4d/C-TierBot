@@ -115,45 +115,104 @@ class QueueProgressLabelTests(unittest.TestCase):
 
 
 class TimelineTests(unittest.TestCase):
+    """The MATCH TIMELINE: one lane per team, each game's dot in the lane of the team that won it."""
     S = 2  # the renderer's supersampling factor
-    AXIS_Y = (32 + 74) * S
+    BOX_Y = 27
+    LANE_Y = [(BOX_Y + 64) * S, (BOX_Y + 100) * S]
+    MIDDLE_Y = (LANE_Y[0] + LANE_Y[1]) / 2
     BOX_CENTER_X = ((image_utils.QUEUE_IMG_WIDTH - image_utils.QUEUE_IMG_PADDING) - 560 / 2) * S
+    LANE_CENTER_X = BOX_CENTER_X + 20 * S  # lanes start after the T1/T2 labels, so their middle is right of the box's
 
-    def timeline(self, history):
-        """(axis lines, game-dot centre x positions) drawn for a series card with this match history."""
-        original_line, original_ellipse = ImageDraw.ImageDraw.line, ImageDraw.ImageDraw.ellipse
-        lines, dots = [], []
-
+    def timeline(self, render):
+        """[(x, y, filled)] for every game marker drawn inside the timeline box (accent rings excluded)."""
+        original_ellipse = ImageDraw.ImageDraw.ellipse
         box_x0, box_x1 = self.BOX_CENTER_X - 280 * self.S, self.BOX_CENTER_X + 280 * self.S
-
-        def line(draw, xy, *args, **kwargs):
-            # Only the timeline box's axis (the header gradient also draws full-width lines at this height).
-            if all(y == self.AXIS_Y and box_x0 < x < box_x1 for x, y in xy):
-                lines.append(xy)
-            return original_line(draw, xy, *args, **kwargs)
+        markers = []
 
         def ellipse(draw, xy, *args, **kwargs):
-            if kwargs.get("fill") is not None and (xy[1] + xy[3]) / 2 == self.AXIS_Y:
-                dots.append((xy[0] + xy[2]) / 2)
+            x, y = (xy[0] + xy[2]) / 2, (xy[1] + xy[3]) / 2
+            if box_x0 < x < box_x1 and kwargs.get("outline") != QUEUE_IMG_ACCENT:
+                markers.append((x, y, kwargs.get("fill") is not None))
             return original_ellipse(draw, xy, *args, **kwargs)
 
-        with patch.object(ImageDraw.ImageDraw, "line", new=line), \
-                patch.object(ImageDraw.ImageDraw, "ellipse", new=ellipse):
-            generate_queue_result_image("4615", [team_a(), team_b()], 0, history, [len(history), 0], is_final=False)
-        return lines, dots
+        with patch.object(ImageDraw.ImageDraw, "ellipse", new=ellipse):
+            render()
+        return markers
 
-    def test_a_single_game_has_no_axis_line_and_a_centred_dot(self):
-        lines, dots = self.timeline([True])
+    def test_each_game_sits_in_the_lane_of_the_team_that_won_it(self):
+        markers = self.timeline(lambda: generate_queue_result_image(
+            "4614", [team_a(), team_b()], 0, [True, False, True], [2, 1]))
 
-        self.assertEqual(lines, [])
-        self.assertEqual(dots, [self.BOX_CENTER_X])
+        self.assertEqual([y for _x, y, _filled in markers], [self.LANE_Y[0], self.LANE_Y[1], self.LANE_Y[0]])
+        self.assertTrue(all(filled for *_xy, filled in markers))
+        self.assertEqual(sorted(x for x, _y, _f in markers), [x for x, _y, _f in markers])
 
-    def test_several_games_keep_the_axis_spanning_the_box(self):
-        lines, dots = self.timeline([True, False, True])
+    def test_a_tied_series_still_shows_who_won_each_game(self):
+        # No leader, so match_history can't say who won; the per-game winners can.
+        markers = self.timeline(lambda: generate_queue_result_image(
+            "4702", [team_a(), team_b()], None, [None] * 4, [2, 2], is_final=False, game_winners=[0, 1, 1, 0]))
 
-        self.assertEqual(len(lines), 1)
-        self.assertEqual(len(dots), 3)
-        self.assertEqual((dots[0], dots[-1]), (lines[0][0][0], lines[0][1][0]))
+        self.assertEqual([y for _x, y, _f in markers],
+                         [self.LANE_Y[0], self.LANE_Y[1], self.LANE_Y[1], self.LANE_Y[0]])
+
+    def test_an_unknown_winner_is_a_hollow_ring_between_the_lanes(self):
+        markers = self.timeline(lambda: generate_queue_result_image(
+            "4614", [team_a(), team_b()], 0, [True, None], [1, 0]))
+
+        self.assertEqual(markers[1][1:], (self.MIDDLE_Y, False))
+
+    def test_a_single_game_is_centred(self):
+        markers = self.timeline(lambda: generate_queue_result_image(
+            "4615", [team_a(), team_b()], 0, [True], [1, 0], is_final=False))
+
+        self.assertEqual([(x, y) for x, y, _f in markers], [(self.LANE_CENTER_X, self.LANE_Y[0])])
+
+    def test_game_card_places_every_game_from_its_winners(self):
+        markers = self.timeline(lambda: generate_queue_game_image(
+            "4614", 2, 3, [team_a(), team_b()], 1, [True, False, True], [1, 1], [0, 1, 0]))
+
+        self.assertEqual([y for _x, y, _f in markers], [self.LANE_Y[0], self.LANE_Y[1], self.LANE_Y[0]])
+
+    def test_winners_are_rebuilt_from_the_older_match_history(self):
+        self.assertEqual(image_utils.winners_from_history([True, False, None], 1, 2), [1, 0, None])
+        self.assertEqual(image_utils.winners_from_history([True, False], None, 2), [None, None])
+        self.assertEqual(image_utils.winners_from_history([False], 0, 3), [None])
+
+
+class MvpTests(unittest.TestCase):
+    def test_the_best_impact_among_players_of_every_game_wins(self):
+        teams = [[person("Awang", 5, 900, 80, games=5), person("Sub", 9, 2000, 95, games=2)],
+                 [person("Bravo", 4, 800, 70, games=5)]]
+        self.assertEqual(image_utils.pick_mvp(teams, 5), (0, 0))
+
+    def test_a_shared_best_score_or_no_scores_gives_no_mvp(self):
+        tied = [[person("Awang", 5, 900, 80.2)], [person("Bravo", 4, 800, 79.6)]]
+        self.assertIsNone(image_utils.pick_mvp(tied, 5))
+        self.assertIsNone(image_utils.pick_mvp([[person("Awang", 5, 900)], [person("Bravo", 4, 800)]], 5))
+        self.assertIsNone(image_utils.pick_mvp([[person("Awang", 5, 900, 80)]], None))
+
+    def test_a_player_who_switched_sides_counts_once(self):
+        mover_1 = {**person("Mover", 5, 900, 90, games=2), "discord_id": 7}
+        mover_2 = {**person("Mover", 2, 400, 90, games=1), "discord_id": 7}
+        teams = [[person("Awang", 5, 900, 70, games=3), mover_1], [person("Bravo", 4, 800, 60, games=3), mover_2]]
+        self.assertEqual(image_utils.pick_mvp(teams, 3), (0, 1))  # tagged on the row with most of their games
+
+    def test_only_finished_series_with_a_winner_get_the_tag(self):
+        drawn = []
+        original_text = ImageDraw.ImageDraw.text
+
+        def capture(draw, xy, text, *args, **kwargs):
+            drawn.append(text)
+            return original_text(draw, xy, text, *args, **kwargs)
+
+        cases = [(0, True, True), (0, False, False), (None, True, False)]
+        for winner, is_final, expected in cases:
+            with self.subTest(winner=winner, is_final=is_final):
+                drawn.clear()
+                with patch.object(ImageDraw.ImageDraw, "text", new=capture):
+                    generate_queue_result_image("4614", [team_a(), team_b()], winner, [True] * 5, [5, 0],
+                                                is_final=is_final)
+                self.assertEqual("MVP" in drawn, expected)
 
 
 class PartialPlayerLabelTests(unittest.TestCase):

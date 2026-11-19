@@ -288,6 +288,8 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         match_result.get("team_round_wins"),
         duration_ms=match_result.get("duration_ms"),
         is_final=bool(match_result.get("is_final")),
+        game_winners=[game.get("winning_display_team_index") for game in match_result.get("individual_games") or []]
+        or None,
     )
     file = discord.File(image_buffer, filename=queue_result_filename(match_id))
 
@@ -335,6 +337,27 @@ def _top_performer(rows: list[dict], key: str) -> tuple[str, int] | None:
     return best["name"], int(best[key] + 0.5)
 
 
+def load_queue_snapshot(guild_id: int | None, match_id: str) -> dict | None:
+    """The saved Game breakdown snapshot for a queue, or None. Read once per click, so the card and its menu agree."""
+    return get_queue_result(guild_id, match_id) if guild_id is not None else None
+
+
+def queue_game_choices(snapshot: dict | None) -> list[tuple[str, str]]:
+    """(label, description) per game for the Game breakdown's "Jump to game" menu: who won it and who had the most
+    average damage (in one game, a player's average damage is that game's damage). Empty when nothing is saved.
+    The view shows at most 25 of them (Discord's limit), around the current game."""
+    choices = []
+    for index, game in enumerate((snapshot or {}).get("games") or []):
+        number = game.get("number") or index + 1
+        winner = game.get("winner")
+        label = f"Game {number} · Team {winner + 1} won" if isinstance(winner, int) and winner >= 0 else \
+            f"Game {number} · winner unknown"
+        top = _top_performer(game.get("players") or [], "damage")
+        description = f"Top avg dmg: {top[0]} ({top[1]:,})" if top else "No damage recorded"
+        choices.append((label[:100], description[:100]))
+    return choices
+
+
 def _game_alt_text(match_id: str, number: int, total: int, headline: str, teams: list[list[dict]]) -> str:
     """Text alternative for the game card: the headline plus every player's numbers (Discord caps alt text at 1024)."""
     lines = [f"Game {number} of {total} of queue {match_id}. {headline}."]
@@ -350,10 +373,11 @@ def _game_alt_text(match_id: str, number: int, total: int, headline: str, teams:
     return " ".join(lines)[:1000]
 
 
-async def build_queue_game_payload(guild_id: int | None, match_id: str, page: int):
-    """One game of a finished queue's Game breakdown, from its saved snapshot.
-    Returns (embed, file, page, total_games, None), or (None, None, 0, 0, error_text) when nothing is saved."""
-    snapshot = get_queue_result(guild_id, match_id) if guild_id is not None else None
+async def build_queue_game_payload(guild_id: int | None, match_id: str, page: int, snapshot: dict | None = None):
+    """One game of a finished queue's Game breakdown, from its saved snapshot (read here unless the caller already
+    has it). Returns (embed, file, page, total_games, None), or (None, None, 0, 0, error_text) when nothing is saved."""
+    if snapshot is None:
+        snapshot = load_queue_snapshot(guild_id, match_id)
     games = (snapshot or {}).get("games") or []
     if not games:
         return None, None, 0, 0, queue_games_unavailable(match_id)
@@ -379,6 +403,7 @@ async def build_queue_game_payload(guild_id: int | None, match_id: str, page: in
     series_score = [sum(1 for played in games[:page + 1] if played.get("winner") == index) for index in range(team_count)]
     image_buffer = await asyncio.to_thread(
         generate_queue_game_image, match_id, number, total, teams, winner, snapshot.get("match_history"), series_score,
+        [played.get("winner") for played in games],
     )
 
     if winner is not None and 0 <= winner < team_count:
@@ -410,8 +435,8 @@ async def build_queue_game_payload(guild_id: int | None, match_id: str, page: in
 
 async def build_hall_of_fame_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🏛️ NeatQueue Hall of Fame",
-        description="All-time best single-queue stats recorded by /queue_stats.",
+        title="Hall of Fame",
+        description="The best single-queue stats the bot has recorded, across every server.",
         color=discord.Color.gold()
     )
     for record_type, label in HALL_OF_FAME_RECORDS.items():
@@ -435,5 +460,4 @@ async def build_hall_of_fame_embed() -> discord.Embed:
             field_value = f"**{value_text}** — {holder} (Queue #{record['match_id']})"
 
         embed.add_field(name=label, value=field_value, inline=False)
-    embed.set_footer(text="Data courtesy of NeatQueue & survev.de APIs :)")
     return embed

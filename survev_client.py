@@ -70,7 +70,7 @@ def _retry_after_seconds(resp: aiohttp.ClientResponse, default: float) -> float:
 def _verification_embed(verification_uri: str, user_code: str, deadline: float) -> discord.Embed:
     expires_at = int(time.time() + max(0.0, deadline - time.monotonic()))
     return discord.Embed(
-        title="🔗 Link Your survev.de Account",
+        title="Link your survev.de account",
         description=f"1. Click the link to verify: [**Authorize survev.de account**]({verification_uri})\n"
                     f"2. Confirm code: **`{user_code}`**\n\n"
                     f"*Waiting for authorization... (expires <t:{expires_at}:R>)*",
@@ -149,19 +149,20 @@ async def _run_verification_flow(discord_user_id: int, state: dict):
                 if resp.status == 200:
                     data = await resp.json()
                     break
-                error_details = (await resp.text())[:500]
                 log.warning("survev.de device-code request failed with HTTP %s", resp.status)
                 if resp.status not in TRANSIENT_HTTP_STATUSES or is_last_attempt:
                     if resp.status == 429:
                         message = "survev.de is rate limiting the bot right now. Please try `/verify` again in a minute."
                     else:
-                        message = f"Failed to start authorization. Server responded ({resp.status}): `{error_details}`"
+                        message = (f"survev.de couldn't start the link (HTTP {resp.status}). "
+                                   "Try `/verify` again in a minute.")
                     await _notify_all(senders, content=message)
                     return
                 delay = _retry_after_seconds(resp, delay)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
             if is_last_attempt:
-                await _notify_all(senders, content=f"Failed to contact survev.de for authorization: `{exc}`")
+                log.warning("Couldn't reach survev.de to start /verify: %s", type(exc).__name__)
+                await _notify_all(senders, content="Couldn't reach survev.de. Try `/verify` again in a minute.")
                 return
         await asyncio.sleep(delay)
 
@@ -346,24 +347,42 @@ async def fetch_player_timeframe_stats(session: aiohttp.ClientSession, access_to
 SQUAD_TEAM_MODE = 4  # survev.de TeamMode.Squad, the mode 4v4 queues are played in
 
 
+class SurvevError(str):
+    """A survev.de error message that is safe to show in Discord, written for the account's owner ("Your …"), plus
+    the HTTP status that caused it (None when survev.de couldn't be reached). Callers showing someone else's data
+    use the status to reword it (`leaderboard_service.survev_error_for`). It is a str, so it works anywhere text does."""
+    status: int | None
+
+    def __new__(cls, text: str, status: int | None = None):
+        error = super().__new__(cls, text)
+        error.status = status
+        return error
+
+
 async def _fetch_external(session: aiohttp.ClientSession, access_token: str, endpoint: str, scope: str,
                           payload: dict | None = None):
     """POSTs to a survev.de external API endpoint with a player's token. Returns (data, None) or (None, error),
-    where error is a short message safe to show in Discord (never the raw response body)."""
+    where error is a short SurvevError (never the raw response body). `scope` is the OAuth scope the endpoint needs."""
     headers = {"Authorization": f"Bearer {access_token}"}
     try:
         async with api_slot(), session.post(f"https://survev.de/api/external/{endpoint}", headers=headers, json=payload) as resp:
             if resp.status == 200:
                 return await resp.json(), None
             if resp.status == 401:
-                return None, "Your survev.de token is invalid or revoked. Please run /verify again."
+                return None, SurvevError("Your survev.de link has expired. Run /verify to link your account again.", 401)
             if resp.status == 403:
-                return None, f"Your survev.de token does not have {endpoint} access. Please re-run /verify to grant {scope}."
+                log.info("survev.de refused %s: the token lacks %s", endpoint, scope)
+                return None, SurvevError(
+                    f"Your survev.de link doesn't let the bot read your {endpoint}. Run /verify again to allow it.", 403)
             if resp.status == 429:
-                return None, "survev.de is rate limiting the bot right now. Try again in a minute."
-            return None, f"survev.de {endpoint} request failed ({resp.status})."
+                return None, SurvevError("survev.de is rate limiting the bot right now. Try again in a minute.", 429)
+            log.info("survev.de %s request failed with HTTP %s", endpoint, resp.status)
+            return None, SurvevError("survev.de didn't answer. Try again in a minute.", resp.status)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-        return None, f"survev.de {endpoint} request failed: {exc or type(exc).__name__}"
+        # Never log the exception itself: its repr can include the request headers, and so the player's token.
+        log.info("survev.de %s request failed: %s (HTTP %s)", endpoint, type(exc).__name__,
+                 getattr(exc, "status", None))
+        return None, SurvevError("survev.de didn't answer. Try again in a minute.")
 
 
 async def fetch_user_inventory(session: aiohttp.ClientSession, access_token: str):

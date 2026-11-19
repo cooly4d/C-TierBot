@@ -93,7 +93,7 @@ class FriesLeaderboardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_linked_players_or_no_balances_explain_why(self):
         with patch.object(leaderboard_service, "get_all_users", return_value=[]):
-            self.assertEqual(await leaderboard_service.build_leaderboard_fries_embed(), (None, "No verified users found."))
+            self.assertEqual(await leaderboard_service.build_leaderboard_fries_embed(), (None, "No linked players found."))
 
         with patch.object(leaderboard_service, "get_all_users", return_value=[(1, "tok-1")]), \
                 patch.object(leaderboard_service, "fetch_user_market", new=AsyncMock(return_value=(None, "boom"))):

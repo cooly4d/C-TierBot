@@ -25,9 +25,17 @@ from leaderboard_service import (
     generate_leaderboard_embed,
     has_cached_inventory,
     has_cached_market,
+    link_prompt,
     normalize_season_stat,
+    survev_error_for,
 )
-from queue_stats_service import build_queue_game_payload, parse_queue_match_id, queue_games_unavailable
+from queue_stats_service import (
+    build_queue_game_payload,
+    load_queue_snapshot,
+    parse_queue_match_id,
+    queue_game_choices,
+    queue_games_unavailable,
+)
 
 MARKET_MODES = ("daily", "weekly", "all")
 # custom_ids used by /inventory and /market messages sent before paging state moved into the custom_id.
@@ -202,22 +210,40 @@ def get_queue_result_view(include_breakdown: bool = False):
 
 
 class QueueGamesPagerView(discord.ui.View):
-    """Previous/Next buttons under a Game breakdown card; clicks are handled in log_interaction. The queue and the
-    target page live in each custom_id (like the seasonal leaderboard), so nothing has to be kept in memory."""
-    def __init__(self, match_id: str, page: int, total_pages: int):
+    """Previous/Next buttons under a Game breakdown card, plus a "Jump to game" menu when `choices` (one
+    (label, description) per game) are given; clicks are handled in log_interaction. The queue and the target page
+    live in each custom_id ("qgame_pick:{match_id}" with the page as the option value), so nothing is kept in memory."""
+    def __init__(self, match_id: str, page: int, total_pages: int, choices: list[tuple[str, str]] | None = None):
         super().__init__(timeout=900)  # finite: these live in ephemeral messages, so don't hold them forever
         self.add_item(discord.ui.Button(
             label="◀ Previous",
             style=discord.ButtonStyle.primary,
             custom_id=f"qgame_prev:{match_id}:{max(0, page - 1)}",
             disabled=page <= 0,
+            row=0,
         ))
         self.add_item(discord.ui.Button(
             label="Next ▶",
             style=discord.ButtonStyle.primary,
             custom_id=f"qgame_next:{match_id}:{min(total_pages - 1, page + 1)}",
             disabled=page >= total_pages - 1,
+            row=0,
         ))
+        if choices and len(choices) > 1:
+            self.add_item(discord.ui.Select(
+                placeholder="Jump to game",
+                custom_id=f"qgame_pick:{match_id}",
+                options=[discord.SelectOption(label=label, description=description, value=str(index),
+                                              default=index == page)
+                         for index, (label, description) in _choice_window(choices, page)],
+                row=1,
+            ))
+
+
+def _choice_window(choices: list[tuple[str, str]], page: int, size: int = 25) -> list[tuple[int, tuple[str, str]]]:
+    """(page, choice) pairs for at most `size` games (Discord's select limit), centred on the current one."""
+    start = max(0, min(page - size // 2, len(choices) - size))
+    return list(enumerate(choices))[start:start + size]
 
 
 def parse_game_page_id(custom_id: str) -> tuple[str, int]:
@@ -231,10 +257,13 @@ def parse_game_page_id(custom_id: str) -> tuple[str, int]:
 async def build_queue_game_message(guild_id: int | None, match_id: str, page: int):
     """Returns (embed, file, view, None) for one game of a queue's breakdown, or (None, None, None, error_text).
     The view is None when the queue only has a single game."""
-    embed, file, page, total_pages, error_text = await build_queue_game_payload(guild_id, match_id, page)
+    snapshot = load_queue_snapshot(guild_id, match_id)
+    embed, file, page, total_pages, error_text = await build_queue_game_payload(guild_id, match_id, page, snapshot)
     if error_text:
         return None, None, None, error_text
-    view = QueueGamesPagerView(match_id, page, total_pages) if total_pages > 1 else None
+    view = None
+    if total_pages > 1:
+        view = QueueGamesPagerView(match_id, page, total_pages, queue_game_choices(snapshot))
     return embed, file, view, None
 
 
@@ -417,13 +446,13 @@ async def _show_page(interaction: discord.Interaction, file: discord.File, embed
 
 async def _paged_target(interaction: discord.Interaction, target_id: int):
     """(user, token) for the player a paged message belongs to, after telling the clicker if either is gone."""
-    access_token = get_user_token(target_id)
-    if not access_token:
-        await _tell_clicker(interaction, "That player's survev.de account is no longer linked.")
-        return None, None
     target = await _resolve_user(interaction, target_id)
     if target is None:
         await _tell_clicker(interaction, "Couldn't find that player anymore.")
+        return None, None
+    access_token = get_user_token(target_id)
+    if not access_token:
+        await _tell_clicker(interaction, link_prompt(target, interaction.user.id))
         return None, None
     return target, access_token
 
@@ -438,7 +467,8 @@ async def refresh_market_message(interaction: discord.Interaction, target_id: in
         return
     embed, file, view, error_text = await build_market_message(target_user, access_token, mode, page, use_cache=True)
     if error_text:
-        await _tell_clicker(interaction, "Failed to reload shop offers.", ephemeral=False)
+        await _tell_clicker(interaction, survev_error_for(error_text, target_user, interaction.user.id),
+                            ephemeral=False)
         return
     await _show_page(interaction, file, embed, view)
 
@@ -456,9 +486,35 @@ async def refresh_inventory_message(interaction: discord.Interaction, target_id:
         target_user, access_token, rarity_filter, page, use_cache=True
     )
     if error_text:
-        await _tell_clicker(interaction, "Failed to reload inventory.", ephemeral=False)
+        await _tell_clicker(interaction, survev_error_for(error_text, target_user, interaction.user.id),
+                            ephemeral=False)
         return
     await _show_page(interaction, file, embed, view)
+
+
+HOF_RESET_CONFIRM_SECONDS = 60
+
+
+class HallOfFameResetView(discord.ui.View):
+    """The private Delete / Cancel step of /reset_hall_of_fame. The custom_ids carry who asked and when the offer
+    runs out ("hof_reset:{action}:{user_id}:{expires_at}"); clicks are handled in log_interaction."""
+
+    def __init__(self, user_id: int, expires_at: int, record_count: int):
+        super().__init__(timeout=HOF_RESET_CONFIRM_SECONDS)
+        self.add_item(discord.ui.Button(
+            label=f"Delete {record_count} record{'' if record_count == 1 else 's'}",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"hof_reset:confirm:{user_id}:{expires_at}",
+        ))
+        self.add_item(discord.ui.Button(
+            label="Cancel", style=discord.ButtonStyle.secondary, custom_id=f"hof_reset:cancel:{user_id}:{expires_at}",
+        ))
+
+
+def parse_hof_reset_id(custom_id: str) -> tuple[str, int, int]:
+    """(action, user_id, expires_at) from "hof_reset:{action}:{user_id}:{expires_at}"."""
+    _, action, user_id, expires_at = custom_id.split(":")
+    return action, int(user_id), int(expires_at)
 
 
 PROFILE_TABS = ("overview", "history")
@@ -502,16 +558,17 @@ def parse_history_metric_id(custom_id: str) -> tuple[str, int, int]:
 
 
 async def build_profile_message(target: discord.abc.User, guild_id: int | None, tab: str = "overview",
-                                metric: str = "damage"):
+                                metric: str = "damage", viewer_id: int | None = None):
     """Returns (embed, file, view, None) for one /profile view, or (None, None, None, message). file is only set on
     the History view; view is None when there is no history to switch to (e.g. outside a server)."""
     if tab == "history":
-        embed, file, metric, message = await build_profile_history(target, guild_id, metric)
+        embed, file, metric, message = await build_profile_history(target, guild_id, metric, viewer_id=viewer_id)
         if message:
             return None, None, None, message
         return embed, file, ProfileView(guild_id, target.id, "history", metric), None
 
-    embed, has_history, message = await build_profile_overview(target, get_user_token(target.id), guild_id)
+    embed, has_history, message = await build_profile_overview(target, get_user_token(target.id), guild_id,
+                                                               viewer_id=viewer_id)
     if message:
         return None, None, None, message
     view = ProfileView(guild_id, target.id, "overview") if has_history else None
@@ -528,7 +585,8 @@ async def refresh_profile_message(interaction: discord.Interaction, guild_id: in
         await interaction.followup.send("Couldn't find that player anymore.", ephemeral=True)
         return
 
-    embed, file, view, message = await build_profile_message(target, guild_id, tab, metric)
+    embed, file, view, message = await build_profile_message(target, guild_id, tab, metric,
+                                                             viewer_id=interaction.user.id)
     if message:
         await interaction.followup.send(message, ephemeral=True)
         return

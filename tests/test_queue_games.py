@@ -401,13 +401,28 @@ class BuildQueueGamePayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("`/queue_stats` with the queue number", queue_games_unavailable(None))
 
 
+class JumpMenuWindowTests(unittest.TestCase):
+    def test_long_series_show_25_games_around_the_current_one(self):
+        from discord_ui import _choice_window
+        choices = [(f"Game {n}", "") for n in range(1, 31)]
+        self.assertEqual([page for page, _ in _choice_window(choices, 0)], list(range(25)))
+        self.assertEqual([page for page, _ in _choice_window(choices, 29)], list(range(5, 30)))
+        self.assertIn(15, [page for page, _ in _choice_window(choices, 15)])
+        self.assertEqual(len(_choice_window(choices[:3], 2)), 3)
+
+
 class BuildQueueGameMessageTests(unittest.IsolatedAsyncioTestCase):
     async def test_multi_game_queues_get_the_pager(self):
         with patch("queue_stats_service.get_queue_result", return_value=stored_snapshot()):
             embed, file, view, error = await build_queue_game_message(10, "3674", 1)
 
         self.assertIsNone(error)
-        self.assertEqual([c.custom_id for c in view.children], ["qgame_prev:3674:0", "qgame_next:3674:2"])
+        self.assertEqual([c.custom_id for c in view.children],
+                         ["qgame_prev:3674:0", "qgame_next:3674:2", "qgame_pick:3674"])
+        jump = view.children[2]
+        self.assertEqual([option.value for option in jump.options], [str(i) for i in range(len(jump.options))])
+        self.assertEqual([option.default for option in jump.options].index(True), 1)
+        self.assertTrue(all(option.description.startswith(("Top avg dmg: ", "No damage")) for option in jump.options))
 
     async def test_single_game_queues_have_no_pager(self):
         single = stored_snapshot()

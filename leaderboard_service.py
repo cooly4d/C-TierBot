@@ -29,6 +29,7 @@ from survev_client import (
 )
 from image_utils import (
     INVENTORY_ITEMS_PER_PAGE,
+    MARKET_MODE_SLOTS,
     SHOP_ITEMS_PER_PAGE,
     build_inventory_rarity_counts,
     compute_inventory_worth,
@@ -48,8 +49,12 @@ MAX_PAYLOAD_CACHE_ENTRIES = 200
 TIER_CACHE_TTL_SECONDS = 300
 # Per-player /leaderboard stats, so switching the stat or period re-sorts instead of re-fetching every player.
 LEADERBOARD_CACHE_TTL_SECONDS = 300
+# A player's /inventory and /market data, reused by that message's buttons for PAYLOAD_CACHE_TTL_SECONDS. After
+# that a click fetches again, so an old message never shows yesterday's offers or balance as current.
+PAYLOAD_CACHE_TTL_SECONDS = 300
 _inventory_cache: dict[int, dict] = {}
 _market_cache: dict[int, dict] = {}
+_payload_cached_at: dict[tuple[int, int], float] = {}  # (id(cache), user_id) -> time.monotonic() when stored
 _tier_cache: dict[int, tuple[float, dict | None]] = {}
 _timeframe_cache: dict[tuple[int, int], tuple[float, dict]] = {}
 
@@ -61,12 +66,34 @@ RENDERED_PAGE_CACHE_SIZE = 96
 _rendered_page_cache: OrderedDict[tuple, tuple[dict, asyncio.Task]] = OrderedDict()
 
 
+def _store_payload(cache: dict[int, dict], user_id: int, data: dict) -> None:
+    """Caches a player's /inventory or /market data and remembers when, so `_fresh_payload` can let it expire."""
+    _store_cache_entry(cache, user_id, data)
+    _payload_cached_at[(id(cache), user_id)] = time.monotonic()
+    for key in [key for key in _payload_cached_at if key[0] == id(cache) and key[1] not in cache]:
+        del _payload_cached_at[key]  # evicted by _store_cache_entry's size limit
+
+
+def _fresh_payload(cache: dict[int, dict], user_id: int) -> dict | None:
+    """The cached data if it is younger than PAYLOAD_CACHE_TTL_SECONDS, else None (and the old entry is dropped),
+    so buttons on an old /market or /inventory message fetch today's offers and balance."""
+    data = cache.get(user_id)
+    if data is None:
+        return None
+    stored_at = _payload_cached_at.get((id(cache), user_id))
+    if stored_at is not None and time.monotonic() - stored_at >= PAYLOAD_CACHE_TTL_SECONDS:
+        cache.pop(user_id, None)
+        _payload_cached_at.pop((id(cache), user_id), None)
+        return None
+    return data
+
+
 def has_cached_inventory(user_id: int) -> bool:
-    return user_id in _inventory_cache
+    return _fresh_payload(_inventory_cache, user_id) is not None
 
 
 def has_cached_market(user_id: int) -> bool:
-    return user_id in _market_cache
+    return _fresh_payload(_market_cache, user_id) is not None
 
 
 def _png_bytes(render, *args) -> bytes:
@@ -104,10 +131,8 @@ def _market_page_task(user_id: int, market_data: dict, username: str, mode: str,
 
 def _market_total_pages(market_data: dict, mode: str) -> int:
     offers = market_data.get("offers", [])
-    if mode == "daily":
-        offers = [o for o in offers if o.get("slot") in (0, 1)]
-    elif mode == "weekly":
-        offers = [o for o in offers if o.get("slot") in (2, 3)]
+    if mode in MARKET_MODE_SLOTS:
+        offers = [o for o in offers if o.get("slot") in MARKET_MODE_SLOTS[mode]]
     return max(1, -(-len(offers) // SHOP_ITEMS_PER_PAGE))
 
 
@@ -142,7 +167,7 @@ async def build_inventory_image_payload(
     rarity_filter: str = "all",
     use_cache: bool = False,
 ):
-    inventory = _inventory_cache.get(target_user.id) if use_cache else None
+    inventory = _fresh_payload(_inventory_cache, target_user.id) if use_cache else None
     if inventory is None:
         inventory, error = await fetch_user_inventory(http_session, access_token)
         if error:
@@ -151,7 +176,7 @@ async def build_inventory_image_payload(
         if not inventory:
             return None, None, "survev.de returned an empty inventory response.", None, None, None
 
-        _store_cache_entry(_inventory_cache, target_user.id, inventory)
+        _store_payload(_inventory_cache, target_user.id, inventory)
 
     username = inventory.get("username") or str(target_user)
     items = inventory.get("items", [])
@@ -181,7 +206,7 @@ async def build_shop_image_payload(
     page: int = 0,
     use_cache: bool = False,
 ):
-    market_data = _market_cache.get(target_user.id) if use_cache else None
+    market_data = _fresh_payload(_market_cache, target_user.id) if use_cache else None
     if market_data is None:
         market_data, error = await fetch_user_market(http_session, access_token)
         if error:
@@ -190,7 +215,7 @@ async def build_shop_image_payload(
         if not market_data:
             return None, None, None, "survev.de returned an empty market response.", None
 
-        _store_cache_entry(_market_cache, target_user.id, market_data)
+        _store_payload(_market_cache, target_user.id, market_data)
 
     username = market_data.get("username") or str(target_user)
     total_pages = _market_total_pages(market_data, mode)
@@ -207,8 +232,7 @@ async def build_shop_image_payload(
     filename = f"shop_{target_user.id}_{mode}_p{clamped_page}.png"
     file = discord.File(BytesIO(png), filename=filename)
 
-    mode_label = "Daily" if mode == "daily" else "Weekly" if mode == "weekly" else "All"
-    content = f"{username}'s {mode_label} Offers"
+    content = f"{username}'s {mode} offers" if mode in MARKET_MODE_SLOTS else f"{username}'s offers"
 
     return content, file, filename, None, total_pages
 
@@ -234,14 +258,23 @@ async def build_compare_payload(member_a: discord.User, member_b: discord.User):
     token_b = get_user_token(member_b.id)
 
     async def _fetch_member_data(member: discord.User, token: str | None):
+        """(stats, worth, tier) for one player. stats is None when they aren't linked and {"unavailable": True}
+        when their match history couldn't be read in full (a rate limit mid-way would otherwise count as zeros);
+        worth is None when the inventory couldn't be read."""
         if not token:
-            return None, 0, None
-        stats, (inventory, _), (tier, tier_error) = await asyncio.gather(
-            fetch_player_timeframe_stats(session, token, 0, now_ms),
+            return None, None, None
+        history_diagnostics: dict = {}
+        stats, (inventory, inventory_error), (tier, tier_error) = await asyncio.gather(
+            fetch_player_timeframe_stats(session, token, 0, now_ms, diagnostics=history_diagnostics),
             fetch_user_inventory(session, token),
             get_squad_tier(member.id, token, session),
         )
-        worth = compute_inventory_worth(inventory.get("items", [])) if isinstance(inventory, dict) else 0
+        if history_diagnostics.get("pagination_complete") is False:
+            stats = {"unavailable": True}
+        worth = None
+        items = inventory.get("items") if not inventory_error and isinstance(inventory, dict) else None
+        if isinstance(items, list):  # a response without an item list is a failed lookup, not an empty inventory
+            worth = compute_inventory_worth(items)
         return stats, worth, ({"unavailable": True} if tier_error else tier)
 
     (left_stats, left_worth, left_tier), (right_stats, right_worth, right_tier) = await asyncio.gather(
@@ -251,28 +284,59 @@ async def build_compare_payload(member_a: discord.User, member_b: discord.User):
 
     left_queue_summary = get_player_queue_stats_summary(member_a.id)
     right_queue_summary = get_player_queue_stats_summary(member_b.id)
+    left_name, right_name = _member_name(member_a), _member_name(member_b)
 
     image_buffer = await asyncio.to_thread(
         generate_compare_image,
-        member_a.name,
+        left_name,
         left_stats,
-        left_worth if left_stats is not None else None,
+        left_worth,
         left_queue_summary,
-        member_b.name,
+        right_name,
         right_stats,
-        right_worth if right_stats is not None else None,
+        right_worth,
         right_queue_summary,
         left_tier,
         right_tier,
     )
     file = discord.File(image_buffer, filename=f"compare_{member_a.id}_{member_b.id}.png")
-    return f"Compare {member_a.name} vs {member_b.name}", file, None
+    return f"Compare {left_name} vs {right_name}", file, None
+
+
+def _member_name(member: discord.abc.User) -> str:
+    """The name people see in this server (nickname, then global display name, then username)."""
+    return getattr(member, "display_name", None) or getattr(member, "name", None) or str(member)
+
+
+def _bold_name(member: discord.abc.User) -> str:
+    """The member's name in bold, for messages that talk about someone without pinging them (a nickname such as
+    "@everyone" is escaped too)."""
+    return f"**{discord.utils.escape_mentions(discord.utils.escape_markdown(_member_name(member)))}**"
+
+
+def link_prompt(target: discord.abc.User, viewer_id: int | None) -> str:
+    """What to say when `target` hasn't linked a survev.de account: who it is, and who can fix it."""
+    if viewer_id is not None and target.id == viewer_id:
+        return "You haven't linked a survev.de account yet. Run /verify to link one."
+    return f"{_bold_name(target)} hasn't linked a survev.de account yet. They can run /verify to link one."
+
+
+def survev_error_for(error: str, target: discord.abc.User, viewer_id: int | None) -> str:
+    """A survev.de error (written for the account's owner) reworded when someone else is looking: an expired or
+    narrowed link is the owner's to fix, so it names them instead of saying "Your". Other errors pass through."""
+    status = getattr(error, "status", None)
+    if viewer_id is None or target.id == viewer_id or status not in (401, 403):
+        return str(error)
+    if status == 401:
+        return f"{_bold_name(target)}'s survev.de link has expired. They can run /verify to link it again."
+    return f"{_bold_name(target)}'s survev.de link doesn't let the bot read this. They can run /verify again to allow it."
 
 
 def format_squad_tier_field(tier: dict | None, error: str | None) -> str:
-    """Embed field text for a player's survev.de Squad tier."""
+    """Embed field text for a player's survev.de Squad tier. A failed lookup says so in a few words; the raw error is
+    about survev.de or the token, which this line isn't the place to explain."""
     if error:
-        return error
+        return "unavailable right now"
     if tier is None:
         return "Unranked"
     parts = [f"**{tier['tier']}**", f"rating {tier['rating']}"]
@@ -301,8 +365,10 @@ def _profile_number(value) -> str:
     return f"**{value:,.0f}**" if value is not None else "N/A"
 
 
-async def build_profile_overview(target: discord.abc.User, access_token: str | None, guild_id: int | None = None):
-    """/profile's Overview: the player's queue averages and Squad tier as a few short lines.
+async def build_profile_overview(target: discord.abc.User, access_token: str | None, guild_id: int | None = None,
+                                 viewer_id: int | None = None):
+    """/profile's Overview: the player's queue averages and Squad tier as a few short lines. `viewer_id` is who asked,
+    so an empty profile can say "You" or name the player.
 
     Returns (embed, has_history, None), where has_history says whether this server has a history card for them, or
     (None, False, message) when there is nothing to show for this player yet."""
@@ -314,7 +380,13 @@ async def build_profile_overview(target: discord.abc.User, access_token: str | N
 
     has_queues = summary["matches"] > 0
     if not has_queues and tier is None and not has_history:
-        return None, False, f"No cached NeatQueue results found for {target.display_name} yet."
+        if not access_token:
+            return None, False, link_prompt(target, viewer_id)
+        if getattr(tier_error, "status", None) in (401, 403):  # the link itself is the problem
+            return None, False, survev_error_for(tier_error, target, viewer_id)
+        if viewer_id is not None and target.id == viewer_id:
+            return None, False, "You haven't finished a 4v4 queue the bot has recorded yet."
+        return None, False, f"{_bold_name(target)} hasn't finished a 4v4 queue the bot has recorded yet."
 
     lines = []
     if has_queues:
@@ -332,20 +404,24 @@ async def build_profile_overview(target: discord.abc.User, access_token: str | N
             f"⚡ Avg impact {_profile_number(summary.get('all_time_avg_impact'))} · {month_name} {monthly_impact_text}",
         ]
     else:
-        lines.append("No cached NeatQueue results yet.")
+        lines.append("No 4v4 queues recorded yet.")
     if access_token:
-        lines.append(f"🏅 Squad tier {format_squad_tier_field(tier, tier_error)}")
+        tier_text = format_squad_tier_field(tier, tier_error)
+        if getattr(tier_error, "status", None) in (401, 403):
+            tier_text += f": {survev_error_for(tier_error, target, viewer_id)}"
+        lines.append(f"🏅 Squad tier {tier_text}")
 
     embed = discord.Embed(
         title=f"{target.display_name}'s NeatQueue stats",
         description="\n".join(lines),
         color=discord.Color.blurple(),
     )
-    embed.set_footer(text="NeatQueue 4v4s · tier from survev.de" if access_token else "NeatQueue 4v4s")
+    embed.set_footer(text="NeatQueue 4v4s")
     return embed, has_history, None
 
 
-async def build_profile_history(target: discord.abc.User, guild_id: int | None, metric: str = "damage"):
+async def build_profile_history(target: discord.abc.User, guild_id: int | None, metric: str = "damage",
+                                viewer_id: int | None = None):
     """/profile's History: the card with the player's last 10 queues in this server, its trend chart showing `metric`.
     The card carries the player's name, so the embed has no title.
 
@@ -353,7 +429,9 @@ async def build_profile_history(target: discord.abc.User, guild_id: int | None, 
     metric = normalize_history_metric(metric)
     rows = get_player_queue_history(guild_id, target.id, limit=PROFILE_HISTORY_LIMIT) if guild_id is not None else []
     if not rows:
-        return None, None, metric, f"No cached NeatQueue history found for {target.display_name} in this server yet."
+        if viewer_id is not None and target.id == viewer_id:
+            return None, None, metric, "You haven't finished a 4v4 queue in this server yet."
+        return None, None, metric, f"{_bold_name(target)} hasn't finished a 4v4 queue in this server yet."
 
     image_buffer = await asyncio.to_thread(generate_history_image, target.display_name, rows, metric)
     filename = f"history_{guild_id}_{target.id}_{metric}.png"
@@ -402,15 +480,14 @@ async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kil
     leaderboard_data.sort(key=lambda x: x["stats"][sort_key], reverse=True)
 
     embed = discord.Embed(
-        title=f"🏆 Server {period} Leaderboard",
+        title=f"{period} server leaderboard",  # the button router reads "Weekly"/"Monthly" here
         description=f"Performance over the past **{days} days** (Sorted by {sort_label})",
         color=discord.Color.gold() if period == "Weekly" else discord.Color.purple()
     )
     embed.set_image(url=LEADERBOARD_BANNER_URL)
 
     if not leaderboard_data:
-        embed.description = "No matches logged by verified members in this timeframe."
-        embed.set_footer(text="Data courtesy of survev.de API :)")
+        embed.description = "No matches logged by linked members in this timeframe."
         return embed
 
     rank_emojis = ["🥇", "🥈", "🥉"]
@@ -423,7 +500,6 @@ async def generate_leaderboard_embed(period: str, days: int, sort_by: str = "kil
         leaderboard_text += f"{rank} <@{entry['discord_id']}>\n{sort_emoji} {sort_label}: **{stat_value}**\n\n"
 
     embed.add_field(name=f"Top Players by {sort_label}", value=leaderboard_text[:1024], inline=False)
-    embed.set_footer(text="Data courtesy of survev.de API :)")
     return embed
 
 
@@ -452,7 +528,7 @@ SEASON_PAGE_SIZE = 10  # keeps one page inside the 1024-character embed field li
 
 # /leaderboard_season stat picker: key -> (label, emoji, description, value format). "damage" is the default.
 SEASON_STATS = {
-    "damage": ("Avg Damage", "💥", "average damage per game", "{:,.0f}"),
+    "damage": ("Avg Damage", "💥", "avg dmg", "{:,.0f}"),
     "impact": ("Avg Impact", "⚡", "average survev.de impact score per game", "{:,.0f}"),
     "kills": ("Avg Kills", "⚔️", "average kills per game", "{:,.1f}"),
 }
@@ -481,7 +557,7 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
     page = max(0, min(page, total_pages - 1))
 
     embed = discord.Embed(
-        title=f"🏆 {month_label} 4v4 {label} Leaderboard",
+        title=f"{month_label} 4v4 leaderboard · {label.lower().replace('damage', 'dmg')}",
         description=f"Ranked by {description} in 4v4 queues only.",
         color=discord.Color.gold(),
     )
@@ -515,7 +591,7 @@ async def build_seasonal_leaderboard_payload(guild_id: int, month: str | None = 
 async def build_leaderboard_fries_embed():
     users = get_all_users()
     if not users:
-        return None, "No verified users found."
+        return None, "No linked players found."
 
     async def _fetch_one(discord_id: int, token: str):
         market_data, error = await fetch_user_market(http_session, token)
@@ -530,12 +606,12 @@ async def build_leaderboard_fries_embed():
     leaderboard_data = [entry for entry in results if entry is not None]
 
     if not leaderboard_data:
-        return None, "No Golden Fries balances could be retrieved from verified users."
+        return None, "No Golden Fries balances could be retrieved for linked players."
 
     leaderboard_data.sort(key=lambda x: x["balance"], reverse=True)
     embed = discord.Embed(
-        title="<:goldenfries:1535978920481136700> Server Golden Fries Leaderboard",
-        description="Top verified users by their survev.de Golden Fries balance.",
+        title="<:goldenfries:1535978920481136700> Server Golden Fries leaderboard",
+        description="Top linked players by their survev.de Golden Fries balance.",
         color=discord.Color.gold()
     )
 
@@ -549,5 +625,4 @@ async def build_leaderboard_fries_embed():
         )
 
     embed.add_field(name="Top Golden Fries", value=leaderboard_text[:1024], inline=False)
-    embed.set_footer(text="Data courtesy of survev.de API :)")
     return embed, None

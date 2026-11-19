@@ -130,7 +130,7 @@ class PagingRefreshTests(unittest.IsolatedAsyncioTestCase):
 
         payload.assert_not_awaited()
         interaction.message.edit.assert_not_awaited()
-        self.assertIn("no longer linked", interaction.followup.send.await_args.args[0])
+        self.assertIn("hasn't linked a survev.de account", interaction.followup.send.await_args.args[0])
         self.assertTrue(interaction.followup.send.await_args.kwargs["ephemeral"])
 
 

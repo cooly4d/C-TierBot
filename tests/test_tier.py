@@ -94,18 +94,26 @@ class FetchUserStatsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["headers"], {"Authorization": "Bearer tok-abc"})
 
     async def test_http_errors_become_friendly_messages(self):
-        expectations = {401: "/verify", 403: "read:stats", 429: "rate limiting", 500: "(500)"}
+        expectations = {401: "/verify", 403: "read your stats", 429: "rate limiting", 500: "didn't answer"}
         for status, needle in expectations.items():
             with self.subTest(status=status):
                 data, error = await fetch_user_stats(FakeSession(FakeResponse(status)), "tok")
                 self.assertIsNone(data)
                 self.assertIn(needle, error)
+                self.assertEqual(error.status, status)  # lets callers reword it for someone else's account
+
+    async def test_a_failed_request_never_logs_the_token(self):
+        # aiohttp exceptions can carry the request headers; only the type and status may be logged.
+        with self.assertLogs("survev_client", "INFO") as logs:
+            await fetch_user_stats(FakeSession(error=aiohttp.ClientError("Authorization: Bearer tok-secret")), "tok-secret")
+        self.assertNotIn("tok-secret", "\n".join(logs.output))
 
     async def test_network_failures_are_reported_not_raised(self):
         data, error = await fetch_user_stats(FakeSession(error=aiohttp.ClientError("boom")), "tok")
 
         self.assertIsNone(data)
-        self.assertIn("boom", error)
+        self.assertEqual(error, "survev.de didn't answer. Try again in a minute.")
+        self.assertIsNone(error.status)
 
 
 class GetSquadTierTests(unittest.IsolatedAsyncioTestCase):
@@ -189,7 +197,7 @@ class TierFormattingTests(unittest.TestCase):
         self.assertEqual(field(RANKED, None), "**A-** · rating 72 · EU")
         self.assertEqual(field({**RANKED, "region": None}, None), "**A-** · rating 72")
         self.assertEqual(field(None, None), "Unranked")
-        self.assertEqual(field(None, "Please run /verify again."), "Please run /verify again.")
+        self.assertEqual(field(None, "Please run /verify again."), "unavailable right now")
 
 
 class BuildProfileOverviewTests(unittest.IsolatedAsyncioTestCase):
@@ -223,7 +231,7 @@ class BuildProfileOverviewTests(unittest.IsolatedAsyncioTestCase):
             f"⚡ Avg impact **74** · {month} **79**",
             "🏅 Squad tier **A-** · rating 72 · EU",
         ])
-        self.assertEqual(embed.footer.text, "NeatQueue 4v4s · tier from survev.de")
+        self.assertEqual(embed.footer.text, "NeatQueue 4v4s")  # text embeds carry no credit line
         get_tier.assert_awaited_once_with(7, "tok")
 
     async def test_verified_player_without_queues_still_sees_the_tier(self):
@@ -231,13 +239,13 @@ class BuildProfileOverviewTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(message)
         self.assertEqual(embed.description.split("\n"),
-                         ["No cached NeatQueue results yet.", "🏅 Squad tier **A-** · rating 72 · EU"])
+                         ["No 4v4 queues recorded yet.", "🏅 Squad tier **A-** · rating 72 · EU"])
 
     async def test_unranked_player_without_queues_gets_the_usual_message(self):
         embed, _has_history, message, _ = await self.overview(NO_QUEUES, tier=None)
 
         self.assertIsNone(embed)
-        self.assertEqual(message, "No cached NeatQueue results found for Awang yet.")
+        self.assertEqual(message, "**Awang** hasn't finished a 4v4 queue the bot has recorded yet.")
 
     async def test_unverified_player_never_triggers_a_tier_lookup(self):
         embed, _has_history, _message, get_tier = await self.overview(QUEUE_SUMMARY, token=None)
@@ -249,7 +257,7 @@ class BuildProfileOverviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_lookup_errors_are_shown_instead_of_hiding_the_queue_stats(self):
         embed, *_ = await self.overview(QUEUE_SUMMARY, tier=None, tier_error="survev.de is rate limiting the bot right now.")
 
-        self.assertTrue(embed.description.endswith("🏅 Squad tier survev.de is rate limiting the bot right now."))
+        self.assertTrue(embed.description.endswith("🏅 Squad tier unavailable right now"))
         self.assertIn("Avg damage **1,500**", embed.description)
 
     async def test_missing_values_and_a_quiet_month_have_readable_fallbacks(self):
@@ -290,6 +298,37 @@ class BuildComparePayloadTests(unittest.IsolatedAsyncioTestCase):
         args, _ = await self._compare({1: "tok-1", 2: "tok-2"}, [(None, "boom"), (RANKED, None)])
 
         self.assertEqual(args[-2:], ({"unavailable": True}, RANKED))
+
+    async def test_an_inventory_without_an_item_list_is_not_worth_zero(self):
+        left, right = SimpleNamespace(id=1, name="Awang"), SimpleNamespace(id=2, name="Bravo")
+        stats = {"games": 10, "wins": 2, "kills": 20, "damage": 5000}
+        for inventory in ({}, {"items": None}):
+            with self.subTest(inventory=inventory), \
+                    patch.object(leaderboard_service, "get_user_token", side_effect={1: "t1", 2: "t2"}.get), \
+                    patch.object(leaderboard_service, "fetch_player_timeframe_stats", AsyncMock(return_value=stats)), \
+                    patch.object(leaderboard_service, "fetch_user_inventory", AsyncMock(return_value=(inventory, None))), \
+                    patch.object(leaderboard_service, "get_player_queue_stats_summary", return_value=NO_QUEUES), \
+                    patch.object(leaderboard_service, "get_squad_tier", AsyncMock(return_value=(None, None))), \
+                    patch.object(leaderboard_service, "generate_compare_image", return_value=io.BytesIO(b"png")) as render:
+                await leaderboard_service.build_compare_payload(left, right)
+            args = render.call_args.args
+            self.assertEqual((args[2], args[6]), (None, None))  # N/A on the card, not 0 GF
+
+    async def test_an_incomplete_history_is_unavailable_not_zero(self):
+        left, right = SimpleNamespace(id=1, name="Awang"), SimpleNamespace(id=2, name="Bravo")
+
+        async def rate_limited(_session, _token, _from, _to, diagnostics=None):
+            diagnostics["pagination_complete"] = False
+            return {"games": 0, "wins": 0, "kills": 0, "damage": 0}
+
+        with patch.object(leaderboard_service, "get_user_token", side_effect={1: "t1"}.get), \
+                patch.object(leaderboard_service, "fetch_player_timeframe_stats", rate_limited), \
+                patch.object(leaderboard_service, "fetch_user_inventory", AsyncMock(return_value=({"items": []}, None))), \
+                patch.object(leaderboard_service, "get_player_queue_stats_summary", return_value=NO_QUEUES), \
+                patch.object(leaderboard_service, "get_squad_tier", AsyncMock(return_value=(None, None))), \
+                patch.object(leaderboard_service, "generate_compare_image", return_value=io.BytesIO(b"png")) as render:
+            await leaderboard_service.build_compare_payload(left, right)
+        self.assertEqual(render.call_args.args[1], {"unavailable": True})
 
     async def test_members_without_a_token_are_not_looked_up(self):
         args, get_tier = await self._compare({1: "tok-1"}, [(RANKED, None)])

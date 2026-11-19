@@ -25,6 +25,7 @@ from bot_config import (
 from db import (
     add_guild_queue_channel,
     clear_hall_of_fame_records,
+    count_hall_of_fame_records,
     get_all_guild_settings,
     get_guild_queue_channels,
     get_user_token,
@@ -33,7 +34,9 @@ from db import (
     update_guild_last_updated,
 )
 from discord_ui import (
+    HOF_RESET_CONFIRM_SECONDS,
     LEGACY_PAGINATION_IDS,
+    HallOfFameResetView,
     LeaderboardView,
     build_inventory_message,
     build_market_message,
@@ -42,6 +45,7 @@ from discord_ui import (
     get_queue_result_view,
     parse_game_page_id,
     parse_history_metric_id,
+    parse_hof_reset_id,
     parse_inventory_page_id,
     parse_market_id,
     parse_profile_tab_id,
@@ -61,6 +65,8 @@ from leaderboard_service import (
     build_goldenfries_embed_payload,
     build_leaderboard_fries_embed,
     generate_leaderboard_embed,
+    link_prompt,
+    survev_error_for,
 )
 from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_number, get_nested_value
 from queue_stats_service import (
@@ -72,6 +78,7 @@ from console_service import start_console_listener
 from survev_client import backfill_missing_slugs, run_survev_verification
 
 log = logging.getLogger(__name__)
+NO_PINGS = discord.AllowedMentions.none()  # replies that name people or quote what someone typed
 
 _startup_done = False
 _console_listener_started = False
@@ -80,6 +87,8 @@ QUEUE_MENTION_COOLDOWN_SECONDS = 30
 _queue_mention_busy: set[tuple[int, int]] = set()
 _queue_mention_cooldowns: dict[tuple[int, int], float] = {}
 _prefix_queue_busy: set[tuple[int, int, str]] = set()
+_bot_owner_id: int | None = None  # resolved once from the application info
+_hof_reset_answered: set[tuple[int, int]] = set()  # (user_id, expires_at) of answered reset confirmations
 # "score?" anywhere in a message, as its own word (so "what is the score?" counts but "underscore?" doesn't).
 SCORE_QUESTION_PATTERN = re.compile(r"\bscore\?", re.IGNORECASE)
 # "?c <arg>" or "?c<queue_number>" in any server channel the bot can post in (e.g. "?c4123", "?c 4123", "?C #4123").
@@ -164,6 +173,9 @@ async def log_interaction(interaction: discord.Interaction):
     elif custom_id and custom_id.startswith(("qgame_prev:", "qgame_next:")):
         match_id, page = parse_game_page_id(custom_id)
         await refresh_queue_game_message(interaction, match_id, page)
+    elif custom_id and custom_id.startswith("qgame_pick:"):
+        picked = (interaction.data.get("values") or ["0"])[0]
+        await refresh_queue_game_message(interaction, custom_id.split(":", 1)[1], int(picked) if picked.isdigit() else 0)
     elif custom_id == "leaderboard_weekly":
         selected_sort = get_selected_sort_from_message(interaction.message)
         await refresh_leaderboard_message(interaction, "Weekly", 7, selected_sort)
@@ -192,6 +204,8 @@ async def log_interaction(interaction: discord.Interaction):
     elif custom_id and custom_id.startswith(("mkt_prev:", "mkt_next:", "mkt_mode:")):
         target_id, mode, page = parse_market_id(custom_id)
         await refresh_market_message(interaction, target_id, mode, page)
+    elif custom_id and custom_id.startswith("hof_reset:"):
+        await answer_hall_of_fame_reset(interaction, custom_id)
     elif custom_id and custom_id.startswith("profile_tab:"):
         tab, guild_id, target_discord_id = parse_profile_tab_id(custom_id)
         await refresh_profile_message(interaction, guild_id, target_discord_id, tab)
@@ -211,10 +225,7 @@ async def _require_user_token(interaction: discord.Interaction, target: discord.
     access_token = get_user_token(target.id)
     if access_token:
         return access_token
-    if target.id == interaction.user.id:
-        await interaction.followup.send("You have not linked a survev.de account yet. Use `/verify` to get started.")
-    else:
-        await interaction.followup.send(f"{target.mention} has not linked a survev.de account yet. Use `/verify` to get started.")
+    await interaction.followup.send(link_prompt(target, interaction.user.id), allowed_mentions=NO_PINGS)
     return None
 
 
@@ -269,7 +280,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         guild_id=interaction.guild_id, channel_id=interaction.channel_id, requested_by=interaction.user,
     )
     if error_text:
-        await interaction.followup.send(error_text)
+        await interaction.followup.send(error_text, allowed_mentions=NO_PINGS)  # it can quote the queue number typed
         return
 
     await interaction.followup.send(
@@ -283,9 +294,10 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
     target = member or interaction.user
     await interaction.response.defer()
 
-    embed, _file, view, message = await build_profile_message(target, interaction.guild_id)
+    embed, _file, view, message = await build_profile_message(target, interaction.guild_id,
+                                                              viewer_id=interaction.user.id)
     if message:
-        await interaction.followup.send(message)
+        await interaction.followup.send(message, allowed_mentions=NO_PINGS)
         return
     if view is None:  # nothing to switch to (no history in this server, or used outside one); send rejects view=None
         await interaction.followup.send(embed=embed)
@@ -300,16 +312,61 @@ async def hall_of_fame(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
-@bot.tree.command(name="reset_hall_of_fame", description="Clear all Hall of Fame records.")
+async def _is_bot_owner(user: discord.abc.User) -> bool:
+    """True only for the application's owner: the individual owner, or the owner of the team that owns it. Unlike
+    bot.is_owner, other team members don't count."""
+    global _bot_owner_id
+    if _bot_owner_id is None:
+        app = await bot.application_info()
+        _bot_owner_id = app.team.owner_id if app.team else app.owner.id
+    return user.id == _bot_owner_id
+
+
+@bot.tree.command(name="reset_hall_of_fame",
+                  description="Delete every Hall of Fame record, in every server (bot owner only).")
 @discord.app_commands.default_permissions(administrator=True)
 @discord.app_commands.guild_only()
 async def reset_hall_of_fame(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    deleted_count = clear_hall_of_fame_records()
-    await interaction.followup.send(
-        f"✅ Hall of Fame reset complete. Removed {deleted_count} record(s).",
+    """Hall of Fame records are global, so only the bot's owner may delete them, and only after confirming."""
+    if not await _is_bot_owner(interaction.user):
+        await interaction.response.send_message("Only the bot's owner can reset the Hall of Fame.", ephemeral=True)
+        return
+    record_count = count_hall_of_fame_records()
+    if record_count == 0:
+        await interaction.response.send_message("The Hall of Fame has no records to delete.", ephemeral=True)
+        return
+    plural = "record" if record_count == 1 else "records"
+    await interaction.response.send_message(
+        f"This deletes all {record_count} Hall of Fame {plural}, for every server that uses C-TierBot. "
+        "It can't be undone.",
+        view=HallOfFameResetView(interaction.user.id, int(time.time()) + HOF_RESET_CONFIRM_SECONDS, record_count),
         ephemeral=True,
     )
+
+
+async def answer_hall_of_fame_reset(interaction: discord.Interaction, custom_id: str):
+    """The Delete / Cancel buttons under /reset_hall_of_fame's confirmation."""
+    action, user_id, expires_at = parse_hof_reset_id(custom_id)
+    if interaction.user.id != user_id or not await _is_bot_owner(interaction.user):
+        await interaction.response.send_message("Only the bot's owner can reset the Hall of Fame.", ephemeral=True)
+        return
+    now = time.time()
+    for spent in [key for key in _hof_reset_answered if key[1] < now]:
+        _hof_reset_answered.discard(spent)
+    if (user_id, expires_at) in _hof_reset_answered:  # a second click that arrived before the buttons were removed
+        await interaction.response.send_message("This confirmation was already answered.", ephemeral=True)
+        return
+    _hof_reset_answered.add((user_id, expires_at))
+    if action != "confirm":
+        await interaction.response.edit_message(content="Nothing was deleted.", view=None)
+        return
+    if time.time() > expires_at:
+        await interaction.response.edit_message(
+            content="This confirmation ran out, so nothing was deleted. Run /reset_hall_of_fame again.", view=None)
+        return
+    deleted_count = clear_hall_of_fame_records()
+    await interaction.response.edit_message(
+        content=f"✅ Deleted {deleted_count} Hall of Fame record{'' if deleted_count == 1 else 's'}.", view=None)
 
 
 @bot.tree.command(name="inventory", description="View a user's survev.de inventory")
@@ -324,7 +381,7 @@ async def inventory(interaction: discord.Interaction, member: discord.User | Non
 
     embed, file, view, error_text = await build_inventory_message(target, access_token)
     if error_text:
-        await interaction.followup.send(error_text)
+        await interaction.followup.send(survev_error_for(error_text, target, interaction.user.id), allowed_mentions=NO_PINGS)
         return
     await interaction.followup.send(embed=embed, file=file, view=view)
 
@@ -341,15 +398,14 @@ async def goldenfries(interaction: discord.Interaction, member: discord.User | N
 
     username, balance, error_text = await build_goldenfries_embed_payload(target, access_token)
     if error_text:
-        await interaction.followup.send(error_text)
+        await interaction.followup.send(survev_error_for(error_text, target, interaction.user.id), allowed_mentions=NO_PINGS)
         return
 
     embed = discord.Embed(
-        title="<:goldenfries:1535978920481136700> Golden Fries Balance",
+        title="<:goldenfries:1535978920481136700> Golden Fries balance",
         description=f"**{username}** currently has **{balance:,}** Golden Fries <:goldenfries:1535978920481136700>.",
         color=discord.Color.gold(),
     )
-    embed.set_footer(text="Data courtesy of survev.de API :)")
     await interaction.followup.send(embed=embed)
 
 
@@ -364,6 +420,9 @@ async def compare(
     member_b: discord.User | None = None,
 ):
     member_b = member_b or interaction.user
+    # The person asking always reads their own column on the left.
+    if member_b.id == interaction.user.id and member_a.id != interaction.user.id:
+        member_a, member_b = member_b, member_a
     await interaction.response.defer()
 
     content, file, error_text = await build_compare_payload(member_a, member_b)
@@ -386,7 +445,7 @@ async def market(interaction: discord.Interaction, member: discord.User | None =
 
     embed, file, view, error_text = await build_market_message(target, access_token, mode="all")
     if error_text:
-        await interaction.followup.send(error_text)
+        await interaction.followup.send(survev_error_for(error_text, target, interaction.user.id), allowed_mentions=NO_PINGS)
         return
     await interaction.followup.send(embed=embed, file=file, view=view)
 

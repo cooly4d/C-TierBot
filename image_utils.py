@@ -13,6 +13,8 @@ from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
+import design_tokens as tokens
+
 _CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 QUEUE_FONT_PATHS = [
@@ -203,7 +205,7 @@ def group_inventory_items(items: list[dict]) -> list[dict]:
 
 
 INVENTORY_RARITY_FILTERS: dict[str, str] = {
-    "all": "🔄️ All Rarities",
+    "all": "All rarities",
     "0": "Stock",
     "1": "Common",
     "2": "Uncommon",
@@ -234,26 +236,27 @@ QUEUE_IMG_PADDING = 44
 QUEUE_IMG_HEADER_HEIGHT = 210
 QUEUE_IMG_ROW_HEIGHT = 92
 
-QUEUE_IMG_BG = (18, 24, 37)
-QUEUE_IMG_HEADER_BG = (24, 33, 55)
-QUEUE_IMG_HEADER_GRADIENT_END = (34, 48, 73)
-QUEUE_IMG_ROW_ALT = (28, 37, 55)
-QUEUE_IMG_TEXT = (235, 237, 240)
-QUEUE_IMG_MUTED = (168, 183, 207)
-QUEUE_IMG_ACCENT = (255, 165, 50)
-QUEUE_IMG_WIN = (108, 199, 128)
-QUEUE_IMG_LOSE = (214, 96, 96)
+# Older names for the colours in design_tokens, kept because the renderers and tests use them.
+QUEUE_IMG_BG = tokens.CANVAS
+QUEUE_IMG_HEADER_BG = tokens.HEADER_TOP
+QUEUE_IMG_HEADER_GRADIENT_END = tokens.HEADER_BOTTOM
+QUEUE_IMG_ROW_ALT = tokens.PANEL_RAISED
+QUEUE_IMG_TEXT = tokens.TEXT
+QUEUE_IMG_MUTED = tokens.TEXT_MUTED
+QUEUE_IMG_ACCENT = tokens.ACCENT
+QUEUE_IMG_WIN = tokens.WIN
+QUEUE_IMG_LOSE = tokens.LOSE
 
-QUEUE_IMG_CARD_BG = (22, 30, 46)
+QUEUE_IMG_CARD_BG = tokens.PANEL
 QUEUE_IMG_CARD_RADIUS = 18
 QUEUE_IMG_CARD_INNER_PAD_X = 20
 QUEUE_IMG_CARD_BOTTOM_PAD = 16
 QUEUE_IMG_TEAM_BANNER_HEIGHT = 58
 QUEUE_IMG_COL_HEADER_HEIGHT = 48
-QUEUE_IMG_WIN_BANNER_BG = (27, 56, 47)
-QUEUE_IMG_LOSE_BANNER_BG = (56, 31, 41)
-QUEUE_IMG_NEUTRAL_BANNER_BG = (30, 41, 62)
-QUEUE_IMG_ROW_DIVIDER = (38, 50, 74)
+QUEUE_IMG_WIN_BANNER_BG = tokens.WIN_BANNER
+QUEUE_IMG_LOSE_BANNER_BG = tokens.LOSE_BANNER
+QUEUE_IMG_NEUTRAL_BANNER_BG = tokens.NEUTRAL_BANNER
+QUEUE_IMG_ROW_DIVIDER = tokens.DIVIDER
 
 # Column offsets as a fraction of a team panel's inner width: Player, Kills, Damage, Avg Damage
 QUEUE_IMG_COLUMN_RATIOS = [0.0, 0.40, 0.60, 0.80]
@@ -275,18 +278,11 @@ def normalize_history_metric(metric: str | None) -> str:
     key = (metric or "damage").strip().lower()
     return key if key in HISTORY_METRICS else "damage"
 QUEUE_IMG_NAME_PADDING_RIGHT = 16  # gap kept clear before the Kills column starts
-QUEUE_IMG_UNLINKED_ICON_SIZE = 24
+QUEUE_IMG_UNLINKED_ICON_SIZE = 30
 QUEUE_IMG_UNLINKED_ICON_GAP = 10
 
-# Grid card outline colors, keyed by rarity int (0 Stock ... 5 Mythic, see INVENTORY_RARITY_FILTERS).
-RARITY_COLORS: dict[int, tuple[int, int, int]] = {
-    0: (140, 140, 140),   # Stock - grey
-    1: (85, 190, 90),     # Common - green
-    2: (85, 190, 90),     # Uncommon - green
-    3: (110, 190, 245),   # Rare - light blue
-    4: (176, 90, 220),    # Epic - purple
-    5: (191, 87, 0),      # Mythic - burnt orange
-}
+# Item card outlines and rarity labels, keyed by rarity int (0 Stock ... 5 Mythic, see INVENTORY_RARITY_FILTERS).
+RARITY_COLORS: dict[int, tuple[int, int, int]] = tokens.RARITY
 
 
 def rarity_color(rarity: int) -> tuple[int, int, int]:
@@ -294,21 +290,25 @@ def rarity_color(rarity: int) -> tuple[int, int, int]:
 
 
 INVENTORY_GRID_COLUMNS = 4
-INVENTORY_CARD_HEIGHT = 180
+INVENTORY_CARD_HEIGHT = 196
 INVENTORY_CARD_GAP = 24
 INVENTORY_ITEMS_PER_PAGE = 12
 INVENTORY_ICON_SIZE = 116
-INVENTORY_HEADER_HEIGHT = 128
-INVENTORY_FOOTER_HEIGHT = 56
+INVENTORY_HEADER_HEIGHT = 140
+INVENTORY_FOOTER_HEIGHT = 64
 
 SHOP_GRID_COLUMNS = 2
-SHOP_CARD_HEIGHT = 190
+SHOP_CARD_HEIGHT = 206
 SHOP_CARD_GAP = 24
 SHOP_ITEMS_PER_PAGE = 6
 SHOP_ICON_SIZE = 104
 SHOP_ICON_CELL_WIDTH = 122
-# Offer slot ids from the survev.de market API (shared/types/user.ts ShopOffer.slot).
-SHOP_SLOT_LABELS = {0: "Daily pick", 1: "Daily bundle", 2: "Weekly pick", 3: "Weekly bundle"}
+# Offer slot ids from the survev.de market API (shared/types/user.ts ShopOffer.slot). survev.de also returns two
+# Premium daily offers, in slots 4 and 5, for every account.
+SHOP_SLOT_LABELS = {0: "Daily pick", 1: "Daily bundle", 2: "Weekly pick", 3: "Weekly bundle", 4: "Premium daily",
+                    5: "Premium daily"}
+# Which slots each /market button shows ("all" shows every offer). Used by the card and by the page count.
+MARKET_MODE_SLOTS = {"daily": (0, 1, 4, 5), "weekly": (2, 3)}
 
 
 def truncate_to_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
@@ -419,6 +419,107 @@ def partial_games_label(entry: dict, series_games: int | None) -> str | None:
     return f"{games}/{series_games}"
 
 
+def winners_from_history(match_history: list[bool | None] | None, series_winner_index: int | None,
+                         num_teams: int) -> list[int | None]:
+    """Each game's winning team index, rebuilt from the older `match_history` (True = won by the series winner).
+    Used when a caller has no per-game winners; with no series winner, or more than two teams, a loss can't be
+    attributed, so that game's winner is None."""
+    winners: list[int | None] = []
+    for result in match_history or []:
+        if result is None or series_winner_index is None:
+            winners.append(None)
+        elif result:
+            winners.append(series_winner_index)
+        else:
+            winners.append(1 - series_winner_index if num_teams == 2 else None)
+    return winners
+
+
+def _player_key(entry: dict) -> str:
+    """Who a result row belongs to, so the rows of a player who switched sides mid-series count as one person."""
+    if entry.get("discord_id"):
+        return f"discord:{entry['discord_id']}"
+    if entry.get("slug"):
+        return f"slug:{entry['slug']}"
+    return f"name:{(entry.get('username') or entry.get('display_name') or '').lower()}:{id(entry)}"
+
+
+def pick_mvp(teams: list[list[dict]], series_games: int | None) -> tuple[int, int] | None:
+    """(team, row) of the series MVP: the best impact among players who played every game of the series. A player
+    on both sides (one row per side) counts once, with their games added up and impact averaged over the scored
+    games. None when nobody qualifies or the best score, as the card shows it, is shared."""
+    if not series_games:
+        return None
+    players: dict[str, dict] = {}
+    for team_index, team in enumerate(teams):
+        for row_index, entry in enumerate(team):
+            stats = entry.get("stats") or {}
+            games = stats.get("games") or 0
+            player = players.setdefault(_player_key(entry), {"games": 0, "points": 0.0, "scored": 0, "row": None})
+            player["games"] += games
+            if stats.get("impact") is not None and games:
+                player["points"] += stats["impact"] * games
+                player["scored"] += games
+            if player["row"] is None or games > player["row"][0]:
+                player["row"] = (games, team_index, row_index)  # the tag goes on their main row
+    scored = [(int(player["points"] / player["scored"] + 0.5), player["row"][1:]) for player in players.values()
+              if player["scored"] and player["games"] >= series_games]
+    if not scored:
+        return None
+    best = max(score for score, _ in scored)
+    leaders = [row for score, row in scored if score == best]
+    return leaders[0] if len(leaders) == 1 else None
+
+
+def _draw_match_timeline(draw: ImageDraw.ImageDraw, winners: list[int | None], num_teams: int,
+                         highlight_index: int | None, team_colors: list[tuple[int, int, int]], S: int) -> None:
+    """The MATCH TIMELINE box: one labelled row (lane) per team, and each game's dot in the lane of the team that
+    won it, coloured like that team's panel. A game with no known winner is a hollow ring between the lanes.
+    Position and the T1/T2 labels carry the result, so it reads without colour and never moves once played."""
+    box_width, box_height = 560, 156
+    box_x, box_y = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING - box_width, 27
+    draw.rounded_rectangle([box_x * S, box_y * S, (box_x + box_width) * S, (box_y + box_height) * S],
+                           radius=20 * S, fill=tokens.TIMELINE_FILL, outline=QUEUE_IMG_MUTED, width=2 * S)
+    draw.text(((box_x + box_width / 2) * S, (box_y + 12) * S), "MATCH TIMELINE",
+              font=load_font(tokens.QUEUE_TIMELINE_LABEL * S, "bold"), fill=QUEUE_IMG_TEXT, anchor="mt")
+
+    lanes = max(2, num_teams)
+    if lanes == 2:
+        lane_y = [box_y + 64, box_y + 100]
+    else:
+        lane_y = [box_y + 56 + 52 * index / (lanes - 1) for index in range(lanes)]
+    middle_y = (lane_y[0] + lane_y[-1]) / 2
+    line_x0, line_x1 = box_x + 70, box_x + box_width - 30
+    lane_font = load_font(tokens.QUEUE_TIMELINE_LABEL * S, "bold")
+    for lane in range(lanes):
+        color = team_colors[lane] if lane < len(team_colors) else QUEUE_IMG_MUTED
+        draw.text(((box_x + 22) * S, lane_y[lane] * S), f"T{lane + 1}", font=lane_font, fill=color, anchor="lm")
+        draw.line([(line_x0 * S, lane_y[lane] * S), (line_x1 * S, lane_y[lane] * S)], fill=tokens.TIMELINE_LANE,
+                  width=2 * S)
+
+    count = len(winners)
+    label_font = load_font(tokens.QUEUE_TIMELINE_LABEL * S)
+    first_x, last_x = line_x0, line_x1
+    spacing = (last_x - first_x) / (count - 1) if count > 1 else 0
+    radius = 11
+    for index, winner in enumerate(winners):
+        x = first_x + spacing * index if count > 1 else (first_x + last_x) / 2
+        if winner is None or not 0 <= winner < lanes:
+            y = middle_y
+            draw.ellipse([(x - radius) * S, (y - radius) * S, (x + radius) * S, (y + radius) * S],
+                         outline=QUEUE_IMG_MUTED, width=3 * S)
+        else:
+            y = lane_y[winner]
+            color = team_colors[winner] if winner < len(team_colors) else QUEUE_IMG_MUTED
+            draw.ellipse([(x - radius) * S, (y - radius) * S, (x + radius) * S, (y + radius) * S], fill=color)
+        if index == highlight_index:
+            ring = radius + 6
+            draw.ellipse([(x - ring) * S, (y - ring) * S, (x + ring) * S, (y + ring) * S],
+                         outline=QUEUE_IMG_ACCENT, width=4 * S)
+        draw.text((x * S, (box_y + 128) * S), f"G{index + 1}", font=label_font,
+                  fill=QUEUE_IMG_TEXT if index == highlight_index else QUEUE_IMG_MUTED, anchor="mt")
+
+
 def _render_queue_card(
     teams: list[list[dict]],
     labels: list[str],
@@ -430,14 +531,17 @@ def _render_queue_card(
     team_scores: list[int],
     leader_index: int | None,
     panel_winner_index: int | None,
-    match_history: list[bool | None] | None,
+    game_winners: list[int | None] | None,
     highlight_index: int | None,
     status_text: str = "",
     series_games: int | None = None,
+    mvp: tuple[int, int] | None = None,
 ) -> BytesIO:
     """Draws one queue card: a header (title, result line, score, game timeline) above one table panel per team.
     The series result image and the single-game card share this and differ only in what they pass in.
-    With `series_games`, players who played fewer games than that get an orange 'played/total' label."""
+    `game_winners` holds each game's winning team index (None when unknown) for the timeline.
+    With `series_games`, players who played fewer games than that get an orange 'played/total' label.
+    `mvp` is the (team, row) of the player who gets the MVP tag."""
     S = 2  # 2x supersampling factor for smooth anti-aliased circles, borders, and text
     num_teams = max(len(teams), 1)
     max_rows = max((len(team) for team in teams), default=0)
@@ -447,23 +551,40 @@ def _render_queue_card(
     inner_width = panel_width - 2 * QUEUE_IMG_CARD_INNER_PAD_X
     columns = [round(ratio * inner_width) for ratio in ratios]
 
+    # The footer explains the unlinked icon and the orange played/total label, so it only appears when the card
+    # has one of them; the legend quotes the first real played/total label on this card.
+    any_guest = any(entry.get("guest") for team in teams for entry in team)
+    example = next((label for team in teams for entry in team if (label := partial_games_label(entry, series_games))),
+                   None)
+    has_footer = any_guest or example is not None
+
     panel_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
     col_header_top = panel_top + QUEUE_IMG_TEAM_BANNER_HEIGHT
     rows_top = col_header_top + QUEUE_IMG_COL_HEADER_HEIGHT
     panel_bottom = rows_top + max(max_rows, 1) * QUEUE_IMG_ROW_HEIGHT + QUEUE_IMG_CARD_BOTTOM_PAD
-    height = panel_bottom + QUEUE_IMG_PADDING + 14
+    height = panel_bottom + QUEUE_IMG_PADDING + (22 if has_footer else 0)
+
+    def team_style(team_index: int) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+        """(text/border colour, banner fill) of a team's panel on this card."""
+        if panel_winner_index == team_index:
+            return QUEUE_IMG_WIN, QUEUE_IMG_WIN_BANNER_BG
+        if panel_winner_index is not None:
+            return QUEUE_IMG_LOSE, QUEUE_IMG_LOSE_BANNER_BG
+        return QUEUE_IMG_MUTED, QUEUE_IMG_NEUTRAL_BANNER_BG
+
+    team_colors = [team_style(index)[0] for index in range(num_teams)]
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH * S, height * S), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    title_font = load_font(66 * S, "bold")
-    subtitle_font = load_font(38 * S, "bold")
-    team_header_font = load_font(38 * S, "bold")
-    header_font = load_font(30 * S, "bold")
-    body_font = load_font(35 * S)
-    body_font_bold = load_font(35 * S, "bold")
-    duration_font = load_font(22 * S, "bold")
-    footer_font = load_font(22 * S)
+    title_font = load_font(tokens.QUEUE_TITLE * S, "bold")
+    subtitle_font = load_font(tokens.QUEUE_RESULT * S, "bold")
+    team_header_font = load_font(tokens.QUEUE_TEAM * S, "bold")
+    header_font = load_font(tokens.QUEUE_LABEL * S, "bold")
+    body_font = load_font(tokens.QUEUE_BODY * S)
+    body_font_bold = load_font(tokens.QUEUE_BODY * S, "bold")
+    duration_font = load_font(tokens.QUEUE_META * S, "bold")
+    mvp_font = load_font(tokens.QUEUE_MVP * S, "bold")
 
     # Top banner with subtle gradient
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
@@ -475,54 +596,10 @@ def _render_queue_card(
         draw.text((QUEUE_IMG_WIDTH * S / 2, 48 * S), status_text,
                   font=header_font, fill=QUEUE_IMG_ACCENT, anchor="mt")
 
-    if match_history:
-        history_count = len(match_history)
+    if game_winners:
+        _draw_match_timeline(draw, game_winners, num_teams, highlight_index, team_colors, S)
 
-        timeline_box_width = 560 * S
-        timeline_box_height = 146 * S
-        timeline_box_x = (QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING) * S - timeline_box_width
-        timeline_box_y = 32 * S
-        timeline_box_fill = (28, 40, 64)
-        draw.rounded_rectangle(
-            [timeline_box_x, timeline_box_y, timeline_box_x + timeline_box_width, timeline_box_y + timeline_box_height],
-            radius=20 * S,
-            fill=timeline_box_fill,
-            outline=QUEUE_IMG_MUTED,
-            width=2 * S
-        )
-
-        title_text = "MATCH TIMELINE"
-        title_bbox = draw.textbbox((0, 0), title_text, font=header_font)
-        title_x = timeline_box_x + (timeline_box_width - (title_bbox[2] - title_bbox[0])) / 2
-        draw.text((title_x, timeline_box_y + 14 * S), title_text, font=header_font, fill=QUEUE_IMG_TEXT)
-
-        axis_y = timeline_box_y + 74 * S
-        axis_x0 = timeline_box_x + 28 * S
-        axis_x1 = timeline_box_x + timeline_box_width - 28 * S
-        if history_count > 1:
-            draw.line([(axis_x0, axis_y), (axis_x1, axis_y)], fill=QUEUE_IMG_MUTED, width=2 * S)
-            first_x, spacing = axis_x0, (axis_x1 - axis_x0) / (history_count - 1)
-        else:
-            # A lone game has nothing to connect to: no axis line, and its dot sits in the middle of the box.
-            first_x, spacing = (axis_x0 + axis_x1) / 2, 0
-
-        for idx, result in enumerate(match_history):
-            x = first_x + spacing * idx
-            dot_color = QUEUE_IMG_MUTED if result is None else (QUEUE_IMG_WIN if result else QUEUE_IMG_LOSE)
-            dot_radius = (14 if idx == highlight_index else 12) * S
-            dot_bbox = [x - dot_radius, axis_y - dot_radius, x + dot_radius, axis_y + dot_radius]
-            draw.ellipse(dot_bbox, fill=dot_color)
-
-            if idx == highlight_index:
-                highlight_bbox = [x - dot_radius - 4 * S, axis_y - dot_radius - 4 * S, x + dot_radius + 4 * S, axis_y + dot_radius + 4 * S]
-                draw.ellipse(highlight_bbox, outline=QUEUE_IMG_ACCENT, width=4 * S)
-
-            label = f"G{idx + 1}"
-            label_bbox = draw.textbbox((0, 0), label, font=body_font)
-            label_x = x - (label_bbox[2] - label_bbox[0]) / 2
-            draw.text((label_x, axis_y + dot_radius + 10 * S), label, font=body_font, fill=QUEUE_IMG_TEXT)
-
-    score_font = load_font(72 * S, "bold")
+    score_font = load_font(tokens.QUEUE_SCORE * S, "bold")
     if num_teams == 2:
         left_text = str(team_scores[0])
         right_text = str(team_scores[1])
@@ -565,16 +642,7 @@ def _render_queue_card(
     for team_index in range(num_teams):
         team_players = teams[team_index] if team_index < len(teams) else []
         x0 = panel_x_positions[team_index]
-        is_winner = panel_winner_index == team_index
-        if is_winner:
-            team_color = QUEUE_IMG_WIN
-            banner_bg = QUEUE_IMG_WIN_BANNER_BG
-        elif panel_winner_index is not None:
-            team_color = QUEUE_IMG_LOSE
-            banner_bg = QUEUE_IMG_LOSE_BANNER_BG
-        else:
-            team_color = QUEUE_IMG_MUTED
-            banner_bg = QUEUE_IMG_NEUTRAL_BANNER_BG
+        team_color, banner_bg = team_style(team_index)
 
         # 1. Rounded card surface fill
         draw.rounded_rectangle(
@@ -641,6 +709,7 @@ def _render_queue_card(
 
             player_label = entry.get("display_name") or entry.get("username") or "Unknown"
             is_guest = entry.get("guest", False)
+            is_mvp = mvp == (team_index, row_index)
 
             for col_idx, label in enumerate(labels):
                 value, bold, fill = _queue_cell(label, entry, player_label)
@@ -657,6 +726,9 @@ def _render_queue_card(
                         games_bbox = draw.textbbox((0, 0), games_label, font=header_font)
                         games_reserve = games_bbox[2] - games_bbox[0] + QUEUE_IMG_UNLINKED_ICON_GAP * S
                         max_name_width = max(0, max_name_width - games_reserve)
+                    mvp_width = draw.textlength("MVP", font=mvp_font) + 22 * S
+                    if is_mvp:
+                        max_name_width = max(0, max_name_width - mvp_width - 12 * S)
                     value = truncate_to_width(draw, value, font, max_name_width)
                     draw.text((cell_x, cell_y), value, font=font, fill=fill)
                     name_bbox = draw.textbbox((0, 0), value, font=font)
@@ -670,6 +742,14 @@ def _render_queue_card(
                         games_y = _vcenter_y(draw, header_font, row_box_top, row_box_bottom)
                         draw.text((next_x + QUEUE_IMG_UNLINKED_ICON_GAP * S, games_y), games_label,
                                   font=header_font, fill=QUEUE_IMG_ACCENT)
+                        next_x += QUEUE_IMG_UNLINKED_ICON_GAP * S + draw.textlength(games_label, font=header_font)
+                    if is_mvp:
+                        pill_x = next_x + 12 * S
+                        pill_mid = (row_box_top + row_box_bottom) / 2
+                        draw.rounded_rectangle([pill_x, pill_mid - 17 * S, pill_x + mvp_width, pill_mid + 17 * S],
+                                               radius=9 * S, fill=QUEUE_IMG_ACCENT)
+                        draw.text((pill_x + mvp_width / 2, pill_mid), "MVP", font=mvp_font, fill=QUEUE_IMG_BG,
+                                  anchor="mm")
                 else:
                     value_bbox = draw.textbbox((0, 0), value, font=font)
                     value_width = value_bbox[2] - value_bbox[0]
@@ -684,27 +764,29 @@ def _render_queue_card(
             width=2 * S,
         )
 
-    footer_icon = _build_unlinked_icon(18 * S)
-    footer_icon_gap = 8 * S
-    footer_text = "Unlinked — link your survev.de account with /verify to appear in future leaderboards!"
-    # Explain the orange played/total label, in the same orange, with the first real one on this card.
-    legend_text = ""
-    example = next((label for team in teams for entry in team if (label := partial_games_label(entry, series_games))), None)
-    if example:
-        played, total = example.split("/")
-        footer_text += "   ·   "
-        legend_text = f"{example} = played {played} of {total} games"
-    footer_text_width = draw.textlength(footer_text, font=footer_font)
-    legend_width = draw.textlength(legend_text, font=footer_font) if legend_text else 0
-    total_footer_width = footer_icon.width + footer_icon_gap + footer_text_width + legend_width
-    footer_start_x = (QUEUE_IMG_WIDTH * S - total_footer_width) / 2
-    footer_y = _vcenter_y(draw, footer_font, panel_bottom * S, height * S)
-    footer_icon_y = round((panel_bottom * S + height * S - footer_icon.height) / 2)
-    image.paste(footer_icon, (round(footer_start_x), footer_icon_y), footer_icon)
-    footer_text_x = footer_start_x + footer_icon.width + footer_icon_gap
-    draw.text((footer_text_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-    if legend_text:
-        draw.text((footer_text_x + footer_text_width, footer_y), legend_text, font=footer_font, fill=QUEUE_IMG_ACCENT)
+    if has_footer:
+        footer_font = load_font(tokens.QUEUE_FOOTER * S)
+        footer_icon = _build_unlinked_icon(24 * S)
+        parts: list[tuple[str, tuple[int, int, int]]] = []  # (text, colour); "" stands for the icon
+        if any_guest:
+            parts += [("", QUEUE_IMG_MUTED), ("Unlinked: /verify to join the leaderboards", QUEUE_IMG_MUTED)]
+        if example:
+            played, total = example.split("/")
+            if any_guest:
+                parts.append(("   ·   ", QUEUE_IMG_MUTED))
+            parts.append((f"{example} = played {played} of {total} games", QUEUE_IMG_ACCENT))
+        icon_gap = 10 * S
+        widths = [footer_icon.width + icon_gap if not text else draw.textlength(text, font=footer_font)
+                  for text, _ in parts]
+        footer_x = (QUEUE_IMG_WIDTH * S - sum(widths)) / 2
+        footer_y = _vcenter_y(draw, footer_font, panel_bottom * S, height * S)
+        for (text, color), width in zip(parts, widths):
+            if text:
+                draw.text((footer_x, footer_y), text, font=footer_font, fill=color)
+            else:
+                icon_y = round((panel_bottom * S + height * S - footer_icon.height) / 2)
+                image.paste(footer_icon, (round(footer_x), icon_y), footer_icon)
+            footer_x += width
 
     image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
 
@@ -723,7 +805,10 @@ def generate_queue_result_image(
     duration_ms: int | None = None,
     *,
     is_final: bool = True,
+    game_winners: list[int | None] | None = None,
 ) -> BytesIO:
+    """The series result card. `game_winners` is each game's winning team index for the timeline; without it the
+    winners are rebuilt from `match_history`. Finished series with a winner tag the MVP (see `pick_mvp`)."""
     num_teams = max(len(teams), 1)
     if winning_team_index is not None and 0 <= winning_team_index < num_teams:
         result_word = "Wins" if is_final else "leads"
@@ -749,6 +834,10 @@ def generate_queue_result_image(
     else:
         ratios, labels = QUEUE_IMG_COLUMN_RATIOS, QUEUE_IMG_COLUMN_LABELS
 
+    series_games = len(match_history) if match_history else None
+    if game_winners is None:
+        game_winners = winners_from_history(match_history, winning_team_index, num_teams)
+    has_winner = winning_team_index is not None and 0 <= winning_team_index < num_teams
     return _render_queue_card(
         teams=teams,
         labels=labels,
@@ -760,10 +849,13 @@ def generate_queue_result_image(
         team_scores=team_scores,
         leader_index=winning_team_index,
         panel_winner_index=winning_team_index,
-        match_history=match_history,
-        highlight_index=len(match_history) - 1 if match_history else None,
+        game_winners=game_winners,
+        highlight_index=len(game_winners) - 1 if game_winners else None,
         status_text="" if is_final else "IN PROGRESS",
-        series_games=len(match_history) if match_history else None,
+        series_games=series_games,
+        # The MVP is picked by impact, so only cards that show the Impact column get one.
+        mvp=pick_mvp(teams, series_games) if is_final and has_winner and labels is QUEUE_IMG_COLUMN_LABELS_IMPACT
+        else None,
     )
 
 
@@ -775,10 +867,12 @@ def generate_queue_game_image(
     winner_index: int | None,
     match_history: list[bool | None] | None,
     series_score: list[int],
+    game_winners: list[int | None] | None = None,
 ) -> BytesIO:
     """Card for one game of a queue's series: that game's winner and per-player kills, damage and impact, with the
     series score through this game and the timeline ringing this game. `teams` holds the same entries as the result
-    image, with `stats` set to this single game's numbers."""
+    image, with `stats` set to this single game's numbers. `game_winners` places the series' games on the timeline;
+    without it the timeline shows how many games there were but no winners."""
     num_teams = max(len(teams), 1)
     if winner_index is not None and 0 <= winner_index < num_teams:
         subtitle, subtitle_color = f"Team {winner_index + 1} won Game {game_number}", QUEUE_IMG_WIN
@@ -797,7 +891,9 @@ def generate_queue_game_image(
     else:
         ratios, labels = QUEUE_IMG_GAME_COLUMN_RATIOS_NO_IMPACT, QUEUE_IMG_GAME_COLUMN_LABELS_NO_IMPACT
 
-    in_timeline = bool(match_history) and 0 <= game_number - 1 < len(match_history)
+    if game_winners is None:
+        game_winners = [None] * len(match_history or [])
+    in_timeline = 0 <= game_number - 1 < len(game_winners)
     return _render_queue_card(
         teams=teams,
         labels=labels,
@@ -809,7 +905,7 @@ def generate_queue_game_image(
         team_scores=scores,
         leader_index=leader_index,
         panel_winner_index=winner_index,
-        match_history=match_history,
+        game_winners=game_winners,
         highlight_index=game_number - 1 if in_timeline else None,
     )
 
@@ -824,34 +920,50 @@ def save_palette_png(image: Image.Image) -> BytesIO:
 
 
 def _draw_compact_header(image: Image.Image, draw: ImageDraw.ImageDraw, title: str, subtitle: str,
-                         amount_label: str, amount: int) -> None:
-    """The /inventory and /market header: title and muted subtitle on the left, a labelled Golden Fries amount on the
-    right (the inventory's total value or the player's balance)."""
+                         amount_label: str | None = None, amount: int | None = None) -> None:
+    """The /inventory, /market and /compare header: title and muted subtitle on the left and, when given, a labelled
+    Golden Fries amount on the right (the inventory's total value or the player's balance)."""
     draw.rectangle([0, 0, QUEUE_IMG_WIDTH, INVENTORY_HEADER_HEIGHT], fill=QUEUE_IMG_HEADER_BG)
     draw.line([(0, INVENTORY_HEADER_HEIGHT), (QUEUE_IMG_WIDTH, INVENTORY_HEADER_HEIGHT)],
               fill=QUEUE_IMG_ROW_DIVIDER, width=2)
-    label_font = load_font(16, "bold")
-    amount_font = load_font(36, "bold")
     right_edge = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
-    label_width = draw.textbbox((0, 0), amount_label, font=label_font)[2]
-    draw.text((right_edge - label_width, 24), amount_label, font=label_font, fill=QUEUE_IMG_MUTED)
-    draw_fries_amount(image, draw, (right_edge, 50), amount, amount_font, QUEUE_IMG_ACCENT, align="right")
-    amount_width = max(label_width, draw.textbbox((0, 0), f"{amount:,}", font=amount_font)[2] + 60)
+    amount_width = 0
+    if amount_label is not None and amount is not None:
+        label_font = load_font(tokens.CARD_AMOUNT_LABEL, "bold")
+        amount_font = load_font(tokens.CARD_AMOUNT, "bold")
+        label_width = draw.textbbox((0, 0), amount_label, font=label_font)[2]
+        draw.text((right_edge - label_width, 22), amount_label, font=label_font, fill=QUEUE_IMG_MUTED)
+        draw_fries_amount(image, draw, (right_edge, 52), amount, amount_font, QUEUE_IMG_ACCENT, align="right")
+        amount_width = max(label_width, draw.textbbox((0, 0), f"{amount:,}", font=amount_font)[2] + 70)
 
     text_width = right_edge - amount_width - QUEUE_IMG_PADDING - 32
-    title_font = load_font(40, "bold")
-    subtitle_font = load_font(20, "bold")
-    draw.text((QUEUE_IMG_PADDING, 20), truncate_to_width(draw, title, title_font, text_width),
+    title_font = load_font(tokens.CARD_TITLE, "bold")
+    subtitle_font = load_font(tokens.CARD_SUBTITLE, "bold")
+    draw.text((QUEUE_IMG_PADDING, 18), truncate_to_width(draw, title, title_font, text_width),
               font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 76), truncate_to_width(draw, subtitle, subtitle_font, text_width),
+    draw.text((QUEUE_IMG_PADDING, 88), truncate_to_width(draw, subtitle, subtitle_font, text_width),
               font=subtitle_font, fill=QUEUE_IMG_MUTED)
 
 
-def _draw_attribution_footer(draw: ImageDraw.ImageDraw, height: int) -> None:
-    footer_font = load_font(15)
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    draw.text(((QUEUE_IMG_WIDTH - footer_width) / 2, height - 36), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+def draw_credit_footer(draw: ImageDraw.ImageDraw, height: int, *, text: str = tokens.CREDIT_LINE,
+                       size: int = tokens.FOOTER, scale: int = 1, area_top: float | None = None) -> None:
+    """The credit line centred at the bottom of a card. With `area_top`, it is centred vertically between that and
+    the bottom edge; otherwise its top sits 36px above the bottom. `scale` is the card's supersampling factor."""
+    font = load_font(size * scale)
+    width = draw.textbbox((0, 0), text, font=font)[2]
+    if area_top is None:
+        y = height * scale - 36 * scale
+    else:
+        y = _vcenter_y(draw, font, area_top * scale, height * scale)
+    draw.text(((QUEUE_IMG_WIDTH * scale - width) / 2, y), text, font=font, fill=QUEUE_IMG_MUTED)
+
+
+def _draw_empty_state(draw: ImageDraw.ImageDraw, text: str, box_top: float, box_height: float) -> None:
+    """A muted one-line message centred in a box the width of the card, for a grid with nothing to show."""
+    font = load_font(30, "bold")
+    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    draw.text(((QUEUE_IMG_WIDTH - (right - left)) / 2, box_top + (box_height - (bottom - top)) / 2), text,
+              font=font, fill=QUEUE_IMG_MUTED)
 
 
 def generate_inventory_image(username: str, items: list[dict], page: int = 0, rarity_filter: str = "all") -> BytesIO:
@@ -877,9 +989,9 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    name_font = load_font(21, "bold")
-    count_font = load_font(18, "bold")
-    value_font = load_font(20, "bold")
+    name_font = load_font(tokens.ITEM_NAME, "bold")
+    rarity_font = load_font(tokens.ITEM_RARITY, "bold")
+    value_font = load_font(tokens.ITEM_VALUE, "bold")
 
     # Whose inventory and what's in it on the left, its total worth (whatever the filter) on the right.
     item_count = len(items)
@@ -891,12 +1003,7 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
                          compute_inventory_worth(items))
 
     if not shown_items:
-        empty_text = "No items in this rarity."
-        empty_font = load_font(30, "bold")
-        empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
-        empty_x = (QUEUE_IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) / 2
-        empty_y = grid_top + (INVENTORY_CARD_HEIGHT - (empty_bbox[3] - empty_bbox[1])) / 2
-        draw.text((empty_x, empty_y), empty_text, font=empty_font, fill=QUEUE_IMG_MUTED)
+        _draw_empty_state(draw, "No items in this rarity.", grid_top, INVENTORY_CARD_HEIGHT)
 
     for idx, entry in enumerate(shown_items):
         col = idx % INVENTORY_GRID_COLUMNS
@@ -911,23 +1018,27 @@ def generate_inventory_image(username: str, items: list[dict], page: int = 0, ra
         )
 
         name_text = truncate_to_width(draw, entry["name"], name_font, card_width - 32)
-        draw.text((x0 + 16, y0 + 18), name_text, font=name_font, fill=QUEUE_IMG_TEXT)
+        draw.text((x0 + 16, y0 + 14), name_text, font=name_font, fill=QUEUE_IMG_TEXT)
 
-        # Icon in the bottom-right corner, under the name, beside the count and value.
+        # Icon in the bottom-right corner, under the name, beside the rarity line and value.
         paste_item_icon(
             image, entry.get("type"), x1 - 14 - INVENTORY_ICON_SIZE, y1 - 12 - INVENTORY_ICON_SIZE, INVENTORY_ICON_SIZE
         )
 
+        # The rarity in words, in its colour, so it doesn't rest on the border colour alone; duplicates after it.
+        rarity_line = tokens.RARITY_NAMES.get(entry["rarity"], "")
         if entry["count"] > 1:
-            draw.text((x0 + 16, y0 + 52), f"x{entry['count']}", font=count_font, fill=QUEUE_IMG_MUTED)
+            rarity_line = f"{rarity_line}  ·  x{entry['count']}" if rarity_line else f"x{entry['count']}"
+        if rarity_line:
+            draw.text((x0 + 16, y0 + 56), rarity_line, font=rarity_font, fill=rarity_color(entry["rarity"]))
 
         value = entry["value"]
         if isinstance(value, (int, float)) and value:
-            draw_fries_amount(image, draw, (x0 + 16, y1 - 42), int(value), value_font, QUEUE_IMG_ACCENT)
+            draw_fries_amount(image, draw, (x0 + 16, y1 - 48), int(value), value_font, QUEUE_IMG_ACCENT)
         else:
-            draw.text((x0 + 16, y1 - 42), "Stock", font=value_font, fill=QUEUE_IMG_ACCENT)
+            draw.text((x0 + 16, y1 - 48), "No value", font=value_font, fill=QUEUE_IMG_MUTED)
 
-    _draw_attribution_footer(draw, height)
+    draw_credit_footer(draw, height)
     return save_palette_png(image)
 
 
@@ -935,13 +1046,9 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     balance = market_data.get("balance", 0)
     offers = market_data.get("offers", [])
 
-    # Filter by mode
-    if mode == "daily":
-        shown_offers = [offer for offer in offers if offer.get("slot") in (0, 1)]
-        mode_label = "Daily offers"
-    elif mode == "weekly":
-        shown_offers = [offer for offer in offers if offer.get("slot") in (2, 3)]
-        mode_label = "Weekly offers"
+    if mode in MARKET_MODE_SLOTS:
+        shown_offers = [offer for offer in offers if offer.get("slot") in MARKET_MODE_SLOTS[mode]]
+        mode_label = "Daily offers" if mode == "daily" else "Weekly offers"
     else:
         shown_offers = offers[:]
         mode_label = "All offers"
@@ -965,10 +1072,11 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
 
-    item_font = load_font(18, "bold")
-    price_font = load_font(20, "bold")
-    status_font = load_font(16)
-    caption_font = load_font(15, "bold")
+    kind_font = load_font(tokens.OFFER_KIND)
+    item_font = load_font(tokens.OFFER_TITLE, "bold")
+    price_font = load_font(tokens.OFFER_PRICE, "bold")
+    status_font = load_font(tokens.OFFER_STATUS, "bold")
+    caption_font = load_font(tokens.OFFER_CAPTION, "bold")
 
     # Whose shop and which offers on the left, their Golden Fries balance on the right.
     subtitle_parts = [mode_label, f"{len(shown_offers)} offer{'' if len(shown_offers) == 1 else 's'}"]
@@ -978,12 +1086,7 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
                          int(balance or 0))
 
     if not page_offers:
-        empty_text = "No offers right now."
-        empty_font = load_font(30, "bold")
-        empty_bbox = draw.textbbox((0, 0), empty_text, font=empty_font)
-        draw.text(((QUEUE_IMG_WIDTH - (empty_bbox[2] - empty_bbox[0])) / 2,
-                   grid_top + (SHOP_CARD_HEIGHT - (empty_bbox[3] - empty_bbox[1])) / 2),
-                  empty_text, font=empty_font, fill=QUEUE_IMG_MUTED)
+        _draw_empty_state(draw, "No offers right now.", grid_top, SHOP_CARD_HEIGHT)
 
     # Render cards
     for idx, offer in enumerate(page_offers):
@@ -996,7 +1099,7 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
 
         # Card background and border - color by status
         purchased = offer.get("purchased", False)
-        card_color = (60, 40, 40) if purchased else (40, 60, 40)
+        card_color = tokens.SHOP_BOUGHT_FILL if purchased else tokens.SHOP_AVAILABLE_FILL
         border_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
         
         draw.rounded_rectangle(
@@ -1028,26 +1131,26 @@ def generate_shop_image(username: str, market_data: dict, mode: str = "all", pag
         text_width = max(80, icons_left - x0 - 28)
         slot = offer.get("slot")
         slot_text = SHOP_SLOT_LABELS.get(slot, f"Slot {slot}")
-        draw.text((x0 + 16, y0 + 16), slot_text, font=status_font, fill=QUEUE_IMG_MUTED)
+        draw.text((x0 + 16, y0 + 14), slot_text, font=kind_font, fill=QUEUE_IMG_MUTED)
 
         if len(item_types) == 1:
             title = prettify_shop_item_type(item_types[0])
         else:
             title = f"{len(offer.get('items', []))} items"
         title = truncate_to_width(draw, title, item_font, text_width)
-        draw.text((x0 + 16, y0 + 44), title, font=item_font, fill=QUEUE_IMG_TEXT)
+        draw.text((x0 + 16, y0 + 46), title, font=item_font, fill=QUEUE_IMG_TEXT)
 
         price = offer.get("price")
         if isinstance(price, (int, float)):
-            draw_fries_amount(image, draw, (x0 + 16, y0 + 84), int(price), price_font, QUEUE_IMG_ACCENT)
+            draw_fries_amount(image, draw, (x0 + 16, y0 + 92), int(price), price_font, QUEUE_IMG_ACCENT)
         else:
-            draw.text((x0 + 16, y0 + 84), "?", font=price_font, fill=QUEUE_IMG_ACCENT)
+            draw.text((x0 + 16, y0 + 92), "?", font=price_font, fill=QUEUE_IMG_ACCENT)
 
         status_text = "Bought" if purchased else "Available"
         status_color = QUEUE_IMG_LOSE if purchased else QUEUE_IMG_WIN
-        draw.text((x0 + 16, y1 - 36), status_text, font=status_font, fill=status_color)
+        draw.text((x0 + 16, y1 - 42), status_text, font=status_font, fill=status_color)
 
-    _draw_attribution_footer(draw, height)
+    draw_credit_footer(draw, height)
     return save_palette_png(image)
 
 
@@ -1075,6 +1178,13 @@ def format_squad_tier(tier: dict | None, verified: bool) -> tuple[str, int | Non
     return f"{tier['tier']} · {tier['rating']}", tier["rating"]
 
 
+def _format_play_time(duration_ms: int) -> str:
+    """Hours and minutes, no seconds ("31h 07m", "42m"): /compare compares totals, not stopwatch times."""
+    total_minutes = max(0, int(duration_ms)) // 60_000
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
+
+
 def generate_compare_image(
     left_name: str,
     left_stats: dict | None,
@@ -1087,155 +1197,111 @@ def generate_compare_image(
     left_tier: dict | None = None,
     right_tier: dict | None = None,
 ) -> BytesIO:
-    title_font = load_font(48, "bold")
-    subtitle_font = load_font(24, "bold")
-    name_font = load_font(38, "bold")
-    status_font = load_font(20)
-    label_font = load_font(22, "bold")
-    value_font = load_font(36, "bold")
-    footer_font = load_font(16)
+    """/compare: two players side by side, survev.de rows then NeatQueue rows. `*_stats` is None for a player who
+    isn't linked, or {"unavailable": True} when their survev.de history couldn't be read in full; `*_worth` is None
+    when their inventory couldn't be read. "-" means there is nothing to show and "N/A" that a lookup failed.
+    On each row the higher value is green and the lower red; values that print the same are a tie."""
+    left_linked, right_linked = left_stats is not None, right_stats is not None
 
     def stat_fields(stats):
-        if stats is None:
+        if stats is None or stats.get("unavailable"):
             return None, None, None
         games = max(1, stats["games"])
         return stats["wins"], stats["kills"] / games, stats["damage"]
 
-    left_wins, left_kd, left_damage = stat_fields(left_stats)
-    right_wins, right_kd, right_damage = stat_fields(right_stats)
+    def gap(linked: bool) -> str:
+        """What an empty survev.de cell says: the lookup failed for a linked player, or there's nothing to show."""
+        return "N/A" if linked else "-"
+
+    def cell(value, empty: str, text: str | None = None) -> tuple[str, float | None]:
+        if value is None:
+            return empty, None
+        return (text if text is not None else f"{value:,}"), value
 
     def queue_fields(summary):
         summary = summary or {}
-        matches = summary.get("matches", 0)
-        playtime_ms = summary.get("total_duration_ms") if matches else None
+        playtime_ms = summary.get("total_duration_ms") if summary.get("matches", 0) else None
         return playtime_ms, summary.get("all_time_avg_damage"), summary.get("monthly_avg_damage")
 
-    left_playtime_ms, left_all_avg, left_monthly_avg = queue_fields(left_queue_summary)
-    right_playtime_ms, right_all_avg, right_monthly_avg = queue_fields(right_queue_summary)
+    def side(stats, linked, worth, summary, tier):
+        wins, kills_per_game, damage = stat_fields(stats)
+        play, avg, month_avg = queue_fields(summary)
+        tier_text, rating = format_squad_tier(tier, verified=linked)
+        return [
+            cell(wins, gap(linked)),
+            cell(kills_per_game, gap(linked), None if kills_per_game is None else f"{kills_per_game:.2f}"),
+            cell(damage, gap(linked)),
+            (tier_text, rating),
+            cell(worth, gap(linked), None if worth is None else f"{worth:,} GF"),
+            cell(play, "-", None if play is None else _format_play_time(play)),
+            cell(avg, "-", None if avg is None else f"{avg:,.0f}"),
+            cell(month_avg, "-", None if month_avg is None else f"{month_avg:,.0f}"),
+        ]
 
-    left_tier_text, left_tier_rating = format_squad_tier(left_tier, verified=left_stats is not None)
-    right_tier_text, right_tier_rating = format_squad_tier(right_tier, verified=right_stats is not None)
-
-    def fmt(value, suffix="", none_text="-", decimals=None):
-        if value is None:
-            return none_text
-        if decimals is not None:
-            return f"{value:{decimals}}{suffix}"
-        return f"{value:,}{suffix}"
-
-    rows = [
-        ("All-Time Wins", fmt(left_wins), fmt(right_wins), left_wins, right_wins),
-        ("K/D Ratio", fmt(left_kd, decimals=".2f"), fmt(right_kd, decimals=".2f"), left_kd, right_kd),
-        ("Total Damage", fmt(left_damage), fmt(right_damage), left_damage, right_damage),
-        ("Squad Tier", left_tier_text, right_tier_text, left_tier_rating, right_tier_rating),
-        (
-            "Inventory Worth",
-            fmt(left_worth, suffix=" GF"),
-            fmt(right_worth, suffix=" GF"),
-            left_worth,
-            right_worth,
-        ),
-        (
-            "4v4 Play Time",
-            format_duration_ms(left_playtime_ms) if left_playtime_ms is not None else "-",
-            format_duration_ms(right_playtime_ms) if right_playtime_ms is not None else "-",
-            left_playtime_ms,
-            right_playtime_ms,
-        ),
-        (
-            "All-Time Avg Damage",
-            fmt(left_all_avg, decimals=",.0f", none_text="N/A"),
-            fmt(right_all_avg, decimals=",.0f", none_text="N/A"),
-            left_all_avg,
-            right_all_avg,
-        ),
-        (
-            f"{datetime.now(timezone.utc).strftime('%B')} Avg Damage",
-            fmt(left_monthly_avg, decimals=",.0f", none_text="No data"),
-            fmt(right_monthly_avg, decimals=",.0f", none_text="No data"),
-            left_monthly_avg,
-            right_monthly_avg,
-        ),
+    left_cells = side(left_stats, left_linked, left_worth, left_queue_summary, left_tier)
+    right_cells = side(right_stats, right_linked, right_worth, right_queue_summary, right_tier)
+    month = datetime.now(timezone.utc).strftime("%B")
+    sections = [
+        ("SURVEV.DE · ALL MODES", ["Wins", "Kills / Game", "Total Damage", "Squad Tier", "Inventory Worth"]),
+        ("NEATQUEUE 4V4S", ["Play Time", "Avg Damage", f"{month} Avg Damage"]),
     ]
 
-    card_left = QUEUE_IMG_PADDING
-    card_right = QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
-    card_top = QUEUE_IMG_HEADER_HEIGHT + QUEUE_IMG_PADDING
-    name_block_height = 130
-    row_height = 92
-    card_bottom = card_top + name_block_height + len(rows) * row_height
-    height = card_bottom + QUEUE_IMG_PADDING * 2
+    name_font = load_font(tokens.COMPARE_NAME, "bold")
+    status_font = load_font(tokens.COMPARE_STATUS)
+    section_font = load_font(tokens.COMPARE_SECTION, "bold")
+    label_font = load_font(tokens.COMPARE_LABEL, "bold")
+    value_font = load_font(tokens.COMPARE_VALUE, "bold")
+
+    card_left, card_right = QUEUE_IMG_PADDING, QUEUE_IMG_WIDTH - QUEUE_IMG_PADDING
+    card_top = INVENTORY_HEADER_HEIGHT + 32
+    name_block, row_height, section_height = 110, 80, 52
+    row_count = sum(len(labels) for _, labels in sections)
+    card_bottom = card_top + name_block + row_count * row_height + len(sections) * section_height
+    height = card_bottom + INVENTORY_FOOTER_HEIGHT
 
     image = Image.new("RGB", (QUEUE_IMG_WIDTH, height), QUEUE_IMG_BG)
     draw = ImageDraw.Draw(image)
+    _draw_compact_header(image, draw, "Stats comparison", "All-time stats are from verification date.")
 
-    _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT)
+    center_x = QUEUE_IMG_WIDTH / 2
+    left_center, right_center = (card_left + center_x) / 2, (center_x + card_right) / 2
+    left_value_right, right_value_left = center_x - 210, center_x + 210
+    draw.rounded_rectangle([card_left, card_top, card_right, card_bottom], radius=20, fill=tokens.PANEL,
+                           outline=tokens.DIVIDER, width=2)
 
-    draw.text((QUEUE_IMG_PADDING, 28), "Stats comparison", font=title_font, fill=QUEUE_IMG_TEXT)
-    draw.text((QUEUE_IMG_PADDING, 92), "All-time stats are from verification date.", font=subtitle_font, fill=QUEUE_IMG_MUTED)
+    name_width = (card_right - card_left) / 2 - 60
+    for name, linked, center in ((left_name, left_linked, left_center), (right_name, right_linked, right_center)):
+        draw.text((center, card_top + 22), truncate_to_width(draw, name, name_font, name_width), font=name_font,
+                  fill=QUEUE_IMG_TEXT, anchor="ma")
+        draw.text((center, card_top + 72), "Linked" if linked else "Not linked", font=status_font,
+                  fill=QUEUE_IMG_MUTED, anchor="ma")
 
-    card_fill = (26, 30, 42)
-    card_outline = (55, 62, 80)
-    row_alt_fill = (32, 37, 50)
-    bar_color = (88, 101, 242)
-    center_x = (card_left + card_right) / 2
-    left_center_x = (card_left + center_x) / 2
-    right_center_x = (center_x + card_right) / 2
-    label_half_width = 190
-    bar_x_left = center_x - label_half_width
-    bar_x_right = center_x + label_half_width
+    y = card_top + name_block
+    cell_index = 0
+    for title, labels in sections:
+        draw.rectangle([card_left + 2, y, card_right - 2, y + section_height], fill=tokens.HEADER_TOP)
+        draw.text((center_x, y + section_height / 2), title, font=section_font, fill=QUEUE_IMG_ACCENT, anchor="mm")
+        y += section_height
+        for row_index, label in enumerate(labels):
+            (left_text, left_num), (right_text, right_num) = left_cells[cell_index], right_cells[cell_index]
+            cell_index += 1
+            if row_index % 2:
+                draw.rectangle([card_left + 2, y, card_right - 2, y + row_height], fill=tokens.PANEL_RAISED)
+            if left_text == right_text and left_num is not None and right_num is not None:
+                right_num = left_num  # values that print the same are coloured as a tie
+            left_fill, right_fill = _pick_compare_row_colors(left_num, right_num)
+            if left_num is None:
+                left_fill = QUEUE_IMG_MUTED
+            if right_num is None:
+                right_fill = QUEUE_IMG_MUTED
+            draw.text((center_x, _vcenter_y(draw, label_font, y, y + row_height)), label, font=label_font,
+                      fill=QUEUE_IMG_MUTED, anchor="ma")
+            value_y = _vcenter_y(draw, value_font, y, y + row_height)
+            draw.text((left_value_right, value_y), left_text, font=value_font, fill=left_fill, anchor="ra")
+            draw.text((right_value_left, value_y), right_text, font=value_font, fill=right_fill)
+            y += row_height
 
-    draw.rounded_rectangle([card_left, card_top, card_right, card_bottom], radius=24, fill=card_fill, outline=card_outline, width=2)
-
-    def draw_centered(text, center, y, font, fill):
-        bbox = draw.textbbox((0, 0), text, font=font)
-        x = center - (bbox[2] - bbox[0]) / 2
-        draw.text((x, y), text, font=font, fill=fill)
-
-    draw_centered(left_name, left_center_x, card_top + 22, name_font, QUEUE_IMG_TEXT)
-    draw_centered(right_name, right_center_x, card_top + 22, name_font, QUEUE_IMG_TEXT)
-
-    left_status = "Verified" if left_stats is not None else "Not verified yet"
-    right_status = "Verified" if right_stats is not None else "Not verified yet"
-    draw_centered(left_status, left_center_x, card_top + 74, status_font, QUEUE_IMG_MUTED)
-    draw_centered(right_status, right_center_x, card_top + 74, status_font, QUEUE_IMG_MUTED)
-
-    rows_top = card_top + name_block_height
-    draw.line([(card_left, rows_top), (card_right, rows_top)], fill=card_outline, width=2)
-
-    for idx, (label, left_value, right_value, left_num, right_num) in enumerate(rows):
-        y_top = rows_top + idx * row_height
-        if idx % 2 == 0:
-            draw.rectangle([card_left + 2, y_top, card_right - 2, y_top + row_height], fill=row_alt_fill)
-
-        bar_top = y_top + row_height * 0.22
-        bar_bottom = y_top + row_height * 0.78
-        draw.rectangle([bar_x_left - 3, bar_top, bar_x_left + 3, bar_bottom], fill=bar_color)
-        draw.rectangle([bar_x_right - 3, bar_top, bar_x_right + 3, bar_bottom], fill=bar_color)
-
-        left_fill, right_fill = _pick_compare_row_colors(left_num, right_num)
-
-        label_bbox = draw.textbbox((0, 0), label, font=label_font)
-        label_y = y_top + (row_height - (label_bbox[3] - label_bbox[1])) / 2 - label_bbox[1]
-        draw_centered(label, center_x, label_y, label_font, QUEUE_IMG_MUTED)
-
-        value_bbox = draw.textbbox((0, 0), left_value, font=value_font)
-        value_y = y_top + (row_height - (value_bbox[3] - value_bbox[1])) / 2 - value_bbox[1]
-        left_value_x = bar_x_left - 20 - (value_bbox[2] - value_bbox[0])
-        draw.text((left_value_x, value_y), left_value, font=value_font, fill=left_fill)
-
-        value_bbox = draw.textbbox((0, 0), right_value, font=value_font)
-        value_y = y_top + (row_height - (value_bbox[3] - value_bbox[1])) / 2 - value_bbox[1]
-        draw.text((bar_x_right + 20, value_y), right_value, font=value_font, fill=right_fill)
-
-        if idx < len(rows) - 1:
-            draw.line([(card_left, y_top + row_height), (card_right, y_top + row_height)], fill=card_outline, width=1)
-
-    footer_text = "Data courtesy of survev.de API :)"
-    footer_width = draw.textbbox((0, 0), footer_text, font=footer_font)[2]
-    footer_x = (QUEUE_IMG_WIDTH - footer_width) / 2
-    draw.text((footer_x, height - QUEUE_IMG_PADDING + 8), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
-
+    draw_credit_footer(draw, height)
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     buffer.seek(0)
@@ -1271,7 +1337,6 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
     body_font = load_font(35 * S)
     body_font_bold = load_font(35 * S, "bold")
     duration_font = load_font(22 * S, "bold")
-    footer_font = load_font(22 * S)
 
     # 1. Header gradient
     _draw_header_gradient(draw, QUEUE_IMG_HEADER_HEIGHT * S, QUEUE_IMG_WIDTH * S)
@@ -1584,12 +1649,7 @@ def generate_history_image(player_name: str, history_rows: list[dict], metric: s
             draw.text((cell_x, cell_y), text_val, font=cell_font, fill=fill_color)
 
     # 4. Footer attribution
-    footer_text = "Data courtesy of NeatQueue & survev.de APIs :)"
-    footer_bbox = draw.textbbox((0, 0), footer_text, font=footer_font)
-    footer_w = footer_bbox[2] - footer_bbox[0]
-    footer_x = (QUEUE_IMG_WIDTH * S - footer_w) / 2
-    footer_y = _vcenter_y(draw, footer_font, table_bottom * S, height * S)
-    draw.text((footer_x, footer_y), footer_text, font=footer_font, fill=QUEUE_IMG_MUTED)
+    draw_credit_footer(draw, height, scale=S, area_top=table_bottom)
 
     image = image.resize((QUEUE_IMG_WIDTH, height), resample=Image.Resampling.LANCZOS)
     buffer = BytesIO()

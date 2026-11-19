@@ -21,6 +21,9 @@ from db import get_guild_queue_channels, get_discord_id_by_slug, get_user_token
 from http_client import http_session
 from survev_client import fetch_player_matches_in_window, fetch_public_match_data, get_match_history_timestamp
 
+# How fetch_neatqueue_history's error starts when NeatQueue answers 404 (unknown queue number, or no NeatQueue here).
+NEATQUEUE_NOT_FOUND_ERROR = "NeatQueue endpoint returned 404"
+
 
 async def fetch_neatqueue_history(session: aiohttp.ClientSession, guild_id: int, match_number: str | None = None, extra_params: dict | None = None):
     """Fetches history for the given Discord guild's NeatQueue server (NeatQueue's server_id IS the
@@ -51,18 +54,13 @@ async def fetch_neatqueue_history(session: aiohttp.ClientSession, guild_id: int,
         return None, f"NeatQueue API request failed for {url}: {exc}"
 
     if status != 200:
-        error_detail = text
-        try:
-            error_detail_json = json.loads(text)
-            error_detail = error_detail_json
-        except Exception:
-            pass
+        # The response body is never included: errors reach the host console and the logs.
         if status == 404:
             return None, (
                 f"NeatQueue endpoint returned 404 for URL {url}. "
-                f"Verify this server has NeatQueue set up and the match number is correct; response detail: {error_detail}"
+                "Check that this server has NeatQueue set up and the queue number is correct."
             )
-        return None, f"NeatQueue API returned {status} for URL {url}: {error_detail}"
+        return None, f"NeatQueue API returned {status} for URL {url}."
 
     try:
         data = json.loads(text)
@@ -518,8 +516,14 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             diagnostics["roster_source"] = "neatqueue_history"
         elif panel_message is not None:
             return None, "Couldn't read the player roster from NeatQueue's message for this queue."
+        elif error:
+            # The raw error holds NeatQueue's URL and response body: never shown in Discord or written to the log.
+            diagnostics["neatqueue_request_failed"] = True
+            if error.startswith(NEATQUEUE_NOT_FOUND_ERROR):
+                return None, f"I couldn't find Queue #{match_id} on NeatQueue. Check the number."
+            return None, "NeatQueue didn't answer. Try again in a minute."
         else:
-            return None, error or "No NeatQueue history entry or readable queue panel was found for this queue."
+            return None, f"I couldn't find Queue #{match_id} on NeatQueue. Check the number."
 
         end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         window["end_source"] = "lookup_current_time"
@@ -577,7 +581,16 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             anchor_matches_by_discord[discord_id] = own_matches
 
     if not anchor_guid_sets:
-        return None, "No linked (/verify'd) player was found in this queue — need at least one to find the match."
+        if not anchor_candidates:
+            return None, ("Nobody in this queue has linked a survev.de account, so its games can't be found. "
+                          "Run /verify to link yours.")
+        # Linked players exist, but survev.de shows no games for them in this queue's window. If any of their
+        # histories couldn't be read in full, that is the likelier reason, so don't claim no game has finished.
+        if any(anchor.get("pagination_complete") is False for anchor in diagnostics["anchors"]):
+            return None, "survev.de didn't answer for this queue's linked players. Try again in a minute."
+        if not is_finished:
+            return None, f"No games have finished in Queue #{match_id} yet."
+        return None, f"survev.de doesn't have Queue #{match_id}'s games yet. If it just finished, try again in a minute."
 
     # Every game any linked player played in the window is a candidate, and each one is then checked against the
     # roster (resolve_round_sides). Requiring every linked player to have played a game dropped real games

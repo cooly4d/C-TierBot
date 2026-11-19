@@ -1,4 +1,5 @@
 """Discord event handlers and slash commands in leaderboard_bot that other test modules don't cover."""
+import time
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -111,7 +112,7 @@ class ProfileCommandTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(discord_ui, "get_user_token", return_value="tok"):
             await app.profile.callback(interaction, None)
 
-        build.assert_awaited_once_with(interaction.user, "tok", 10)
+        build.assert_awaited_once_with(interaction.user, "tok", 10, viewer_id=interaction.user.id)
         sent = interaction.followup.send.await_args.kwargs
         self.assertNotIn("file", sent)
         self.assertEqual([c.custom_id for c in sent["view"].children],
@@ -132,8 +133,44 @@ class ProfileCommandTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(discord_ui, "get_user_token", return_value=None):
             await app.profile.callback(interaction, None)
 
-        interaction.followup.send.assert_awaited_once_with("No cached")
+        interaction.followup.send.assert_awaited_once_with("No cached", allowed_mentions=app.NO_PINGS)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HallOfFameResetTests(unittest.IsolatedAsyncioTestCase):
+    def click(self, custom_id, user_id=1):
+        interaction = MagicMock()
+        interaction.user.id = user_id
+        interaction.response.send_message = AsyncMock()
+        interaction.response.edit_message = AsyncMock()
+        return interaction
+
+    async def test_only_the_application_owner_counts(self):
+        team_app = SimpleNamespace(team=SimpleNamespace(owner_id=1), owner=SimpleNamespace(id=99))
+        with patch.object(app, "_bot_owner_id", None), \
+                patch.object(app.bot, "application_info", AsyncMock(return_value=team_app)):
+            self.assertTrue(await app._is_bot_owner(SimpleNamespace(id=1)))
+            self.assertFalse(await app._is_bot_owner(SimpleNamespace(id=2)))  # another team member
+
+    async def test_a_confirmation_can_only_be_answered_once(self):
+        expires = int(time.time()) + 60
+        with patch.object(app, "_is_bot_owner", AsyncMock(return_value=True)), \
+                patch.object(app, "clear_hall_of_fame_records", return_value=3) as clear, \
+                patch.object(app, "_hof_reset_answered", set()):
+            await app.answer_hall_of_fame_reset(self.click(""), f"hof_reset:cancel:1:{expires}")
+            late_confirm = self.click("")
+            await app.answer_hall_of_fame_reset(late_confirm, f"hof_reset:confirm:1:{expires}")
+        clear.assert_not_called()
+        self.assertIn("already answered", late_confirm.response.send_message.await_args.args[0])
+
+    async def test_an_expired_confirmation_deletes_nothing(self):
+        with patch.object(app, "_is_bot_owner", AsyncMock(return_value=True)), \
+                patch.object(app, "clear_hall_of_fame_records", return_value=3) as clear, \
+                patch.object(app, "_hof_reset_answered", set()):
+            interaction = self.click("")
+            await app.answer_hall_of_fame_reset(interaction, f"hof_reset:confirm:1:{int(time.time()) - 1}")
+        clear.assert_not_called()
+        self.assertIn("ran out", interaction.response.edit_message.await_args.kwargs["content"])

@@ -595,7 +595,19 @@ class ErrorPathTests(unittest.IsolatedAsyncioTestCase):
         result, error = await calculate(**three_game_world(tokens={}))
 
         self.assertIsNone(result)
-        self.assertIn("No linked", error)
+        self.assertIn("Nobody in this queue has linked", error)
+
+    async def test_linked_players_without_games_yet_are_not_called_unlinked(self):
+        # "score?" before the first game ends: linked players exist, survev.de just has no games for them yet.
+        live = three_game_world(anchors={"tok-101": own_games()}, history=finished_history(winner=None),
+                                panel=panel_message("<@101> <@102>", "<@201> <@202>"))
+        result, error = await calculate(**live)
+        self.assertIsNone(result)
+        self.assertEqual(error, "No games have finished in Queue #3674 yet.")
+
+        result, error = await calculate(**three_game_world(anchors={"tok-101": own_games()}))
+        self.assertIsNone(result)
+        self.assertEqual(error, "survev.de doesn't have Queue #3674's games yet. If it just finished, try again in a minute.")
 
     async def test_finished_entry_without_a_start_time_is_rejected(self):
         history = finished_history()
@@ -611,12 +623,30 @@ class ErrorPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertIn("no player roster", error)
 
-    async def test_missing_panel_surfaces_the_history_error(self):
+    async def test_unreadable_histories_are_not_reported_as_no_games(self):
+        async def rate_limited(_session, _token, _start_ms, _end_ms, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics["pagination_complete"] = False
+            return []
+
+        with fake_world(**three_game_world()), \
+                patch.object(neatqueue_client, "fetch_player_matches_in_window", rate_limited):
+            result, error = await neatqueue_client.calculate_queue_match_stats("3674", 999)
+
+        self.assertIsNone(result)
+        self.assertEqual(error, "survev.de didn't answer for this queue's linked players. Try again in a minute.")
+
+    async def test_missing_panel_turns_the_history_error_into_a_short_message(self):
+        # The raw error holds NeatQueue's URL and response body, so it is never shown or logged.
         world = three_game_world(history=None, history_error="boom", panel=None)
         result, error = await calculate(**world)
 
         self.assertIsNone(result)
-        self.assertEqual(error, "boom")
+        self.assertEqual(error, "NeatQueue didn't answer. Try again in a minute.")
+
+        not_found = neatqueue_client.NEATQUEUE_NOT_FOUND_ERROR + " for URL https://example/history/999. {}"
+        result, error = await calculate(**three_game_world(history=None, history_error=not_found, panel=None))
+        self.assertEqual(error, "I couldn't find Queue #3674 on NeatQueue. Check the number.")
 
     async def test_panel_without_team_fields_is_rejected(self):
         world = three_game_world(history=None, panel=SimpleNamespace(

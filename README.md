@@ -19,7 +19,7 @@
 C-TierBot links your server's players to their survev.de accounts and then does the boring stuff for you:
 
 - **Leaderboards** for kills, wins, games and damage (weekly and monthly), plus a Golden Fries rich list.
-- **Automatic scrim stats.** When a [NeatQueue](https://neatqueue.com) game finishes, the bot posts a results image with per-player kills, damage and survev.de impact score, the series score, and each team's roster. A **Game breakdown** button under it shows every game on its own.
+- **Automatic scrim stats.** When a [NeatQueue](https://neatqueue.com) game finishes, the bot posts a results image with per-player kills, damage and survev.de impact score, the series score, a timeline of who won each game, and each team's roster. On a finished series, the player with the best impact among those who played every game gets an **MVP** tag. A **Game breakdown** button under it shows every game on its own.
 - **Player profiles, history, inventory, and shop viewers** rendered as images, so nobody has to open the site. Profiles and comparisons also show each player's survev.de Squad tier.
 - **Hall of Fame** for the best single-queue performances ever recorded (finished queues only).
 - **Catch-up on restart.** If the bot was offline when a queue finished, it finds the missed matches and posts them when it comes back.
@@ -45,10 +45,10 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | Command | What it does |
 | :--- | :--- |
 | `/profile [member]` | Opens on an **Overview**: 4v4 play time, average damage and impact (all-time and this month), and the player's survev.de Squad tier (for example `B- · rating 29 · EU`; needs a linked account). In a server, the **History** button shows their last 10 finished queues there as a card with a trend chart; switch the chart between Damage, Impact, and Kills with the buttons below it. |
-| `/compare <member_a> [member_b]` | Side-by-side stat card for two players, including their Squad tier. Leave out `member_b` to compare against yourself. |
-| `/inventory [member]` | Paged inventory image with a rarity filter and the inventory's total value. Each card shows the item's icon, the same art as the survev.de locker. |
+| `/compare <member_a> [member_b]` | Side-by-side stat card for two players: survev.de wins, kills per game, damage, Squad tier and inventory worth, then NeatQueue 4v4 play time and average damage. The higher value on each row is green. Leave out `member_b` to compare against yourself; your own column is always on the left. A stat that couldn't be loaded shows `N/A` instead of a zero. |
+| `/inventory [member]` | Paged inventory image with a rarity filter and the inventory's total value. Each card shows the item's icon (the same art as the survev.de locker) and its rarity in words and colour. Pages reuse the inventory for 5 minutes, then fetch it again. |
 | `/goldenfries [member]` | Golden Fries balance. |
-| `/market [member]` | Shop offers image with the player's Golden Fries balance and buttons to switch between Daily, Weekly, and All. Every offer shows each item's icon and name. |
+| `/market [member]` | Shop offers image with the player's Golden Fries balance and buttons to switch between Daily, Weekly, and All. Every offer shows each item's icon and name; Daily includes survev.de's two Premium daily offers. The buttons reuse the offers for 5 minutes, then fetch them again. |
 
 ### Queues
 
@@ -71,7 +71,7 @@ Admin-only commands are hidden from members without the **Administrator** permis
 | :--- | :--- |
 | `/setup <channel>` | Starts tracking NeatQueue results in a channel. Run it once per channel. |
 | `/unsetup <channel>` | Stops tracking that channel. |
-| `/reset_hall_of_fame` | Clears every Hall of Fame record. |
+| `/reset_hall_of_fame` | Deletes every Hall of Fame record, in every server that uses the bot. Only the bot's owner can run it, and it asks for confirmation first. |
 
 ## How queue tracking works
 
@@ -79,7 +79,7 @@ Admin-only commands are hidden from members without the **Administrator** permis
 2. When NeatQueue announces a winner (or finalizes its results panel), the bot picks up the queue number.
 3. It looks up the queue on NeatQueue, then uses the linked players' own survev.de match history to find the games played during that queue.
 4. It pulls the public scoreboard for each game and keeps only games between the queue's two teams (each with at least 2 players). survev.de renumbers teams every game, so each game's teams are matched to NeatQueue's Team 1 and Team 2 from where the linked roster players played. That way substitutes count for the team they actually played with. Then it posts the image.
-5. For a finished queue it also saves each game's numbers (kept for 90 days), so the **Game breakdown** button can show them later, even after a restart. It opens a private message that only the person who clicked can see, with one card per game and Previous/Next buttons.
+5. For a finished queue it also saves each game's numbers (kept for 90 days), so the **Game breakdown** button can show them later, even after a restart. It opens a private message that only the person who clicked can see, with one card per game, Previous/Next buttons, and a Jump to game menu that names each game's winner and its top average damage.
 
 You need **at least one linked player** in a queue for the bot to find its games. Players who haven't linked still show up under their survev.de name, and the result message has a button so they can link on the spot.
 
@@ -189,6 +189,7 @@ While the bot is running in a terminal, you can type commands straight into it t
 | `queue_stats_service.py` | Queue results, Game breakdown, Hall of Fame tracking, and logging. |
 | `leaderboard_service.py` | Leaderboard, inventory, shop, profile, and compare payloads, plus the cached Squad tier lookup. |
 | `image_utils.py` | All Pillow-based image rendering. |
+| `design_tokens.py` | The cards' colours, text sizes and credit line, named by what they're for. |
 | `discord_ui.py` | Buttons, dropdowns, and pagination views. |
 | `console_service.py` | The host terminal console. |
 | `assets/items/` | Item icons and `manifest.json` for `/inventory` and `/market`, generated by `tools/export_item_icons.mts`. |
@@ -198,6 +199,8 @@ While the bot is running in a terminal, you can type commands straight into it t
 ```bash
 python -m unittest discover tests
 ```
+
+`tests/test_golden_images.py` compares every card with a saved picture in `tests/golden/`. After an intended visual change, run it with `UPDATE_GOLDEN=1` to save the new pictures, and look at them before committing.
 
 ## Support
 

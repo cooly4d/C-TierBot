@@ -255,6 +255,12 @@ def try_set_hall_of_fame_record(
         return True
 
 
+def count_hall_of_fame_records() -> int:
+    """How many Hall of Fame records exist (they're global, so this covers every server)."""
+    with sqlite3.connect(DB_PATH) as c:
+        return c.execute("SELECT COUNT(*) FROM hall_of_fame").fetchone()[0]
+
+
 def clear_hall_of_fame_records() -> int:
     with sqlite3.connect(DB_PATH) as c:
         cur = c.execute("DELETE FROM hall_of_fame")

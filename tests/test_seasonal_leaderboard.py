@@ -289,8 +289,8 @@ class SeasonalLeaderboardPagingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_stat_has_its_own_title_line_format_and_query(self):
         expectations = {
-            "impact": ("4v4 Avg Impact Leaderboard", "⚡ Avg Impact: **1,000** (2 games)"),
-            "kills": ("4v4 Avg Kills Leaderboard", "⚔️ Avg Kills: **1,000.0** (2 games)"),
+            "impact": ("4v4 leaderboard · avg impact", "⚡ Avg Impact: **1,000** (2 games)"),
+            "kills": ("4v4 leaderboard · avg kills", "⚔️ Avg Kills: **1,000.0** (2 games)"),
         }
         for stat, (title, line) in expectations.items():
             with self.subTest(stat=stat), patch("leaderboard_service.get_seasonal_queue_stats",

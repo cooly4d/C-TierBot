@@ -437,7 +437,7 @@ class ProfileHistoryTests(unittest.IsolatedAsyncioTestCase):
                 embed, file, _metric, message = await leaderboard_service.build_profile_history(target, guild_id)
                 self.assertIsNone(embed)
                 self.assertIsNone(file)
-                self.assertIn("No cached NeatQueue history", message)
+                self.assertEqual(message, "**Awang** hasn't finished a 4v4 queue in this server yet.")
 
     async def test_unknown_metric_falls_back_to_damage(self):
         with patch.object(leaderboard_service, "get_player_queue_history", return_value=[HISTORY_ROW]):
@@ -500,7 +500,7 @@ class ProfileHistoryTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(discord_ui, "build_profile_history", new=history):
             await discord_ui.refresh_profile_message(interaction, 10, 101, "history", "kills")
 
-        history.assert_awaited_once_with(member, 10, "kills")
+        history.assert_awaited_once_with(member, 10, "kills", viewer_id=interaction.user.id)
         edit = interaction.message.edit.await_args.kwargs
         self.assertEqual(edit["attachments"], [file])
         self.assertEqual((edit["view"].tab, edit["view"].active_metric), ("history", "kills"))
@@ -514,7 +514,7 @@ class ProfileHistoryTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(discord_ui, "get_user_token", return_value="tok"):
             await discord_ui.refresh_profile_message(interaction, 10, 101, "overview")
 
-        overview.assert_awaited_once_with(member, "tok", 10)
+        overview.assert_awaited_once_with(member, "tok", 10, viewer_id=interaction.user.id)
         edit = interaction.message.edit.await_args.kwargs
         self.assertEqual(edit["attachments"], [])
         self.assertEqual(edit["view"].tab, "overview")

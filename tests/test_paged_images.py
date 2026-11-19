@@ -134,7 +134,7 @@ class InventoryClickTests(unittest.IsolatedAsyncioTestCase):
                 patch.object(discord_ui, "get_user_token", return_value=None):
             await discord_ui.refresh_inventory_message(interaction, 42, "all", 1)
 
-        self.assertIn("no longer linked", interaction.response.send_message.await_args.args[0])
+        self.assertIn("hasn't linked a survev.de account", interaction.response.send_message.await_args.args[0])
         self.assertTrue(interaction.response.send_message.await_args.kwargs["ephemeral"])
 
 
