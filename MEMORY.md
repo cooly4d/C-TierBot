@@ -266,6 +266,11 @@ The following decisions were explicitly requested or approved by the user across
 
 ## Current Focus and Handover
 
+### `cooly` Keyword Reaction (2026-11-21, local changes, not committed)
+- **Asked:** in any channel, react to any message containing the word "cooly" anywhere with `<a:cooly:1534718488839458977>`, an animated application emoji the user already uploaded in the Developer Portal.
+- **Changed:** `KEYWORD_REACTIONS` (word -> emoji string) in `bot_config.py`. `react_to_keywords` in `leaderboard_bot.py` runs first in `on_message`, so `?c`/`score?` messages still get it. It matches a case-insensitive substring and ignores bot authors. A `discord.HTTPException` (missing permissions, deleted emoji) is logged at debug and skipped. README "Reactions" section. Tests: `KeywordReactionTests` in `tests/test_bot_events.py`.
+- **Verified:** 342 tests OK, 2 expected failures; `git diff --check` clean. Not tried live in Discord or deployed to PebbleHost.
+
 ### UI Audit Follow-ups (2026-11-19, local changes, not committed)
 - **Asked:** after a UI/UX audit (report and a "Change Picker" page with a before/after preview per change), the user picked 17 of 35 changes with adjustments; build them and add #34 (`/profile` rewrite) to the TODO list. Choices are in the TODO row and decision 17 (skipped items).
 - **Changed:**

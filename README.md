@@ -63,6 +63,10 @@ Both shortcuts share a **30-second cooldown per channel** after a stats or looku
 
 In any server channel, you can also type **`?c <queue_number>`** or **`?c<queue_number>`** (for example `?c 4123`, `?c4123`, or `?c #4123`, case-insensitive) at the start of a message to pull stats for any queue number without a cooldown, so you can check multiple queues back-to-back. The bot answers only where it can send messages, attach files and read message history (in threads: send messages in threads); elsewhere it ignores the command without looking anything up. It doesn't work in DMs, because a queue number belongs to a server.
 
+### Reactions
+
+The bot reacts with its animated **cooly** emoji to any message that contains the word `cooly` anywhere, in any capitalization (`Cooly`, `COOLY`, `coolyyy`), in every channel it can see. Messages from bots are ignored. The emoji is an application emoji uploaded in the Discord Developer Portal, so it works in every server. Where the bot lacks **Add Reactions** or **Read Message History**, it skips the reaction silently. More words and emojis can be added in `KEYWORD_REACTIONS` in `bot_config.py`.
+
 ### Admin
 
 Admin-only commands are hidden from members without the **Administrator** permission.

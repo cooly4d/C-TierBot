@@ -59,6 +59,13 @@ LEADERBOARD_SORT_CONFIG = {
     "damage": {"label": "Damage", "emoji": "💥"},
 }
 
+# Words that make the bot react to a message -> the emoji it reacts with. A word counts anywhere in the
+# message, in any letter case ("Cooly", "coolyyy"). The emojis are application emojis uploaded to the bot's
+# Emojis tab in the Discord Developer Portal, so they work in every server without a server emoji slot.
+KEYWORD_REACTIONS = {
+    "cooly": "<a:cooly:1534718488839458977>",
+}
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # needed so client.get_all_members() has data — required for real display names

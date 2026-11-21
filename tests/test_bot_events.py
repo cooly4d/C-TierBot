@@ -174,3 +174,45 @@ class HallOfFameResetTests(unittest.IsolatedAsyncioTestCase):
             await app.answer_hall_of_fame_reset(interaction, f"hof_reset:confirm:1:{int(time.time()) - 1}")
         clear.assert_not_called()
         self.assertIn("ran out", interaction.response.edit_message.await_args.kwargs["content"])
+
+
+class KeywordReactionTests(unittest.IsolatedAsyncioTestCase):
+    """Any message containing "cooly", in any channel, gets the animated cooly emoji."""
+
+    COOLY = "<a:cooly:1534718488839458977>"
+
+    def setUp(self):
+        self.enterContext(patch.object(app.bot._connection, "user", SimpleNamespace(id=BOT_USER_ID)))
+        self.enterContext(patch.object(app, "reply_to_queue_mention", new_callable=AsyncMock, return_value=False))
+        self.enterContext(patch.object(app, "reply_to_prefix_command", new_callable=AsyncMock, return_value=False))
+        self.process = self.enterContext(patch.object(app.bot, "process_commands", new_callable=AsyncMock))
+
+    def message(self, content, bot=False, error=None):
+        return SimpleNamespace(
+            content=content, author=SimpleNamespace(id=99, bot=bot), guild=SimpleNamespace(id=10),
+            channel=SimpleNamespace(id=77), embeds=[], add_reaction=AsyncMock(side_effect=error),
+        )
+
+    async def test_the_word_anywhere_in_any_case_gets_the_emoji(self):
+        for content in ("cooly", "gg COOLY wp", "Coolyyy", "where's cooly?"):
+            with self.subTest(content=content):
+                message = self.message(content)
+                await app.on_message(message)
+                message.add_reaction.assert_awaited_once_with(self.COOLY)
+
+    async def test_other_messages_and_bots_get_no_reaction(self):
+        for message in (self.message("cool"), self.message(""), self.message(None), self.message("cooly", bot=True)):
+            with self.subTest(content=message.content, bot=message.author.bot):
+                await app.on_message(message)
+                message.add_reaction.assert_not_awaited()
+
+    async def test_a_failed_reaction_does_not_stop_the_rest_of_the_handler(self):
+        message = self.message("cooly", error=discord.Forbidden(MagicMock(status=403), "Missing Permissions"))
+        await app.on_message(message)
+        self.process.assert_awaited_once_with(message)
+
+    async def test_a_queue_shortcut_message_still_gets_its_reaction(self):
+        app.reply_to_prefix_command.return_value = True
+        message = self.message("?c 4123 cooly")
+        await app.on_message(message)
+        message.add_reaction.assert_awaited_once_with(self.COOLY)

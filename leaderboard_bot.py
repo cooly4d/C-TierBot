@@ -14,6 +14,7 @@ from discord.ext import tasks
 
 from bot_config import (
     DISCORD_BOT_TOKEN,
+    KEYWORD_REACTIONS,
     LOG_LEVEL,
     NEATQUEUE_BOT_ID,
     QUEUE_PANEL_TITLE_PATTERN,
@@ -646,8 +647,24 @@ async def reply_to_prefix_command(message: discord.Message) -> bool:
     return False
 
 
+async def react_to_keywords(message: discord.Message) -> None:
+    """React with each KEYWORD_REACTIONS emoji whose word appears anywhere in a message, in any channel."""
+    content = (message.content or "").casefold()
+    if not content or message.author.bot:
+        return
+    for keyword, emoji in KEYWORD_REACTIONS.items():
+        if keyword not in content:
+            continue
+        try:
+            await message.add_reaction(emoji)
+        except discord.HTTPException as error:
+            # Missing Add Reactions / Read Message History, a deleted emoji, or the author blocked the bot.
+            log.debug("Keyword reaction %r skipped: %s (status %s)", keyword, type(error).__name__, error.status)
+
+
 @bot.event
 async def on_message(message: discord.Message):
+    await react_to_keywords(message)
     if await reply_to_queue_mention(message):
         return
     if await reply_to_prefix_command(message):
