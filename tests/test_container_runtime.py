@@ -3,6 +3,7 @@ import asyncio
 import io
 import os
 import signal
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -25,6 +26,32 @@ class DbPathTests(unittest.TestCase):
             with patch.dict(os.environ, {"DB_PATH": target}):
                 self.assertEqual(db.resolve_db_path(), target)
             self.assertTrue(os.path.isdir(os.path.dirname(target)))
+
+
+class BackupTests(unittest.TestCase):
+    def test_backup_copies_data_and_keeps_newest(self):
+        from datetime import datetime, timezone
+
+        import backup_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "leaderboard.db")
+            conn = sqlite3.connect(source)
+            conn.execute("CREATE TABLE t (x INTEGER)")
+            conn.execute("INSERT INTO t VALUES (42)")
+            conn.commit()
+            conn.close()
+            backup_dir = os.path.join(tmp, "backups")
+            for day in range(1, 5):
+                target = backup_db.backup_database(
+                    source, backup_dir, keep=2, now=datetime(2026, 11, day, tzinfo=timezone.utc))
+            kept = sorted(os.listdir(backup_dir))
+            self.assertEqual(kept, ["leaderboard-20261103-000000.db", "leaderboard-20261104-000000.db"])
+            copy = sqlite3.connect(target)
+            try:
+                self.assertEqual(copy.execute("SELECT x FROM t").fetchone()[0], 42)
+            finally:
+                copy.close()
 
 
 class ShutdownSignalTests(unittest.TestCase):
