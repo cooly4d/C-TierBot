@@ -6,6 +6,7 @@ components) lives in the sibling modules below — this file just wires it toget
 import asyncio
 import logging
 import re
+import signal
 import time
 from datetime import datetime, timezone
 
@@ -13,6 +14,7 @@ import discord
 from discord.ext import tasks
 
 from bot_config import (
+    CONSOLE_PORT,
     DISCORD_BOT_TOKEN,
     KEYWORD_REACTIONS,
     LOG_LEVEL,
@@ -75,7 +77,7 @@ from queue_stats_service import (
     build_queue_stats_payload,
     save_queue_stats_log,
 )
-from console_service import start_console_listener
+from console_service import start_console_listener, start_console_socket_server
 from survev_client import backfill_missing_slugs, run_survev_verification
 
 log = logging.getLogger(__name__)
@@ -83,6 +85,7 @@ NO_PINGS = discord.AllowedMentions.none()  # replies that name people or quote w
 
 _startup_done = False
 _console_listener_started = False
+_console_socket_server: asyncio.AbstractServer | None = None
 SLUG_BACKFILL_INTERVAL_MINUTES = 30
 QUEUE_MENTION_COOLDOWN_SECONDS = 30
 _queue_mention_busy: set[tuple[int, int]] = set()
@@ -113,7 +116,7 @@ async def slug_backfill_loop():
 
 @bot.event
 async def on_ready():
-    global _startup_done, _console_listener_started
+    global _startup_done, _console_listener_started, _console_socket_server
     # on_ready fires again after every reconnect; registering views and syncing commands once is enough.
     if not _startup_done:
         try:
@@ -131,6 +134,8 @@ async def on_ready():
     if not _console_listener_started:
         _console_listener_started = True
         asyncio.create_task(start_console_listener(bot))
+        if CONSOLE_PORT > 0:
+            _console_socket_server = await start_console_socket_server(bot, CONSOLE_PORT)
 
 
 async def log_interaction(interaction: discord.Interaction):
@@ -762,7 +767,19 @@ async def backfill_missed_queue_results():
         update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 
 
+def install_shutdown_signal_handler(loop: asyncio.AbstractEventLoop) -> bool:
+    """Close the bot cleanly on SIGTERM, which Docker/Coolify sends to stop or redeploy the container.
+    As the container's PID 1, Python would otherwise ignore it and be killed once the grace period ends.
+    Windows has no loop signal handlers, so this is a no-op there."""
+    try:
+        loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(bot.close()))
+    except (NotImplementedError, AttributeError, RuntimeError):
+        return False
+    return True
+
+
 async def main():
+    install_shutdown_signal_handler(asyncio.get_running_loop())
     async with bot:
         try:
             await bot.start(DISCORD_BOT_TOKEN)

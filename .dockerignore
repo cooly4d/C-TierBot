@@ -1,0 +1,27 @@
+# Secrets and local state: never bake these into the image.
+.env
+.env.*
+*.db
+*.db-journal
+data/
+log/
+
+# Local tooling and caches
+.git/
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.agents/
+.claude/
+.codex/
+.gemini/
+.vscode/
+.idea/
+
+# Not needed at runtime
+tests/
+tools/
+design-system/
+*.md

@@ -5,10 +5,22 @@ rather than sharing a module-level connection, matching the original bot's
 behavior so nothing about transaction/commit timing changes.
 """
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-DB_PATH = "leaderboard.db"
+
+def resolve_db_path() -> str:
+    """The SQLite file from the DB_PATH env var (the container keeps it on a persistent volume),
+    defaulting to leaderboard.db in the working directory. Creates the parent folder if missing."""
+    path = os.getenv("DB_PATH") or "leaderboard.db"
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    return path
+
+
+DB_PATH = resolve_db_path()
 
 # Per-game snapshots of finished queues, kept for the Game breakdown button on queue results.
 QUEUE_RESULT_RETENTION_DAYS = 90

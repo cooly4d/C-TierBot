@@ -37,6 +37,9 @@ VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "30
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 QUEUE_STATS_LOG_DIR = "log"
 QUEUE_STATS_LOG_MAX_FILES = int(os.getenv("QUEUE_STATS_LOG_MAX_FILES", "200"))
+# Loopback port for console.py, the host console inside a container with no attached stdin.
+# 0 (the default) turns it off; the Dockerfile sets 8765. It only ever binds 127.0.0.1.
+CONSOLE_PORT = int(os.getenv("CONSOLE_PORT", "0"))
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
 QUEUE_WINNER_TITLE_PATTERN = re.compile(r"Winner For Queue#(\d+)", re.IGNORECASE)

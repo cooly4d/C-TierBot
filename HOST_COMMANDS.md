@@ -2,6 +2,17 @@
 
 When running the bot locally in your terminal (`python leaderboard_bot.py`), you can type commands directly into the terminal prompt to interact with the bot and manage servers without using Discord interactions.
 
+## In a container (Coolify)
+
+The container has no keyboard attached to the bot, so the bot also listens on `127.0.0.1:$CONSOLE_PORT` (the Docker image sets `8765`; off when unset). Open the app's **Terminal** tab in Coolify and run:
+
+```sh
+python console.py            # prompt: type commands as below
+python console.py status     # run one command and exit
+```
+
+In the `console.py` prompt, `exit` / `quit` only leave the prompt and the bot keeps running. `stop` shuts the bot down, and Coolify restarts the container. `clear` clears your terminal. The port listens on loopback only, so only a shell inside the container can reach it.
+
 ---
 
 ## Available Commands

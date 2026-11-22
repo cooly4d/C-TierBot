@@ -6,6 +6,10 @@ run database queries, and control the bot directly from stdin without
 relying on Discord interactions.
 """
 import asyncio
+import builtins
+import contextvars
+import io
+import logging
 import os
 import sqlite3
 import sys
@@ -17,6 +21,19 @@ from discord.ext import commands
 from db import DB_PATH
 
 _START_TIME = time.time()
+
+log = logging.getLogger(__name__)
+
+# Where console output goes. None means the real stdout; a socket session sets its own buffer, so a
+# command typed through console.py prints back to that client instead of the container log.
+_console_output: contextvars.ContextVar[io.StringIO | None] = contextvars.ContextVar("console_output", default=None)
+
+
+def print(*args, **kwargs):  # noqa: A001 - shadows the builtin on purpose, for every handler in this module
+    stream = _console_output.get()
+    if stream is not None and "file" not in kwargs:
+        kwargs["file"] = stream
+    builtins.print(*args, **kwargs)
 
 
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -477,7 +494,8 @@ def _handle_help():
   sync                                 - Force sync application slash commands
   clear                                - Clear the terminal screen
   help                                 - Show this help menu
-  exit / quit                          - Gracefully disconnect the bot and exit
+  stop / exit / quit                   - Gracefully disconnect the bot and exit
+                                         (in console.py, exit/quit only leave the prompt)
 ========================================
 """
     print(help_text)
@@ -557,3 +575,50 @@ async def start_console_listener(bot: commands.Bot):
         except Exception as exc:
             print(f"[Console Loop Error] {exc}")
             await asyncio.sleep(0.5)
+
+
+async def run_console_command_captured(bot: commands.Bot, line: str) -> str:
+    """Run one console command and return everything it printed, instead of writing it to stdout."""
+    buffer = io.StringIO()
+    token = _console_output.set(buffer)
+    try:
+        await execute_console_command(bot, line)
+    except Exception as exc:
+        print(f"[Console Error] {exc}")
+    finally:
+        _console_output.reset(token)
+    return buffer.getvalue()
+
+
+async def start_console_socket_server(bot: commands.Bot, port: int) -> asyncio.AbstractServer | None:
+    """Serve console commands to console.py on 127.0.0.1:<port>.
+
+    Each connection sends one command line and gets that command's output back, then the connection
+    closes. Commands run one at a time. Loopback only: inside a container nothing outside it can reach
+    the port, so anyone who can use it already has a shell in the container."""
+    lock = asyncio.Lock()
+
+    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        try:
+            raw = await reader.readline()
+            line = raw.decode("utf-8", errors="replace")
+            async with lock:
+                output = await run_console_command_captured(bot, line)
+            writer.write(output.encode("utf-8"))
+            await writer.drain()
+        except Exception as exc:
+            log.warning("Console socket session failed: %r", exc)
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    try:
+        server = await asyncio.start_server(handle_client, host="127.0.0.1", port=port)
+    except OSError as exc:
+        log.warning("Console socket could not listen on 127.0.0.1:%s: %r", port, exc)
+        return None
+    log.info("Console socket listening on 127.0.0.1:%s (run: python console.py)", port)
+    return server
