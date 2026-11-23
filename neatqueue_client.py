@@ -466,6 +466,15 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         "history_winner_is_null" if match is not None else "no_history_entry"
     )
 
+    # A failed request (timeout, 5xx, bad JSON) says nothing about whether the queue finished, so don't guess from
+    # the panel: the newest "Queue#N" message may be the result post, which would put the window after every game.
+    # Only a 404 still falls through to the panel and the "couldn't find" message.
+    if error and not error.startswith(NEATQUEUE_NOT_FOUND_ERROR):
+        # The raw error holds NeatQueue's URL and response body: never shown in Discord or written to the log.
+        diagnostics["neatqueue_request_failed"] = True
+        diagnostics["retryable"] = True
+        return None, "NeatQueue didn't answer. Try again in a minute."
+
     if is_finished:
         is_final = True
         # NeatQueue returns the requested match as the first entry in the result.
@@ -521,6 +530,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             diagnostics["neatqueue_request_failed"] = True
             if error.startswith(NEATQUEUE_NOT_FOUND_ERROR):
                 return None, f"I couldn't find Queue #{match_id} on NeatQueue. Check the number."
+            diagnostics["retryable"] = True
             return None, "NeatQueue didn't answer. Try again in a minute."
         else:
             return None, f"I couldn't find Queue #{match_id} on NeatQueue. Check the number."
@@ -587,9 +597,11 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         # Linked players exist, but survev.de shows no games for them in this queue's window. If any of their
         # histories couldn't be read in full, that is the likelier reason, so don't claim no game has finished.
         if any(anchor.get("pagination_complete") is False for anchor in diagnostics["anchors"]):
+            diagnostics["retryable"] = True
             return None, "survev.de didn't answer for this queue's linked players. Try again in a minute."
         if not is_finished:
             return None, f"No games have finished in Queue #{match_id} yet."
+        diagnostics["retryable"] = True
         return None, f"survev.de doesn't have Queue #{match_id}'s games yet. If it just finished, try again in a minute."
 
     # Every game any linked player played in the window is a candidate, and each one is then checked against the

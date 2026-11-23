@@ -22,6 +22,7 @@ from bot_config import (
     QUEUE_PANEL_TITLE_PATTERN,
     QUEUE_RESULT_FETCH_DELAY_SECONDS,
     QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS,
+    QUEUE_RESULT_RETRY_DELAYS_SECONDS,
     QUEUE_WINNER_TITLE_PATTERN,
     bot,
 )
@@ -32,6 +33,7 @@ from db import (
     get_all_guild_settings,
     get_guild_queue_channels,
     get_user_token,
+    release_match_processed,
     remove_guild_queue_channel,
     try_mark_match_processed,
     update_guild_last_updated,
@@ -524,12 +526,29 @@ async def post_queue_result(message: discord.Message, match_id: str):
     # Give the game server a moment to finish writing this match's results before querying survev.de.
     await asyncio.sleep(QUEUE_RESULT_FETCH_DELAY_SECONDS)
 
-    content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
-    await save_queue_stats_log(
-        match_id, match_result, error_text, trigger="auto_post", guild_id=message.guild.id, channel_id=message.channel.id,
-    )
+    # NeatQueue and survev.de can fail or lag right as a queue ends, so a lookup that failed for such a reason is tried
+    # again after each delay. The claim above stays held meanwhile, so other edits of this message don't start lookups.
+    for retry_delay in (*QUEUE_RESULT_RETRY_DELAYS_SECONDS, None):
+        try:
+            content, file, error_text, match_result = await build_queue_stats_payload(match_id, message.guild.id)
+        except Exception as exc:
+            log.warning("Queue#%s automatic lookup failed: %s", match_id, type(exc).__name__)
+            content, file, match_result = None, None, {"diagnostics": {"retryable": True}}
+            error_text = "I couldn't fetch this queue's stats. Please try again shortly."
+        await save_queue_stats_log(
+            match_id, match_result, error_text, trigger="auto_post", guild_id=message.guild.id, channel_id=message.channel.id,
+        )
+        retryable = bool(error_text) and bool(((match_result or {}).get("diagnostics") or {}).get("retryable"))
+        if not retryable or retry_delay is None:
+            break
+        log.info("Queue#%s automatic lookup failed (%s); trying again in %ss", match_id, error_text, retry_delay)
+        await asyncio.sleep(retry_delay)
+
     if error_text:
         await message.reply(error_text)
+        if retryable:
+            # Every try failed for a temporary reason: let a later NeatQueue edit of this result try again.
+            release_match_processed(message.guild.id, match_id)
     else:
         view = get_queue_result_view(include_breakdown=bool(match_result.get("is_final")))
         await message.reply(content=content, file=file, view=view)

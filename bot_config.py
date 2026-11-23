@@ -23,6 +23,9 @@ NEATQUEUE_API_TOKEN = os.getenv("NEATQUEUE_API_TOKEN")
 NEATQUEUE_API_BASE = "https://api.neatqueue.com/api/v1"
 NEATQUEUE_BOT_ID = int(os.getenv("NEATQUEUE_BOT_ID", "857633321064595466"))
 QUEUE_RESULT_FETCH_DELAY_SECONDS = int(os.getenv("QUEUE_RESULT_FETCH_DELAY_SECONDS", "5"))
+# Waits before each new try of an automatic result post whose lookup failed for a temporary reason (NeatQueue or
+# survev.de didn't answer, or survev.de doesn't have the games yet). The error is posted only after the last try.
+QUEUE_RESULT_RETRY_DELAYS_SECONDS = (60, 120, 300)
 # NeatQueue messages older than this are never (re)processed live; NeatQueue occasionally mass-edits old
 # result messages, which would otherwise trigger a burst of replies for matches played long ago.
 QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS = int(os.getenv("QUEUE_RESULT_MAX_MESSAGE_AGE_HOURS", "24")) * 3600

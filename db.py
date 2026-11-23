@@ -221,6 +221,12 @@ def try_mark_match_processed(guild_id: int, match_id: str) -> bool:
         return cur.rowcount > 0
 
 
+# Helper: Undo try_mark_match_processed after an automatic post gave up, so a later NeatQueue edit can try again.
+def release_match_processed(guild_id: int, match_id: str):
+    with sqlite3.connect(DB_PATH) as c:
+        c.execute("DELETE FROM processed_matches WHERE guild_id = ? AND match_id = ?", (guild_id, str(match_id)))
+
+
 # Helper: Look up the current holder of a hall of fame record, if any has been set yet.
 def get_hall_of_fame_record(record_type: str) -> dict | None:
     with sqlite3.connect(DB_PATH) as c:

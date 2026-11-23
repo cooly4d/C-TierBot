@@ -566,7 +566,7 @@ class UnfinishedQueueTests(unittest.IsolatedAsyncioTestCase):
     async def test_roster_comes_from_the_panel_and_the_result_is_not_final(self):
         world = three_game_world(
             history=None,
-            history_error="NeatQueue API returned 404",
+            history_error=neatqueue_client.NEATQUEUE_NOT_FOUND_ERROR + " for URL https://example/history/999.",
             panel=panel_message("<@101> <@102>", "<@201> <@202>"),
             anchors={"tok-101": own_games(("g1", 10))},
             boards={"g1": lobby("A")},
@@ -647,6 +647,21 @@ class ErrorPathTests(unittest.IsolatedAsyncioTestCase):
         not_found = neatqueue_client.NEATQUEUE_NOT_FOUND_ERROR + " for URL https://example/history/999. {}"
         result, error = await calculate(**three_game_world(history=None, history_error=not_found, panel=None))
         self.assertEqual(error, "I couldn't find Queue #3674 on NeatQueue. Check the number.")
+
+    async def test_failed_history_request_is_not_mistaken_for_a_running_queue(self):
+        # Queue #4804: the request failed, and the newest "Queue#N" message was the result post, so the panel
+        # fallback searched only after the last game and claimed no game had finished.
+        diagnostics = {}
+        world = three_game_world(history=None, history_error="NeatQueue API returned 524 for URL https://example.",
+                                 panel=panel_message("<@101> <@102>", "<@201> <@202>"))
+        with fake_world(**world):
+            result, error = await neatqueue_client.calculate_queue_match_stats("3674", 999, diagnostics=diagnostics)
+            neatqueue_client.find_queue_panel_message.assert_not_awaited()
+
+        self.assertIsNone(result)
+        self.assertEqual(error, "NeatQueue didn't answer. Try again in a minute.")
+        self.assertTrue(diagnostics["neatqueue_request_failed"])
+        self.assertTrue(diagnostics["retryable"])
 
     async def test_panel_without_team_fields_is_rejected(self):
         world = three_game_world(history=None, panel=SimpleNamespace(

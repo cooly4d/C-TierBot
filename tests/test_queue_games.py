@@ -613,6 +613,50 @@ class QueueResultSendSiteTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.button_ids(message.reply.await_args.kwargs["view"]), ["queue_result_verify"])
 
+    async def auto_post(self, *payload_results):
+        """Runs post_queue_result with build_queue_stats_payload returning (or raising) each result in turn."""
+        message = MagicMock()
+        message.created_at = datetime.now(timezone.utc)
+        message.guild.id = 10
+        message.reply = AsyncMock()
+        build = AsyncMock(side_effect=list(payload_results))
+        with patch("leaderboard_bot.try_mark_match_processed", return_value=True), \
+                patch("leaderboard_bot.QUEUE_RESULT_FETCH_DELAY_SECONDS", 0), \
+                patch("leaderboard_bot.QUEUE_RESULT_RETRY_DELAYS_SECONDS", (0, 0, 0)), \
+                patch("leaderboard_bot.build_queue_stats_payload", new=build), \
+                patch("leaderboard_bot.release_match_processed") as release, \
+                patch("leaderboard_bot.update_guild_last_updated"):
+            await leaderboard_bot.post_queue_result(message, "3674")
+        return message, build, release
+
+    TEMPORARY_ERROR = (None, None, "❌ NeatQueue didn't answer. Try again in a minute.", {"diagnostics": {"retryable": True}})
+
+    async def test_automatic_post_retries_a_temporary_failure(self):
+        # Queue #4804: NeatQueue failed the first request but answered a minute later.
+        message, build, release = await self.auto_post(
+            self.TEMPORARY_ERROR, RuntimeError("timeout"), ("content", "file", None, {"is_final": True}))
+
+        self.assertEqual(build.await_count, 3)
+        message.reply.assert_awaited_once()
+        self.assertEqual(message.reply.await_args.kwargs["content"], "content")
+        release.assert_not_called()
+        self.assertEqual(self.save_log.await_count, 3)
+
+    async def test_automatic_post_gives_up_after_the_last_try_and_releases_the_queue(self):
+        message, build, release = await self.auto_post(*[self.TEMPORARY_ERROR] * 4)
+
+        self.assertEqual(build.await_count, 4)
+        message.reply.assert_awaited_once_with("❌ NeatQueue didn't answer. Try again in a minute.")
+        release.assert_called_once_with(10, "3674")
+
+    async def test_automatic_post_does_not_retry_a_permanent_error(self):
+        nobody_linked = (None, None, "❌ Nobody in this queue has linked a survev.de account.", {"diagnostics": {}})
+        message, build, release = await self.auto_post(nobody_linked)
+
+        self.assertEqual(build.await_count, 1)
+        message.reply.assert_awaited_once_with(nobody_linked[2])
+        release.assert_not_called()
+
     async def test_catch_up_posts_after_a_restart(self):
         channel = MagicMock()
         channel.send = AsyncMock()
