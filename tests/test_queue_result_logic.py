@@ -75,7 +75,7 @@ def game(number, *players):
 
 
 class SingleGameDamageRecordTests(unittest.TestCase):
-    """Most Damage in a Game: the best single game anyone played, from the queue snapshot's per-game rows."""
+    """Most Damage in a Single Game: the best single game anyone played, from the queue snapshot's per-game rows."""
 
     def _records(self, mock_try_set):
         return {call.args[0]: call for call in mock_try_set.call_args_list}
@@ -90,7 +90,7 @@ class SingleGameDamageRecordTests(unittest.TestCase):
         call = self._records(mock_try_set)["most_damage_game"]
         self.assertEqual(call.args[1:6], (996.0, None, "Sub", "3785", 999))
         self.assertEqual(call.kwargs["game_number"], 2)
-        self.assertIn("🏆 New Hall of Fame record! **Most Damage in a Game**: 996 by Sub (Game 2)", lines)
+        self.assertIn("🏆 New Hall of Fame record! **Most Damage in a Single Game**: 996 by Sub (Game 2)", lines)
 
     @patch("queue_stats_service.try_set_hall_of_fame_record", return_value=True)
     def test_a_sub_who_played_one_game_can_hold_it(self, mock_try_set):
@@ -235,8 +235,8 @@ class SingleGameDamageSeedTests(unittest.IsolatedAsyncioTestCase):
         embed = await build_hall_of_fame_embed()
 
         fields = {field.name: field.value for field in embed.fields}
-        self.assertEqual(list(fields)[:3], ["Most Kills in a Queue", "Most Avg Damage in a Queue", "Most Damage in a Game"])
-        self.assertEqual(fields["Most Damage in a Game"], "**996** — babiziank (Queue #3785, Game 1)")
+        self.assertEqual(list(fields)[:3], ["Most Kills in a Queue", "Most Avg Damage in a Queue", "Most Damage in a Single Game"])
+        self.assertEqual(fields["Most Damage in a Single Game"], "**996** — babiziank (Queue #3785, Game 1)")
         self.assertEqual(fields["Most Avg Damage in a Queue"], "**452** — <@5> (Queue #4624)")
 
 

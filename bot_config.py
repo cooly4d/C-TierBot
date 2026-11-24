@@ -54,7 +54,7 @@ QUEUE_PANEL_TITLE_PATTERN = re.compile(r"Results for Queue#(\d+)", re.IGNORECASE
 HALL_OF_FAME_RECORDS = {
     "most_kills": "Most Kills in a Queue",
     "most_avg_damage": "Most Avg Damage in a Queue",
-    "most_damage_game": "Most Damage in a Game",
+    "most_damage_game": "Most Damage in a Single Game",
     "longest_queue": "Longest Queue Duration",
 }
 MIN_GAMES_FOR_HALL_OF_FAME_UPDATE = 4
