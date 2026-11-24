@@ -20,6 +20,7 @@ from bot_config import (
 )
 from db import (
     QUEUE_RESULT_RETENTION_DAYS,
+    best_game_damage,
     cache_player_queue_stats,
     get_hall_of_fame_record,
     get_queue_result,
@@ -176,8 +177,10 @@ def check_queue_hall_of_fame_records(
     total_games_played: int,
     duration_ms: int | None = None,
     min_games_required: int = MIN_GAMES_FOR_HALL_OF_FAME_UPDATE,
+    snapshot_games: list[dict] | None = None,
 ) -> list[str]:
-    """Scans a queue's final teams for new all-time bests, updates the DB, and returns announcement lines."""
+    """Scans a queue's final teams for new all-time bests, updates the DB, and returns announcement lines.
+    `snapshot_games` is the queue snapshot's per-game rows (build_queue_snapshot), for the single-game damage record."""
     if total_games_played < min_games_required:
         return []
 
@@ -210,6 +213,21 @@ def check_queue_hall_of_fame_records(
         if try_set_hall_of_fame_record(record_type, value, entry.get("discord_id"), holder_name, match_id, guild_id):
             value_text = f"{value:,.0f}" if record_type == "most_avg_damage" else str(int(value))
             announcements.append(f"🏆 New Hall of Fame record! **{HALL_OF_FAME_RECORDS[record_type]}**: {value_text} by {holder_name}")
+
+    # Any player's single game counts here, a sub's too: one game is the whole stat, so the per-player floor above
+    # doesn't apply. The queue itself still needs min_games_required games.
+    best_game = best_game_damage(snapshot_games or [])
+    if best_game is not None and best_game[0] > 0:
+        damage, row, game_number = best_game
+        holder_name = row.get("name") or "Unknown"
+        if try_set_hall_of_fame_record(
+            "most_damage_game", float(damage), row.get("discord_id"), holder_name, match_id, guild_id,
+            game_number=game_number,
+        ):
+            announcements.append(
+                f"🏆 New Hall of Fame record! **{HALL_OF_FAME_RECORDS['most_damage_game']}**: "
+                f"{damage:,} by {holder_name} (Game {game_number})"
+            )
 
     if duration_ms is not None and duration_ms > 0:
         if try_set_hall_of_fame_record(
@@ -296,6 +314,13 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
     content = f"Queue stats for NeatQueue#{match_id}" if match_result.get("is_final") else f"NeatQueue#{match_id} - IN PROGRESS"
     total_games_played = int(match_result.get("total_games_played") or len(match_result.get("match_history") or []))
 
+    snapshot = None
+    if match_result.get("is_final"):
+        try:
+            snapshot = build_queue_snapshot(match_id, match_result)
+        except (TypeError, ValueError) as exc:
+            log.warning("Could not build the game breakdown for Queue#%s: %r", match_id, exc)
+
     # Only a finished queue can set records: an unfinished one has partial stats, and its duration runs up to "now".
     record_announcements = []
     if match_result.get("is_final"):
@@ -305,15 +330,16 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
             guild_id,
             total_games_played,
             duration_ms=match_result.get("duration_ms"),
+            snapshot_games=(snapshot or {}).get("games"),
         )
     if record_announcements:
         content += "\n" + "\n".join(record_announcements)
 
     cache_player_queue_stats(match_id, guild_id, match_result)
 
-    if match_result.get("is_final"):
+    if snapshot is not None:
         try:
-            save_queue_result(guild_id, match_id, build_queue_snapshot(match_id, match_result))
+            save_queue_result(guild_id, match_id, snapshot)
         except (sqlite3.Error, TypeError, ValueError) as exc:
             # The result must still be posted; the Game breakdown button just reports it as unavailable.
             log.warning("Could not save the game breakdown for Queue#%s: %r", match_id, exc)
@@ -454,6 +480,12 @@ async def build_hall_of_fame_embed() -> discord.Embed:
                 raw_duration = int(record["value"])
             value_text = format_duration_ms(int(raw_duration))
             field_value = f"**{value_text}** (Queue #{record['match_id']})"
+        elif record_type == "most_damage_game":
+            holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]
+            where = f"Queue #{record['match_id']}"
+            if record.get("game_number"):
+                where += f", Game {record['game_number']}"
+            field_value = f"**{record['value']:,.0f}** — {holder} ({where})"
         else:
             value_text = str(int(record["value"]))
             holder = f"<@{record['discord_id']}>" if record["discord_id"] else record["display_name"]

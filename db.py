@@ -7,6 +7,7 @@ behavior so nothing about transaction/commit timing changes.
 import json
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 
@@ -231,14 +232,16 @@ def release_match_processed(guild_id: int, match_id: str):
 def get_hall_of_fame_record(record_type: str) -> dict | None:
     with sqlite3.connect(DB_PATH) as c:
         row = c.execute(
-            "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms FROM hall_of_fame WHERE record_type = ?",
+            "SELECT value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms, game_number "
+            "FROM hall_of_fame WHERE record_type = ?",
             (record_type,)
         ).fetchone()
         if row is None:
             return None
         return {
             "value": row[0], "discord_id": row[1], "display_name": row[2],
-            "match_id": row[3], "guild_id": row[4], "achieved_at": row[5], "duration_ms": row[6]
+            "match_id": row[3], "guild_id": row[4], "achieved_at": row[5], "duration_ms": row[6],
+            "game_number": row[7],
         }
 
 
@@ -251,6 +254,8 @@ def try_set_hall_of_fame_record(
     match_id: str,
     guild_id: int,
     duration_ms: int | None = None,
+    game_number: int | None = None,
+    achieved_at: str | None = None,
 ) -> bool:
     with sqlite3.connect(DB_PATH) as c:
         existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = ?", (record_type,)).fetchone()
@@ -258,7 +263,8 @@ def try_set_hall_of_fame_record(
             return False
         c.execute(
             "INSERT OR REPLACE INTO hall_of_fame "
-            "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms, game_number) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record_type,
                 value,
@@ -266,11 +272,90 @@ def try_set_hall_of_fame_record(
                 display_name,
                 str(match_id),
                 guild_id,
-                datetime.now(timezone.utc).isoformat(),
+                achieved_at or datetime.now(timezone.utc).isoformat(),
                 duration_ms,
+                game_number,
             )
         )
         return True
+
+
+def best_game_damage(games: list[dict]) -> tuple[int | float, dict, int] | None:
+    """(damage, player row, game number) of the most damage anyone did in one game of a queue snapshot's `games`
+    (build_queue_snapshot's shape). The first one wins a tie; malformed games and rows are skipped. None when no
+    player did any damage."""
+    best = None
+    for index, game in enumerate(games if isinstance(games, list) else []):
+        if not isinstance(game, dict):
+            continue
+        players = game.get("players")
+        for row in players if isinstance(players, list) else []:
+            damage = row.get("damage") if isinstance(row, dict) else None
+            if isinstance(damage, bool) or not isinstance(damage, (int, float)) or damage <= 0:
+                continue
+            if best is None or damage > best[0]:
+                number = game.get("number")
+                best = (damage, row, number if isinstance(number, int) and number > 0 else index + 1)
+    return best
+
+
+def _seed_single_game_damage_record(c: sqlite3.Connection, min_games: int) -> bool:
+    """Writes the "most_damage_game" record on connection `c` from the saved Game breakdown snapshots still inside
+    their retention, counting only queues with at least `min_games` games (the floor live records use; a snapshot
+    has one entry per counted game). The earliest saved of a tie wins. Never lowers an existing record."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=QUEUE_RESULT_RETENTION_DAYS)).isoformat()
+    best = None
+    for guild_id, match_id, raw_snapshot, saved_at in c.execute(
+        "SELECT guild_id, match_id, snapshot, saved_at FROM queue_results WHERE saved_at >= ? "
+        "ORDER BY saved_at, guild_id, match_id",
+        (cutoff,),
+    ):
+        try:
+            games = json.loads(raw_snapshot).get("games")
+        except (ValueError, AttributeError):
+            continue
+        if not isinstance(games, list) or len(games) < min_games:
+            continue
+        candidate = best_game_damage(games)
+        if candidate is not None and (best is None or candidate[0] > best[0][0]):
+            best = (candidate, guild_id, match_id, saved_at)
+    if best is None:
+        return False
+    (damage, row, game_number), guild_id, match_id, saved_at = best
+    existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = 'most_damage_game'").fetchone()
+    if existing is not None and float(damage) <= existing[0]:
+        return False
+    discord_id = row.get("discord_id")
+    c.execute(
+        "INSERT OR REPLACE INTO hall_of_fame "
+        "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms, game_number) "
+        "VALUES ('most_damage_game', ?, ?, ?, ?, ?, ?, NULL, ?)",
+        (float(damage), discord_id if isinstance(discord_id, int) else None, str(row.get("name") or "Unknown"),
+         str(match_id), guild_id, saved_at, game_number),
+    )
+    return True
+
+
+def migrate_hall_of_fame_game_number(min_games: int) -> bool:
+    """Adds hall_of_fame.game_number (the single-game damage record names its game) and, in the same transaction,
+    seeds that record from the saved snapshots. If either step fails, neither is kept, so the next start tries
+    both again; once committed, the seed never runs again, so a later Hall of Fame reset stays empty. Returns
+    whether the migration ran. Unexpected errors propagate: every Hall of Fame query needs the column."""
+    with closing(sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {row[1] for row in c.execute("PRAGMA table_info(hall_of_fame)")}
+            if "game_number" in columns:
+                c.execute("ROLLBACK")
+                return False
+            c.execute("ALTER TABLE hall_of_fame ADD COLUMN game_number INTEGER")
+            _seed_single_game_damage_record(c, min_games)
+            c.execute("COMMIT")
+            return True
+        except BaseException:
+            if c.in_transaction:
+                c.execute("ROLLBACK")
+            raise
 
 
 def count_hall_of_fame_records() -> int:
@@ -649,3 +734,9 @@ def get_queue_result(guild_id: int, match_id: str) -> dict | None:
     except ValueError:
         return None
     return snapshot if isinstance(snapshot, dict) else None
+
+
+# Runs after every helper above exists. 4 = bot_config.MIN_GAMES_FOR_HALL_OF_FAME_UPDATE (db doesn't import the bot's
+# config); a test keeps the two equal.
+SINGLE_GAME_RECORD_SEED_MIN_GAMES = 4
+migrate_hall_of_fame_game_number(SINGLE_GAME_RECORD_SEED_MIN_GAMES)

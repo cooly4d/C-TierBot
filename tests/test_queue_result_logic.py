@@ -10,11 +10,15 @@ SPEC.loader.exec_module(neatqueue_client)
 
 
 import io
+import json
 import sqlite3
+import tempfile
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from queue_stats_service import build_queue_stats_payload, check_queue_hall_of_fame_records
+import db
+from queue_stats_service import build_hall_of_fame_embed, build_queue_stats_payload, check_queue_hall_of_fame_records
 
 
 class QueueResultLogicTests(unittest.TestCase):
@@ -60,6 +64,180 @@ class HallOfFameEligibilityTests(unittest.TestCase):
         holder_names = {call.args[3] for call in mock_try_set.call_args_list}
         self.assertIn("Strong", holder_names)
         self.assertNotIn("Weak", holder_names)
+
+
+def game(number, *players):
+    """One game of a queue snapshot: players as (name, damage, discord_id)."""
+    return {"number": number, "winner": 0, "players": [
+        {"team": 0, "name": name, "discord_id": discord_id, "guest": discord_id is None, "kills": 0, "damage": damage}
+        for name, damage, discord_id in players
+    ]}
+
+
+class SingleGameDamageRecordTests(unittest.TestCase):
+    """Most Damage in a Game: the best single game anyone played, from the queue snapshot's per-game rows."""
+
+    def _records(self, mock_try_set):
+        return {call.args[0]: call for call in mock_try_set.call_args_list}
+
+    @patch("queue_stats_service.try_set_hall_of_fame_record", return_value=True)
+    def test_best_single_game_sets_the_record_and_names_its_game(self, mock_try_set):
+        teams = [[self._entry("Regular", 2000, 5)]]
+        games = [game(1, ("Regular", 400, 1), ("Sub", 300, None)), game(2, ("Regular", 500, 1), ("Sub", 996, None))]
+
+        lines = check_queue_hall_of_fame_records(teams, "3785", 999, total_games_played=5, snapshot_games=games)
+
+        call = self._records(mock_try_set)["most_damage_game"]
+        self.assertEqual(call.args[1:6], (996.0, None, "Sub", "3785", 999))
+        self.assertEqual(call.kwargs["game_number"], 2)
+        self.assertIn("🏆 New Hall of Fame record! **Most Damage in a Game**: 996 by Sub (Game 2)", lines)
+
+    @patch("queue_stats_service.try_set_hall_of_fame_record", return_value=True)
+    def test_a_sub_who_played_one_game_can_hold_it(self, mock_try_set):
+        # The per-player games floor guards queue totals and averages, not a single game.
+        teams = [[self._entry("Regular", 2000, 5), self._entry("Sub", 900, 1)]]
+        games = [game(5, ("Regular", 400, 1), ("Sub", 900, 2))]
+
+        check_queue_hall_of_fame_records(teams, "1", 999, total_games_played=5, snapshot_games=games)
+
+        self.assertEqual(self._records(mock_try_set)["most_damage_game"].args[3], "Sub")
+
+    @patch("queue_stats_service.try_set_hall_of_fame_record", return_value=True)
+    def test_short_queues_and_queues_without_games_set_nothing(self, mock_try_set):
+        games = [game(1, ("Regular", 900, 1))]
+        check_queue_hall_of_fame_records([[self._entry("Regular", 900, 3)]], "1", 999, total_games_played=3, snapshot_games=games)
+        check_queue_hall_of_fame_records([[self._entry("Regular", 900, 5)]], "2", 999, total_games_played=5, snapshot_games=None)
+
+        self.assertNotIn("most_damage_game", self._records(mock_try_set))
+
+    @patch("queue_stats_service.try_set_hall_of_fame_record", return_value=False)
+    def test_no_announcement_when_the_record_stands(self, _mock_try_set):
+        lines = check_queue_hall_of_fame_records(
+            [[self._entry("Regular", 2000, 5)]], "1", 999, total_games_played=5, snapshot_games=[game(1, ("Regular", 500, 1))])
+
+        self.assertEqual(lines, [])
+
+    def test_first_of_a_tie_wins(self):
+        damage, row, number = db.best_game_damage([game(1, ("A", 700, 1)), game(2, ("B", 700, 2))])
+
+        self.assertEqual((damage, row["name"], number), (700, "A", 1))
+        self.assertIsNone(db.best_game_damage([]))
+
+    def test_seed_floor_matches_the_live_floor(self):
+        from bot_config import MIN_GAMES_FOR_HALL_OF_FAME_UPDATE
+        self.assertEqual(db.SINGLE_GAME_RECORD_SEED_MIN_GAMES, MIN_GAMES_FOR_HALL_OF_FAME_UPDATE)
+
+    def _entry(self, name, damage, games):
+        return {"display_name": name, "username": name, "discord_id": 1,
+                "stats": {"damage": damage, "games": games, "kills": 0}}
+
+
+class ClosingConnection(sqlite3.Connection):
+    """db.py's `with sqlite3.connect(...)` never closes, and Windows can't delete an open file."""
+
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self.close()
+
+
+def days_ago(days):
+    return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+
+OLD_HALL_OF_FAME_SCHEMA = (
+    "CREATE TABLE hall_of_fame (record_type TEXT PRIMARY KEY, value REAL NOT NULL, discord_id INTEGER, "
+    "display_name TEXT, match_id TEXT NOT NULL, guild_id INTEGER NOT NULL, achieved_at TEXT NOT NULL, "
+    "duration_ms INTEGER)"
+)
+
+
+class SingleGameDamageSeedTests(unittest.IsolatedAsyncioTestCase):
+    """The game_number migration seeds the record once, in the same transaction, from the saved snapshots; the
+    record is shown in /hall_of_fame."""
+
+    def setUp(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.db_path = str(Path(temp_dir.name) / "hof.db")
+        connect = sqlite3.connect
+        self.connect = lambda *args, **kwargs: connect(*args, factory=ClosingConnection, **kwargs)
+        for patcher in (patch.object(db, "DB_PATH", self.db_path),
+                        patch.object(db.sqlite3, "connect", side_effect=self.connect)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        with self.connect(self.db_path) as c:
+            c.execute(db.QUEUE_RESULTS_SCHEMA)
+            c.execute(OLD_HALL_OF_FAME_SCHEMA)  # a database from before the record existed
+
+    def _save(self, guild_id, match_id, games, saved_at=None):
+        with self.connect(self.db_path) as c:
+            c.execute("INSERT INTO queue_results VALUES (?, ?, ?, ?)",
+                      (guild_id, match_id, json.dumps({"games": games}), saved_at or days_ago(1)))
+
+    def _columns(self):
+        with self.connect(self.db_path) as c:
+            return {row[1] for row in c.execute("PRAGMA table_info(hall_of_fame)")}
+
+    def test_migration_seeds_the_best_game_of_a_full_queue(self):
+        four = [game(n, ("Filler", 100, 1)) for n in range(1, 4)]
+        self._save(7, "3785", four + [game(4, ("babiziank", 996, None))], saved_at=days_ago(20))
+        self._save(7, "4765", four + [game(4, ("Tenno", 985, 42))])
+        self._save(7, "4999", four + [game(4, ("Late tie", 996, 5))])  # saved later: the earlier 996 keeps it
+        self._save(8, "9000", [game(1, ("Short", 2000, 3))])  # three games short of a record
+        self._save(8, "old", four + [game(4, ("Expired", 3000, 3))], saved_at=days_ago(200))
+        self._save(8, "bad", [None, {}, {"players": [None, {"damage": "lots"}]}, {"players": "x"}])
+
+        self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+
+        record = db.get_hall_of_fame_record("most_damage_game")
+        self.assertEqual(
+            (record["value"], record["display_name"], record["discord_id"], record["match_id"], record["guild_id"],
+             record["game_number"]),
+            (996.0, "babiziank", None, "3785", 7, 4),
+        )
+        self.assertLess(record["achieved_at"], days_ago(19))  # when the game was saved, not when it was seeded
+
+    def test_zero_damage_queues_and_empty_history_seed_nothing(self):
+        self._save(7, "1", [game(n, ("Nobody", 0, 1)) for n in range(1, 5)])
+
+        self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+        self.assertIsNone(db.get_hall_of_fame_record("most_damage_game"))
+
+    def test_failed_seed_keeps_nothing_then_retries_and_a_reset_stays_empty(self):
+        self._save(7, "3785", [game(n, ("babiziank", 996, None)) for n in range(1, 5)])
+        with patch.object(db, "_seed_single_game_damage_record", side_effect=RuntimeError("stopped")):
+            with self.assertRaises(RuntimeError):
+                db.migrate_hall_of_fame_game_number(4)
+        self.assertNotIn("game_number", self._columns())  # rolled back with the seed
+
+        self.assertTrue(db.migrate_hall_of_fame_game_number(4))  # the next start does both
+        self.assertEqual(db.get_hall_of_fame_record("most_damage_game")["value"], 996.0)
+
+        db.clear_hall_of_fame_records()
+        self.assertFalse(db.migrate_hall_of_fame_game_number(4))  # later starts never reseed
+        self.assertIsNone(db.get_hall_of_fame_record("most_damage_game"))
+
+    def test_seed_never_lowers_an_existing_record(self):
+        with self.connect(self.db_path) as c:
+            c.execute("INSERT INTO hall_of_fame VALUES ('most_damage_game', 1200, 5, 'Hex.', '4520', 7, 'x', NULL)")
+        self._save(7, "3785", [game(n, ("babiziank", 996, None)) for n in range(1, 5)])
+
+        self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+        self.assertEqual(db.get_hall_of_fame_record("most_damage_game")["value"], 1200.0)
+
+    async def test_hall_of_fame_embed_shows_the_game(self):
+        db.migrate_hall_of_fame_game_number(4)
+        db.try_set_hall_of_fame_record("most_damage_game", 996.0, None, "babiziank", "3785", 7, game_number=1)
+        db.try_set_hall_of_fame_record("most_avg_damage", 451.75, 5, "Hex.", "4624", 7)
+
+        embed = await build_hall_of_fame_embed()
+
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertEqual(list(fields)[:3], ["Most Kills in a Queue", "Most Avg Damage in a Queue", "Most Damage in a Game"])
+        self.assertEqual(fields["Most Damage in a Game"], "**996** — babiziank (Queue #3785, Game 1)")
+        self.assertEqual(fields["Most Avg Damage in a Queue"], "**452** — <@5> (Queue #4624)")
 
 
 class QueueStatsServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -146,6 +324,17 @@ class HallOfFameFinalityTests(unittest.IsolatedAsyncioTestCase):
         built.hof.assert_called_once()
         self.assertEqual(built.hof.call_args.kwargs["duration_ms"], 3_600_000)
         self.assertIn(self.RECORD_LINE, built.content)
+
+    async def test_records_read_the_same_per_game_rows_the_breakdown_saves(self):
+        teams = [[{"discord_id": 1, "username": "Awang", "slug": "awang",
+                   "stats": {"games": 5, "kills": 30, "damage": 9000}}]]
+        games = [{"game_number": 1, "winning_display_team_index": 0, "players": [
+            {"display_team_index": 0, "identity": "awang", "kills": 3, "damage_dealt": 996}]}]
+        built = await build_payload(teams=teams, is_final=True, individual_games=games)
+
+        checked = built.hof.call_args.kwargs["snapshot_games"]
+        self.assertEqual(checked, built.save.call_args.args[2]["games"])
+        self.assertEqual(checked[0]["players"][0]["damage"], 996)
 
     async def test_unfinished_queue_never_touches_records(self):
         built = await self._build(is_final=False)

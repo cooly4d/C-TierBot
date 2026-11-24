@@ -55,7 +55,7 @@ C-TierBot links your server's players to their survev.de accounts and then does 
 | Command | What it does |
 | :--- | :--- |
 | `/queue_stats <match_id>` | Builds the results image for a NeatQueue game number. Ongoing queues show **IN PROGRESS** above the score and **Team N leads** (or **No team leading**). Substitutes and players who left are shown on the team they played for, with the games they played (for example `1/7`). The Game breakdown button only appears once the queue has finished. |
-| `/hall_of_fame` | Best single-queue records: most kills, most average damage, longest queue. Only finished queues can set records. |
+| `/hall_of_fame` | Best records: most kills and most average damage in a queue, most damage in a single game, longest queue. Only finished queues of 4+ games can set records. |
 
 You can also **type `score?` or mention @ctierbot in a `queue-<number>` channel** (for example, `queue-4607`) to get that queue's current stats as a public reply. `score?` needs no mention and can appear anywhere in a message (for example, "what is the score?"), ignoring capitalization. It must be the word `score` followed directly by `?`, so `scoreboard?` or `score` without a question mark does not trigger it. For the mention shortcut, select the actual bot mention in Discord. Ongoing queues show **IN PROGRESS**; finished queues show final results and the Game breakdown button. These channels do not need individual `/setup` registration, but the bot needs permission to view them, send replies, and attach files. The same linked-player and queue-data requirements as `/queue_stats` apply.
 
