@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "macros.html" import queue_row, board, player_name %}
+{% block main %}
+<h1 class="page-title">C-TierBot</h1>
+<p class="lede">Results and stats from the community's 4v4 NeatQueue scrims.</p>
+
+<div class="home-grid">
+  <section class="panel" aria-labelledby="latest-h">
+    <div class="panel-head"><h2 id="latest-h">Latest queues</h2><a class="more" href="/queues">All queues</a></div>
+    {% if latest %}
+    <ul class="q-list">{% for item in latest %}{{ queue_row(item) }}{% endfor %}</ul>
+    {% else %}<p class="muted">No saved queues yet.</p>{% endif %}
+  </section>
+
+  <section class="panel" aria-labelledby="top-h">
+    <div class="panel-head"><h2 id="top-h">{{ month_label }} · avg dmg</h2><a class="more" href="/leaderboard">Leaderboard</a></div>
+    <div data-board data-format="damage">{{ board(board_rows, "avg dmg") }}</div>
+  </section>
+</div>
+
+<section class="panel" aria-labelledby="hof-h">
+  <div class="panel-head"><h2 id="hof-h">Hall of Fame</h2><a class="more" href="/hall-of-fame">Records</a></div>
+  <ul class="records">
+  {% for r in records %}
+    <li class="record">
+      <span class="record-label">{{ r.label }}</span>
+      {% if r.empty %}<span class="muted">No record yet</span>{% else %}
+      <span class="record-value">{{ r.value }}</span>
+      <span class="record-who">{% if r.holder %}{{ player_name(r.holder) }}{% endif %}{% if r.holder and r.where %} · {% endif %}{% if r.where %}{% if r.match_id %}<a href="/queues/{{ r.match_id }}">{{ r.where }}</a>{% else %}{{ r.where }}{% endif %}{% endif %}</span>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endblock %}

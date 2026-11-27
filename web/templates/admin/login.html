@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Operator panel · C-TierBot{% endblock %}
+{% block main %}
+<section class="panel admin-login">
+  <h1 class="page-title">Operator panel</h1>
+  <form method="post" action="/admin/login" class="login-form">
+    <input class="sr-only" type="text" name="username" value="operator" autocomplete="username" tabindex="-1" aria-hidden="true">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128" autofocus{% if error %} aria-invalid="true" aria-describedby="password-error"{% endif %}>
+    {% if error %}<p class="form-error" id="password-error" role="alert">{{ error }}</p>{% endif %}
+    <button type="submit" class="button">Sign in</button>
+  </form>
+</section>
+{% endblock %}

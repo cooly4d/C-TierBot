@@ -1,10 +1,17 @@
-# Secrets and local state: never bake these into the image.
-.env
-.env.*
-*.db
-*.db-journal
-data/
-log/
+# Secrets and local state: never bake these into the image. "**/" matches in every folder (a bare pattern in
+# .dockerignore only matches at the top, unlike .gitignore).
+**/.env
+**/.env.*
+**/*.db
+**/*.db-journal
+**/*.db-wal
+**/*.db-shm
+**/*.db.part
+**/data/
+**/log/
+**/backups/
+**/queue_stats_*.json
+**/queue_stats_*.json.tmp
 
 # Local tooling and caches
 .git/
@@ -25,3 +32,4 @@ tests/
 tools/
 design-system/
 *.md
+.impeccable/

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Log · Operator panel{% endblock %}
+{% block main %}
+<p class="crumbs"><a href="/admin/">Operator panel</a> / log</p>
+<h1 class="page-title log-title">{{ name }}</h1>
+{% if state == "ok" %}
+<pre class="log-json panel">{{ text }}</pre>
+{% elif state == "missing" %}
+<p class="panel muted">No longer available (it was pruned).</p>
+{% else %}
+<p class="panel muted">Unreadable: this log isn't valid UTF-8 JSON, or it's over 2 MB.</p>
+{% endif %}
+{% endblock %}

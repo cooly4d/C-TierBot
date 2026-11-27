@@ -189,7 +189,8 @@ class SingleGameDamageSeedTests(unittest.IsolatedAsyncioTestCase):
         self._save(8, "old", four + [game(4, ("Expired", 3000, 3))], saved_at=days_ago(200))
         self._save(8, "bad", [None, {}, {"players": [None, {"damage": "lots"}]}, {"players": "x"}])
 
-        self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+        with patch.object(db, "QUEUE_RESULT_RETENTION_DAYS", 90):  # 200 days old: outside the 90-day window
+            self.assertTrue(db.migrate_hall_of_fame_game_number(4))
 
         record = db.get_hall_of_fame_record("most_damage_game")
         self.assertEqual(
@@ -198,6 +199,22 @@ class SingleGameDamageSeedTests(unittest.IsolatedAsyncioTestCase):
             (996.0, "babiziank", None, "3785", 7, 4),
         )
         self.assertLess(record["achieved_at"], days_ago(19))  # when the game was saved, not when it was seeded
+
+    def test_the_seed_window_follows_the_retention_setting(self):
+        four = [game(n, ("Filler", 100, 1)) for n in range(1, 4)]
+        self._save(7, "3785", four + [game(4, ("babiziank", 996, None))], saved_at=days_ago(20))
+        self._save(8, "old", four + [game(4, ("Expired", 3000, 3))], saved_at=days_ago(200))
+        with patch.object(db, "QUEUE_RESULT_RETENTION_DAYS", 90):
+            self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+        self.assertEqual(db.get_hall_of_fame_record("most_damage_game")["value"], 996.0)  # 200 days: past 90
+
+    def test_with_retention_zero_the_seed_reads_every_saved_snapshot(self):
+        four = [game(n, ("Filler", 100, 1)) for n in range(1, 4)]
+        self._save(7, "3785", four + [game(4, ("babiziank", 996, None))], saved_at=days_ago(20))
+        self._save(8, "old", four + [game(4, ("Expired", 3000, 3))], saved_at=days_ago(200))
+        with patch.object(db, "QUEUE_RESULT_RETENTION_DAYS", 0):  # also what an invalid setting becomes
+            self.assertTrue(db.migrate_hall_of_fame_game_number(4))
+        self.assertEqual(db.get_hall_of_fame_record("most_damage_game")["value"], 3000.0)
 
     def test_zero_damage_queues_and_empty_history_seed_nothing(self):
         self._save(7, "1", [game(n, ("Nobody", 0, 1)) for n in range(1, 5)])

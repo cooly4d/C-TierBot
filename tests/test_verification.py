@@ -75,15 +75,26 @@ class VerificationFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.messages(), ["✅ **Account Linked!**"])
         self.assertEqual(survev.calls[-1][1]["headers"], {"Authorization": "Bearer tok-new"})
 
-    async def test_a_link_without_a_profile_still_saves_and_says_so(self):
+    async def test_nothing_is_linked_when_survev_doesnt_say_which_account_it_is(self):
+        # One survev.de account, one Discord user (2026-11-27): a link nobody can check is never saved, and an
+        # existing link is never replaced by one (final review FIN-01).
         await self.run_flow({
             DEVICE_URL: [FakeResponse(200, DEVICE_CODE)],
             TOKEN_URL: [FakeResponse(200, {"accessToken": "tok-new"})],
             LINK_URL: [FakeResponse(500)] * survev_client.SLUG_LOOKUP_ATTEMPTS,
         })
+        self.save_token.assert_not_called()
+        self.assertEqual(len(self.messages()), 1)
+        self.assertIn("so nothing was linked. Run `/verify` again", self.messages()[0])
 
-        self.save_token.assert_called_once_with(7, "tok-new", None, None)
-        self.assertIn("fill it in automatically", self.messages()[0])
+        self.sender.reset_mock()
+        await self.run_flow({
+            DEVICE_URL: [FakeResponse(200, DEVICE_CODE)],
+            TOKEN_URL: [FakeResponse(200, {"accessToken": "tok-new"})],
+            LINK_URL: [FakeResponse(200, {"slug": "", "username": "Awang"})] * survev_client.SLUG_LOOKUP_ATTEMPTS,
+        }, linked_token="tok-old")
+        self.save_token.assert_not_called()
+        self.assertIn("nothing was linked and your current link is unchanged", self.messages()[0])
 
     async def test_declining_on_survev_ends_the_flow_without_saving(self):
         await self.run_flow({

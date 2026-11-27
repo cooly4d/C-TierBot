@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · C-TierBot{% endblock %}
+{% block main %}
+{# The metric columns' headers, shared by the chart's table and the queue history: the chart's metric is marked,
+   and site.js moves the mark when the metric changes. #}
+{% macro metric_headers() %}<th scope="col"{% if metric == "kills" %} class="accent"{% endif %} data-col="kills"><span class="label-long">Kills per game</span><span class="label-short" aria-hidden="true">K/game</span></th><th scope="col"{% if metric == "damage" %} class="accent"{% endif %} data-col="damage">Avg dmg</th><th scope="col"{% if metric == "impact" %} class="accent"{% endif %} data-col="impact">Impact</th>{% endmacro %}
+<section class="series player-band" aria-label="Player summary">
+  <div class="series-left">
+    <h1 class="series-title player-title">{{ name }}</h1>
+    {% if record.n %}<p class="series-result state-{{ record.state }}">Last {{ record.n }} queue{% if record.n != 1 %}s{% endif %} · {{ record.w }}W - {{ record.l }}L</p>{% endif %}
+    <p class="series-meta">{% if record.win_rate is not none %}<span class="nowrap">Win rate {{ record.win_rate }}%</span> · {% endif %}<span class="nowrap">{{ summary.matches | fmt_int }} queue{% if summary.matches != 1 %}s{% endif %} with saved stats in this server</span> · <span class="nowrap">{{ summary.total_duration_ms | fmt_playtime }} played</span></p>
+    <p class="series-meta band-stats"><span class="nowrap">Avg dmg <strong class="accent">{{ summary.all_time_avg_damage | fmt_avg }}</strong> all time</span> · <span class="nowrap"><strong class="accent">{{ summary.monthly_avg_damage | fmt_avg }}</strong> in {{ month_short }}</span> · <span class="nowrap">Avg impact <strong class="band-value">{{ summary.all_time_avg_impact | fmt_impact }}</strong></span></p>
+  </div>
+</section>
+
+<section class="panel trend" aria-labelledby="trend-h" data-trend data-metric="{{ metric }}">
+  <div class="trend-head">
+    <h2 id="trend-h" data-trend-title>{{ chart.title }}</h2>
+    <p class="trend-latest"{% if chart.empty %} hidden{% endif %} data-trend-latest-wrap>Latest <strong data-trend-latest>{{ chart.latest }}</strong> <span data-trend-unit>{{ chart.unit }}</span></p>
+    <nav class="pills" aria-label="Metric">
+      {% for m in metrics %}<a class="pill" href="?metric={{ m.key }}{% if page > 1 %}&amp;page={{ page }}{% endif %}" data-metric="{{ m.key }}"{% if m.current %} aria-current="true"{% endif %}>{{ m.label }}</a>{% endfor %}
+    </nav>
+  </div>
+  <div class="trend-body">
+    <div class="trend-ticks" aria-hidden="true" data-trend-ticks>
+      {% for t in chart.ticks %}<span class="tick tick-{{ (t.fraction * 100) | round | int }}" data-tick="{{ loop.index0 }}">{{ t.label }}</span>{% endfor %}
+    </div>
+    <div class="trend-plot" data-trend-plot>
+      <svg class="trend-svg" viewBox="0 0 1000 300" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <defs><linearGradient id="trend-fill" x1="0" y1="0" x2="0" y2="1"><stop class="fill-top" offset="0"/><stop class="fill-bottom" offset="1"/></linearGradient></defs>
+        <path class="trend-grid" d="{% for t in chart.ticks %}M0 {{ t.y }} H1000 {% endfor %}" data-trend-grid/>
+        <g class="trend-reveal" data-trend-reveal>
+          <path class="trend-area" d="{{ chart.area }}" data-trend-area/>
+          <path class="trend-line" d="{{ chart.line }}" data-trend-line/>
+        </g>
+        <g data-trend-dots>
+        {% for s in chart.slots %}{% if s.y is not none %}{% if s.i == chart.latest_i %}<path class="dot-latest" d="M{{ s.x }} {{ s.y }}h0" data-latest="{{ s.i }}"/>{% endif %}<path class="dot-ring" d="M{{ s.x }} {{ s.y }}h0" data-ring="{{ s.i }}"/><path class="dot state-{{ 'neutral' if s.won is none else ('win' if s.won else 'lose') }}" d="M{{ s.x }} {{ s.y }}h0" data-dot="{{ s.i }}"/>{% if s.won is false %}<path class="dot-hole" d="M{{ s.x }} {{ s.y }}h0" data-hole="{{ s.i }}"/>{% endif %}{% endif %}{% endfor %}
+        </g>
+        <line class="trend-cross" x1="0" x2="0" y1="0" y2="300" data-trend-cross/>
+      </svg>
+      <div class="trend-hits {{ slot_class }}" data-trend-hits>
+        {% for s in chart.slots %}{% if s.y is not none %}<button type="button" class="hit" data-i="{{ s.i }}" aria-label="Queue{% if s.match_id %} #{{ s.match_id }}{% endif %}, {% if s.won is none %}result unknown{% elif s.won %}won {{ s.score or '' }}{% else %}lost {{ s.score or '' }}{% endif %}, {{ s.text }} {{ chart.unit }}"></button>{% else %}<span class="hit-empty" data-i="{{ s.i }}"></span>{% endif %}{% endfor %}
+      </div>
+      <div class="trend-tip" hidden aria-hidden="true" data-trend-tip><strong data-tip-value></strong><span data-tip-unit></span><span class="tip-line"><span class="tip-key" data-tip-key></span><span data-tip-line></span></span></div>
+      <p class="trend-empty"{% if not chart.empty %} hidden{% endif %} data-trend-empty>{{ chart.empty_text }}</p>
+    </div>
+  </div>
+  <div class="trend-x {{ slot_class }}" aria-hidden="true">
+    {% for s in chart.slots %}<span{% if loop.last %} class="is-latest"{% endif %}>{% if (loop.index0 % 3 == 0 or loop.last) and s.match_id %}#{{ s.match_id }}{% endif %}</span>{% endfor %}
+  </div>
+  <p class="trend-legend"><span class="key key-win"></span>Won <span class="key key-lose"></span>Lost <span class="key key-latest"></span>Latest <span class="muted">Hover, tap or tab through the points for each queue.</span></p>
+  {% if chart_rows %}
+  <details class="trend-data">
+    <summary>The chart's {{ chart_rows | length }} queues as a table</summary>
+    <div class="table-scroll">
+      <table class="stats history">
+        <thead><tr><th scope="col">Queue</th><th scope="col">Result</th>{{ metric_headers() }}</tr></thead>
+        <tbody>
+        {% for r in chart_rows %}
+          <tr>
+            <th scope="row">{% if r.match_id %}<a href="/queues/{{ r.match_id }}">#{{ r.match_id }}</a>{% else %}—{% endif %}</th>
+            <td class="strong state-{{ 'neutral' if r.won is none else ('win' if r.won else 'lose') }}">{% if r.won is none %}—{% elif r.won %}W{% else %}L{% endif %}{% if r.score %} · {{ r.score }}{% endif %}</td>
+            <td>{{ r.kills_pg }}</td>
+            <td>{{ r.avg }}</td>
+            <td>{{ r.impact }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+  <script type="application/json" data-trend-json>{{ chart_json | safe }}</script>
+</section>
+
+<section class="panel" aria-labelledby="hist-h">
+  <h2 id="hist-h" class="panel-title">Queues</h2>
+  <div class="table-scroll">
+    <table class="stats history">
+      <thead><tr><th scope="col">Queue</th><th scope="col">Result</th>{{ metric_headers() }}<th scope="col" class="col-date">Date</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <th scope="row">{% if r.match_id %}<a href="/queues/{{ r.match_id }}">#{{ r.match_id }}</a>{% else %}—{% endif %}</th>
+          <td class="strong state-{{ 'neutral' if r.won is none else ('win' if r.won else 'lose') }}">{% if r.won is none %}—{% elif r.won %}W{% else %}L{% endif %}{% if r.score %} · {{ r.score }}{% endif %}</td>
+          <td>{{ r.kills_pg }}</td>
+          <td class="strong accent">{{ r.avg }}</td>
+          <td class="strong">{{ r.impact }}</td>
+          <td class="muted col-date">{{ r.date | fmt_date }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+  <nav class="pager" aria-label="Pages">
+    {% if page > 1 %}<a class="pill" href="?metric={{ metric }}&amp;page={{ page - 1 }}" rel="prev">Newer</a>{% endif %}
+    <span class="pager-pos">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a class="pill" href="?metric={{ metric }}&amp;page={{ page + 1 }}" rel="next">Older</a>{% endif %}
+  </nav>
+  {% endif %}
+</section>
+{% endblock %}

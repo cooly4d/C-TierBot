@@ -1,11 +1,27 @@
 .env
+.env.*
 .venv/
 env/
 venv/
 
+# Databases and their SQLite sidecars (a journal or WAL can hold token pages), backups and preview exports
 *.db
 leaderboard.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.part
+backups/
+
+# Runtime diagnostic logs (QUEUE_STATS_LOG_DIR defaults to log/)
+log/
+queue_stats_*.json
+queue_stats_*.json.tmp
 
 
 __pycache__/
 *.pyc
+
+# Impeccable review captures (real data) and generated mocks: local only
+.impeccable/review/
+.impeccable/mocks/

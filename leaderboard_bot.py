@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 import signal
+import sqlite3
 import time
 from datetime import datetime, timezone
 
@@ -16,9 +17,15 @@ from discord.ext import tasks
 from bot_config import (
     CONSOLE_PORT,
     DISCORD_BOT_TOKEN,
+    HOME_GUILD_ID,
     KEYWORD_REACTIONS,
     LOG_LEVEL,
     NEATQUEUE_BOT_ID,
+    QUEUE_STATS_LOG_DIR,
+    WEB_ADMIN_PASSWORD_HASH,
+    WEB_PORT,
+    WEB_PUBLIC_ORIGIN,
+    WEB_SESSION_SECRET,
     QUEUE_PANEL_TITLE_PATTERN,
     QUEUE_RESULT_FETCH_DELAY_SECONDS,
     QUEUE_RESULT_MAX_MESSAGE_AGE_SECONDS,
@@ -28,11 +35,11 @@ from bot_config import (
 )
 from db import (
     add_guild_queue_channel,
-    clear_hall_of_fame_records,
     count_hall_of_fame_records,
     get_all_guild_settings,
     get_guild_queue_channels,
     get_user_token,
+    migrate_unique_account_links,
     release_match_processed,
     remove_guild_queue_channel,
     try_mark_match_processed,
@@ -77,6 +84,7 @@ from neatqueue_client import fetch_neatqueue_matches_since, get_match_game_numbe
 from queue_stats_service import (
     build_hall_of_fame_embed,
     build_queue_stats_payload,
+    reset_hall_of_fame_records,
     save_queue_stats_log,
 )
 from console_service import start_console_listener, start_console_socket_server
@@ -105,8 +113,8 @@ PREFIX_QUEUE_NUMBER_PATTERN = re.compile(r"^#?([0-9]{1,7})$")
 
 @tasks.loop(minutes=SLUG_BACKFILL_INTERVAL_MINUTES)
 async def slug_backfill_loop():
-    """Periodically fills in survev.de slugs for linked players whose lookup failed at /verify time, so they
-    stop showing up as guests on match cards without waiting for the next bot restart."""
+    """Periodically fills in survev.de slugs for links saved without one (older links: /verify now saves a link
+    only with its slug), so they stop showing up as guests on match cards without waiting for a restart."""
     if slug_backfill_loop.current_loop == 0:
         return  # on_ready already ran a backfill just now
     try:
@@ -372,9 +380,12 @@ async def answer_hall_of_fame_reset(interaction: discord.Interaction, custom_id:
         await interaction.response.edit_message(
             content="This confirmation ran out, so nothing was deleted. Run /reset_hall_of_fame again.", view=None)
         return
-    deleted_count = clear_hall_of_fame_records()
-    await interaction.response.edit_message(
-        content=f"✅ Deleted {deleted_count} Hall of Fame record{'' if deleted_count == 1 else 's'}.", view=None)
+    # Answer first (the buttons go), then delete: the reset waits for any queue result whose records are being
+    # written, so it never lands between one queue's record updates, and that wait can outlast Discord's 3 seconds.
+    await interaction.response.edit_message(content="Deleting the Hall of Fame records…", view=None)
+    deleted_count = await asyncio.to_thread(reset_hall_of_fame_records)
+    await interaction.edit_original_response(
+        content=f"✅ Deleted {deleted_count} Hall of Fame record{'' if deleted_count == 1 else 's'}.")
 
 
 @bot.tree.command(name="inventory", description="View a user's survev.de inventory")
@@ -786,23 +797,110 @@ async def backfill_missed_queue_results():
         update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())
 
 
+# The website (None when WEB_PORT is 0 or it couldn't start) and the one shutdown task.
+_web_server = None
+_shutdown_task: asyncio.Task | None = None
+_shutdown_deadline: float | None = None
+SHUTDOWN_SECONDS = 5
+
+
+async def _close_bot(deadline: float):
+    try:
+        await asyncio.wait_for(bot.close(), timeout=max(0.05, deadline - time.monotonic()))
+    except asyncio.TimeoutError:
+        log.warning("Discord close didn't finish before the shutdown deadline.")
+
+
+async def _shutdown(deadline: float):
+    """Stop the website and close the bot together, both within `deadline` (time.monotonic())."""
+    web_server = _web_server
+    if web_server is not None:
+        web_server.begin_stop()  # admission stops at once
+    tasks = [_close_bot(deadline)]
+    if web_server is not None:
+        tasks.append(web_server.stop(deadline))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            log.warning("Shutdown step failed: %r", result)
+
+
+def request_shutdown() -> asyncio.Task:
+    """Start the one shutdown task (idempotent). Its 5-second deadline starts when this is first called, which
+    for SIGTERM is when the signal arrives."""
+    global _shutdown_task, _shutdown_deadline
+    if _shutdown_task is None:
+        _shutdown_deadline = time.monotonic() + SHUTDOWN_SECONDS
+        _shutdown_task = asyncio.ensure_future(_shutdown(_shutdown_deadline))
+    return _shutdown_task
+
+
 def install_shutdown_signal_handler(loop: asyncio.AbstractEventLoop) -> bool:
-    """Close the bot cleanly on SIGTERM, which Docker/Coolify sends to stop or redeploy the container.
+    """Shut down cleanly on SIGTERM, which Docker/Coolify sends to stop or redeploy the container.
     As the container's PID 1, Python would otherwise ignore it and be killed once the grace period ends.
     Windows has no loop signal handlers, so this is a no-op there."""
     try:
-        loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.ensure_future(bot.close()))
+        loop.add_signal_handler(signal.SIGTERM, request_shutdown)
     except (NotImplementedError, AttributeError, RuntimeError):
         return False
     return True
 
 
+async def start_website():
+    """Start the website when WEB_PORT is set. Any failure is logged and the bot carries on without it."""
+    global _web_server
+    if not WEB_PORT:
+        return None
+    admin = None
+    try:
+        import web_admin
+        admin = web_admin.parse_admin_config(WEB_PUBLIC_ORIGIN, WEB_ADMIN_PASSWORD_HASH, WEB_SESSION_SECRET)
+    except Exception as exc:
+        # The panel's config can only turn the panel off, never the public site. No values are logged.
+        log.error("Operator panel is off: its config could not be read (%s).", type(exc).__name__)
+    try:
+        from console_service import PanelConsole
+        from db import DB_PATH
+        from web_server import start_web_server
+
+        server = await start_web_server(WEB_PORT, HOME_GUILD_ID, DB_PATH, bot=bot, admin_config=admin,
+                                        log_dir=QUEUE_STATS_LOG_DIR,
+                                        console=PanelConsole(bot, request_shutdown, db_path=DB_PATH))
+    except Exception as exc:
+        log.error("Website not started: %r", exc)
+        server = None
+    if server is not None and _shutdown_task is not None:
+        # A SIGTERM arrived while the listener was starting; the shutdown task never saw this listener.
+        await server.stop(_shutdown_deadline or time.monotonic() + SHUTDOWN_SECONDS)
+        server = None
+    _web_server = server
+    return _web_server
+
+
+async def enforce_unique_account_links():
+    """One survev.de account, one Discord user: resolves old duplicate links and adds the unique index before
+    anything can link an account. A locked database only delays the index to the next start (save_token checks the
+    rule on every link anyway)."""
+    try:
+        await asyncio.to_thread(migrate_unique_account_links)
+    except sqlite3.OperationalError as exc:
+        log.warning("Couldn't check account links at start-up (%s); trying again at the next start.", exc)
+
+
 async def main():
     install_shutdown_signal_handler(asyncio.get_running_loop())
+    await enforce_unique_account_links()
+    await start_website()
+    if _shutdown_task is not None:
+        # Shut down before Discord started: don't start it.
+        await _shutdown_task
+        await close_http_session()
+        return
     async with bot:
         try:
             await bot.start(DISCORD_BOT_TOKEN)
         finally:
+            await request_shutdown()
             await close_http_session()
 
 

@@ -9,16 +9,21 @@ import asyncio
 import builtins
 import contextvars
 import io
+import json
 import logging
 import os
 import sqlite3
 import sys
 import time
+from contextlib import closing
+from pathlib import Path
 
 import discord
 from discord.ext import commands
 
 from db import DB_PATH
+from panel_sql import format_table
+from panel_sql import run_readonly_sql  # noqa: F401 - the panel's sql, in-process for tests
 
 _START_TIME = time.time()
 
@@ -36,22 +41,7 @@ def print(*args, **kwargs):  # noqa: A001 - shadows the builtin on purpose, for 
     builtins.print(*args, **kwargs)
 
 
-def _format_table(headers: list[str], rows: list[list[str]]) -> str:
-    """Renders a simple ASCII table for terminal display."""
-    if not rows:
-        return "(empty)"
-    widths = [len(h) for h in headers]
-    for row in rows:
-        for idx, cell in enumerate(row):
-            widths[idx] = max(widths[idx], len(str(cell)))
-
-    header_line = " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
-    separator = "-+-".join("-" * widths[i] for i in range(len(headers)))
-    row_lines = [
-        " | ".join(str(cell).ljust(widths[i]) for i, cell in enumerate(row))
-        for row in rows
-    ]
-    return f"{header_line}\n{separator}\n" + "\n".join(row_lines)
+_format_table = format_table
 
 
 async def _handle_send(bot: commands.Bot, raw_args: str):
@@ -234,19 +224,23 @@ async def _handle_channels(bot: commands.Bot, raw_args: str):
     print()
 
 
-def _handle_status(bot: commands.Bot):
+def _status_counts() -> tuple[int, int]:
+    with closing(sqlite3.connect(DB_PATH, timeout=1)) as conn:
+        return (conn.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM processed_matches").fetchone()[0])
+
+
+async def _handle_status(bot: commands.Bot):
     """Displays bot uptime, ping, and DB stats."""
     uptime_sec = int(time.time() - _START_TIME)
     uptime_str = f"{uptime_sec // 3600}h {(uptime_sec % 3600) // 60}m {uptime_sec % 60}s"
     latency_ms = round(bot.latency * 1000, 2) if bot.latency else "N/A"
 
-    # Quick DB counts
+    # Quick DB counts, in a worker thread with a short lock wait, so a held database lock never stalls the bot.
     user_count = 0
     match_count = 0
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            match_count = conn.execute("SELECT COUNT(*) FROM processed_matches").fetchone()[0]
+        user_count, match_count = await asyncio.to_thread(_status_counts)
     except Exception as exc:
         print(f"[Console Warning] DB query failed during status check: {exc}")
 
@@ -526,7 +520,7 @@ async def execute_console_command(bot: commands.Bot, line: str):
     elif command_name == "channels":
         await _handle_channels(bot, raw_args)
     elif command_name == "status":
-        _handle_status(bot)
+        await _handle_status(bot)
     elif command_name == "sql":
         _handle_sql(raw_args)
     elif command_name in ("winrate", "winrates"):
@@ -622,3 +616,237 @@ async def start_console_socket_server(bot: commands.Bot, port: int) -> asyncio.A
         return None
     log.info("Console socket listening on 127.0.0.1:%s (run: python console.py)", port)
     return server
+
+
+# --- Operator panel console ------------------------------------------------------------------------------------
+# The website's /admin panel runs the same commands as this console, one at a time, with two differences: `sql` is
+# read-only (users.access_token always reads as NULL), and `stop` asks for `stop confirm` first. The website
+# never imports this module (it would create the Discord client); the bot hands it a PanelConsole instead.
+
+PANEL_COMMAND_SECONDS = 90   # under Cloudflare's 100-second proxy timeout
+PANEL_MAX_LINE = 2100        # a 2,000-character Discord message plus its command and IDs
+PANEL_MAX_OUTPUT = 200_000
+PANEL_STOP_DELAY = 0.5       # after the website has sent the "Stopping" reply, for it to reach the browser
+PANEL_STOP_FALLBACK = 15.0   # if the website never reports the reply sent, stop anyway
+PANEL_SQL_SECONDS = 2.0      # the website's own job limit, so a query holds the database no longer than a page
+PANEL_SQL_MAX_ROWS = 200
+
+PANEL_COMMANDS = (
+    ("help", "Show these commands"),
+    ("status", "Bot latency, uptime and database counts"),
+    ("servers", "Servers the bot is in"),
+    ("channels <guild_id>", "A server's text channels and their IDs"),
+    ("queue <match_id> [guild_id]", "A queue's stats and lookup diagnostics, without posting to Discord"),
+    ("winrate [guild_id]", "Team 1 against Team 2 across NeatQueue history"),
+    ("sql <query>", "One read-only query: 2-second limit, first 200 rows, access tokens read as NULL"),
+    ("send <channel_id> <message>", "Send a message to a channel"),
+    ("reply <channel_id> <message_id> <message>", "Reply to a message"),
+    ("dm <user_id> <message>", "Send a direct message"),
+    ("delete <channel_id> <message_id>", "Delete a message the bot sent"),
+    ("sync", "Sync slash commands with Discord"),
+    ("stop", "Stop the bot; Coolify starts it again. Asks you to confirm"),
+)
+
+# Panel `sql` runs in a process of its own (panel_sql.py): killed outright at its time limit, and on Linux limited in
+# CPU time, memory and temporary-file size, so a query never holds the bot's threads or memory. Its environment
+# carries no secrets: only what Python needs to start.
+_SQL_WORKER = Path(__file__).resolve().with_name("panel_sql.py")
+_SQL_WORKER_ENV = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL")
+PANEL_SQL_GRACE = 3.0          # the worker's start-up and connect, on top of the query's own limit
+PANEL_SQL_MAX_BYTES = 4 << 20  # what the panel reads back from it
+
+
+_PANEL_PREFIXES = (
+    ("[Console SQL Error] ", "SQL error: ", "err"),
+    ("[Console Error] ", "Error: ", "err"),
+    ("[Console Warning] ", "", "warn"),
+    ("[Console] ", "", ""),
+)
+
+
+def panel_lines(text: str, limit: int = PANEL_MAX_OUTPUT) -> list[dict]:
+    """Console text as the panel shows it: one {"text", "kind"} per line, kind "err", "warn", "ok" or ""; the
+    terminal's "[Console]" prefixes and tick emoji dropped."""
+    cut = len(text) > limit
+    lines = []
+    for raw in text[:limit].strip("\n").split("\n"):
+        line, kind = raw.rstrip(), ""
+        for prefix, replacement, prefix_kind in _PANEL_PREFIXES:
+            if line.startswith(prefix):
+                line, kind = replacement + line[len(prefix):], prefix_kind
+                break
+        if "✅ " in line:
+            line, kind = line.replace("✅ ", ""), "ok"
+        lines.append({"text": line, "kind": kind})
+    if cut:
+        lines.append({"text": f"(output cut at {limit:,} characters)", "kind": "warn"})
+    return lines
+
+
+class PanelConsole:
+    """The operator panel's console. `shutdown` is the bot's request_shutdown."""
+
+    reference = PANEL_COMMANDS  # (usage, description) pairs, for the panel's command list
+    max_line = PANEL_MAX_LINE
+
+    def __init__(self, bot: commands.Bot, shutdown, *, db_path: str | None = None,
+                 timeout: float = PANEL_COMMAND_SECONDS):
+        self.bot = bot
+        self.shutdown = shutdown
+        self.db_path = db_path or DB_PATH
+        self.timeout = timeout
+        self._lock = asyncio.Lock()
+        self._stop_state = None  # None, "requested" (waiting for the reply to go out), then "scheduled"
+        self._sql_proc = None
+
+    @property
+    def busy(self) -> bool:
+        return self._lock.locked()
+
+    async def run(self, line: str) -> list[dict]:
+        """One command's output as panel lines. A second command while one runs is turned away, not queued."""
+        line = (line or "").strip()
+        if not line:
+            return []
+        if self._lock.locked():
+            return panel_lines("[Console Error] Another command is still running. Try again when it has finished.")
+        async with self._lock:
+            buffer = io.StringIO()
+            token = _console_output.set(buffer)
+            try:
+                await self._dispatch(line)
+            except asyncio.TimeoutError:
+                print(f"[Console Error] Stopped waiting after {self.timeout:g} s. "
+                      "The command may have done part of its work.")
+            except Exception as exc:
+                print(f"[Console Error] {exc}")
+            finally:
+                _console_output.reset(token)
+        return panel_lines(buffer.getvalue())
+
+    async def _dispatch(self, line: str):
+        parts = line.split(None, 1)
+        name, args = parts[0].lower(), (parts[1] if len(parts) > 1 else "")
+        if name == "help":
+            width = max(len(usage) for usage, _ in PANEL_COMMANDS)
+            print("The SSH console's commands, one at a time:")
+            for usage, text in PANEL_COMMANDS:
+                print(f"  {usage.ljust(width)}  {text}")
+        elif name == "clear":
+            print("[Console] Cleared.")  # the page clears its own output
+        elif name in ("exit", "quit"):
+            print("[Console] exit and quit leave a terminal prompt, and there's none here. To stop the bot, run stop.")
+        elif name == "stop":
+            self._stop(args)
+        elif name == "sql":
+            print(await self._sql(args), end="")
+        else:
+            await asyncio.wait_for(execute_console_command(self.bot, line), self.timeout)
+
+    def _stop(self, args: str):
+        if args.strip().lower() != "confirm":
+            print("[Console Warning] This stops the bot and this website. Coolify starts them again, usually within "
+                  "a minute, and the panel is unavailable until then.")
+            print("[Console] To go ahead, run: stop confirm")
+            return
+        if self._stop_state is not None:
+            print("[Console] Already stopping.")
+            return
+        log.warning("Operator panel console: stop confirmed")
+        print("[Console] Stopping the bot. Reload this page in a minute or two.")
+        # The website calls stop_after_reply once this reply has been sent, so the stop never cuts it off.
+        self._stop_state = "requested"
+        asyncio.get_running_loop().call_later(PANEL_STOP_FALLBACK, self.stop_after_reply)
+
+    @property
+    def stop_requested(self) -> bool:
+        """`stop confirm` ran, and the bot stops once its reply is out (stop_after_reply)."""
+        return self._stop_state == "requested"
+
+    def stop_after_reply(self):
+        """Stop the bot shortly, now that the reply to `stop confirm` has been sent. Only the first call counts."""
+        if self._stop_state != "requested":
+            return
+        self._stop_state = "scheduled"
+        asyncio.get_running_loop().call_later(PANEL_STOP_DELAY, self.shutdown)
+
+    async def _sql(self, query: str) -> str:
+        """The panel's read-only `sql` in its own process (panel_sql.py). The console stays busy until that process
+        has exited: on a timeout, an error or a cancelled request it's killed first."""
+        if not query.strip():
+            return "[Console Error] Usage: sql <query>\n"
+        request = json.dumps({"db": str(Path(self.db_path).resolve()), "query": query,
+                              "seconds": PANEL_SQL_SECONDS, "max_rows": PANEL_SQL_MAX_ROWS}).encode("utf-8")
+        env = {key: os.environ[key] for key in _SQL_WORKER_ENV if key in os.environ}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-I", str(_SQL_WORKER), stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, env=env)
+        except (OSError, NotImplementedError) as exc:
+            return f"[Console SQL Error] Could not start the query: {exc}\n"
+        self._sql_proc = proc
+        out, overflow = b"", False
+        try:
+            proc.stdin.write(request)
+            await proc.stdin.drain()
+            proc.stdin.close()
+            out, overflow = await asyncio.wait_for(_read_capped(proc.stdout, PANEL_SQL_MAX_BYTES),
+                                                   PANEL_SQL_SECONDS + PANEL_SQL_GRACE)
+            if not overflow:
+                await asyncio.wait_for(proc.wait(), PANEL_SQL_GRACE)
+        except asyncio.TimeoutError:
+            return f"[Console SQL Error] Stopped after {PANEL_SQL_SECONDS:g} s, the panel's limit for one query.\n"
+        except (BrokenPipeError, ConnectionResetError):
+            out = b""
+        finally:
+            await _end_worker(proc, PANEL_SQL_GRACE)
+            self._sql_proc = None
+        if overflow:
+            return "[Console SQL Error] The result was too large for the panel. Select fewer or narrower columns.\n"
+        if proc.returncode != 0 or not out:
+            return ("[Console SQL Error] The query stopped before it finished: it needed more time, memory or "
+                    "temporary disk than the panel allows.\n")
+        return out.decode("utf-8", "replace")
+
+    def kill_worker(self):
+        """Website shutdown: end a running `sql` process now."""
+        proc = self._sql_proc
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+
+async def _read_capped(stream: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
+    """(everything up to EOF, False), or (b"", True) as soon as more than `limit` bytes have come."""
+    chunks, total = [], 0
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            return b"".join(chunks), False
+        total += len(chunk)
+        if total > limit:
+            return b"", True
+        chunks.append(chunk)
+
+
+async def _end_worker(proc, seconds: float):
+    """Kill the sql process if it's still running and reap it, all within `seconds`. Its output is drained
+    meanwhile: asyncio reports the exit only once the pipe has closed, and unread output would keep it open."""
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+
+    async def drain_and_wait():
+        if proc.stdout is not None:
+            while await proc.stdout.read(65536):
+                pass
+        await proc.wait()
+
+    try:
+        await asyncio.wait_for(drain_and_wait(), seconds)
+    except asyncio.TimeoutError:
+        log.warning("The panel's sql process didn't exit within %g s of being stopped.", seconds)

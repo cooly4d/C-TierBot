@@ -38,11 +38,32 @@ API_CONCURRENCY_LIMIT = int(os.getenv("API_CONCURRENCY_LIMIT", "10"))
 VERIFICATION_TIMEOUT_SECONDS = int(os.getenv("VERIFICATION_TIMEOUT_SECONDS", "300"))
 # Console log level (DEBUG also shows every button/menu click). Diagnostic JSON logs go to QUEUE_STATS_LOG_DIR.
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-QUEUE_STATS_LOG_DIR = "log"
+# Production keeps them on the data volume (/app/data/log) so they survive a redeploy.
+QUEUE_STATS_LOG_DIR = os.getenv("QUEUE_STATS_LOG_DIR") or "log"
 QUEUE_STATS_LOG_MAX_FILES = int(os.getenv("QUEUE_STATS_LOG_MAX_FILES", "200"))
 # Loopback port for console.py, the host console inside a container with no attached stdin.
 # 0 (the default) turns it off; the Dockerfile sets 8765. It only ever binds 127.0.0.1.
 CONSOLE_PORT = int(os.getenv("CONSOLE_PORT", "0"))
+
+# --- Website (web_server.py) ---
+# The one Discord server the public website shows. A constant on purpose, never an env var.
+HOME_GUILD_ID = 1363265113880264745
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Public site port; 0 (the default) means no web listener at all.
+WEB_PORT = _env_int("WEB_PORT", 0)
+# The site's own origin, the only Origin accepted on operator-panel form posts (e.g. https://ctier.cooly.dev).
+WEB_PUBLIC_ORIGIN = (os.getenv("WEB_PUBLIC_ORIGIN") or "").strip().rstrip("/")
+# Operator panel secrets (Coolify env only). The panel is off unless all three web admin values are valid.
+WEB_ADMIN_PASSWORD_HASH = (os.getenv("WEB_ADMIN_PASSWORD_HASH") or "").strip()
+WEB_SESSION_SECRET = (os.getenv("WEB_SESSION_SECRET") or "").strip()
 
 # NeatQueue's final results announcement, e.g. "🏆 Winner For Queue#3674 🏆" — already final when posted.
 QUEUE_WINNER_TITLE_PATTERN = re.compile(r"Winner For Queue#(\d+)", re.IGNORECASE)

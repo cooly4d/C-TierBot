@@ -5,6 +5,7 @@ rather than sharing a module-level connection, matching the original bot's
 behavior so nothing about transaction/commit timing changes.
 """
 import json
+import logging
 import os
 import sqlite3
 from contextlib import closing
@@ -22,9 +23,53 @@ def resolve_db_path() -> str:
 
 
 DB_PATH = resolve_db_path()
+log = logging.getLogger(__name__)
 
-# Per-game snapshots of finished queues, kept for the Game breakdown button on queue results.
-QUEUE_RESULT_RETENTION_DAYS = 90
+# Per-game snapshots of finished queues, kept for the Game breakdown button on queue results (and the website).
+DEFAULT_QUEUE_RESULT_RETENTION_DAYS = 90
+MAX_QUEUE_RESULT_RETENTION_DAYS = 36_500  # 100 years; anything larger is treated as a units mistake
+
+
+def normalize_retention_days(value) -> int:
+    """Retention in days from an env string or an explicit argument. 0 means keep snapshots forever. A value
+    that isn't a whole number, is negative, or is over 36,500 is a configuration error: it is logged and treated
+    as 0, so a mistake can never delete snapshots (a negative value would otherwise put the cutoff in the future
+    and delete every snapshot, the one just saved included)."""
+    import re
+    days = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        days = value
+    elif isinstance(value, str) and len(value) <= 32 and re.fullmatch(r"[+-]?[0-9]{1,12}", value.strip()):
+        days = int(value.strip())
+    if days is None or days < 0 or days > MAX_QUEUE_RESULT_RETENTION_DAYS:
+        import logging
+        logging.getLogger(__name__).error(
+            "QUEUE_RESULT_RETENTION_DAYS must be a whole number from 0 to %d; keeping snapshots forever instead.",
+            MAX_QUEUE_RESULT_RETENTION_DAYS,
+        )
+        return 0
+    return days
+
+
+def snapshot_cutoff(now: datetime, days: int) -> str | None:
+    """ISO cutoff before which snapshots are pruned, or None for "no cutoff" (keep forever, or a span the date
+    arithmetic can't represent)."""
+    if days <= 0:
+        return None
+    try:
+        return (now - timedelta(days=days)).isoformat()
+    except OverflowError:
+        return None
+
+
+def retention_days_from_env(environ=None) -> int:
+    """The configured retention: 90 days when QUEUE_RESULT_RETENTION_DAYS is unset, else its validated value."""
+    environ = os.environ if environ is None else environ
+    raw = environ.get("QUEUE_RESULT_RETENTION_DAYS", str(DEFAULT_QUEUE_RESULT_RETENTION_DAYS))
+    return normalize_retention_days(raw)
+
+
+QUEUE_RESULT_RETENTION_DAYS = retention_days_from_env()
 QUEUE_RESULTS_SCHEMA = '''
     CREATE TABLE IF NOT EXISTS queue_results (
         guild_id INTEGER NOT NULL,
@@ -146,13 +191,45 @@ except sqlite3.OperationalError:
 conn.commit()
 
 
+# One survev.de account, one Discord user (the user's rule, 2026-11-27). The first link keeps the account: another
+# Discord user's /verify of it is refused, and the bot's owner can remove a link from the SSH console. The database
+# enforces it too (users_slug_unique, migrate_unique_account_links). Link writes wait at most LINK_WRITE_TIMEOUT for
+# the database (SQLite's usual 5 s); callers run them in a worker thread, off the bot's event loop.
+LINK_WRITE_TIMEOUT = 5.0
+
+
+def _held_by_another(c, slug: str | None, discord_id: int) -> bool:
+    return bool(slug) and c.execute(
+        "SELECT 1 FROM users WHERE slug = ? AND discord_id != ?", (slug, discord_id)).fetchone() is not None
+
+
 # Helper: Save User Token (+ their survev.de slug/username, so we can recognize them by slug later)
-def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None):
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute(
-            "INSERT OR REPLACE INTO users (discord_id, access_token, slug, username) VALUES (?, ?, ?, ?)",
-            (discord_id, token, slug, username)
-        )
+def save_token(discord_id: int, token: str, slug: str | None = None, username: str | None = None) -> bool:
+    """Links a Discord user to a survev.de account (replacing their earlier link). False, with nothing written, when
+    that account is already linked to another Discord user. (/verify only saves a link once survev.de has said which
+    account it is.)"""
+    slug = slug or None  # an empty slug names no account
+    with closing(sqlite3.connect(DB_PATH, timeout=LINK_WRITE_TIMEOUT, isolation_level=None)) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            if _held_by_another(c, slug, discord_id):
+                c.execute("ROLLBACK")
+                return False
+            # An upsert on the Discord ID only: INSERT OR REPLACE would also replace the row of whoever holds the slug.
+            c.execute(
+                "INSERT INTO users (discord_id, access_token, slug, username) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(discord_id) DO UPDATE SET access_token = excluded.access_token, slug = excluded.slug, "
+                "username = excluded.username",
+                (discord_id, token, slug, username)
+            )
+            c.execute("COMMIT")
+            return True
+        except sqlite3.IntegrityError:  # another link to the account landed first
+            c.execute("ROLLBACK")
+            return False
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
 
 # Helper: Get All User Tokens
 def get_all_users():
@@ -171,9 +248,28 @@ def get_users_missing_slug():
         return c.execute("SELECT discord_id, access_token FROM users WHERE slug IS NULL").fetchall()
 
 # Helper: Fill in a previously-unknown slug/username for an already-verified user
-def update_user_slug(discord_id: int, slug: str, username: str):
-    with sqlite3.connect(DB_PATH) as c:
-        c.execute("UPDATE users SET slug = ?, username = ? WHERE discord_id = ?", (slug, username, discord_id))
+def update_user_slug(discord_id: int, access_token: str, slug: str, username: str | None) -> str:
+    """The slug backfill for a link saved without one. "filled"; "stale" when the link changed while the lookup ran
+    (a new /verify: another token, or a slug already set), so nothing is written; "taken" when another Discord user
+    already holds that survev.de account, in which case this link is removed, as its /verify would have been
+    refused."""
+    with closing(sqlite3.connect(DB_PATH, timeout=LINK_WRITE_TIMEOUT, isolation_level=None)) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            row = c.execute("SELECT access_token, slug FROM users WHERE discord_id = ?", (discord_id,)).fetchone()
+            if row is None or row[0] != access_token or row[1]:
+                c.execute("ROLLBACK")
+                return "stale"
+            if _held_by_another(c, slug, discord_id):
+                c.execute("DELETE FROM users WHERE discord_id = ?", (discord_id,))
+                c.execute("COMMIT")
+                return "taken"
+            c.execute("UPDATE users SET slug = ?, username = ? WHERE discord_id = ?", (slug, username, discord_id))
+            c.execute("COMMIT")
+            return "filled"
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
 
 # Helper: Get Single User Token
 def get_user_token(discord_id: int):
@@ -257,14 +353,18 @@ def try_set_hall_of_fame_record(
     game_number: int | None = None,
     achieved_at: str | None = None,
 ) -> bool:
+    # One statement, so the comparison and the write are atomic: two writers can never replace a higher record
+    # with a lower one. A tie keeps the existing holder.
     with sqlite3.connect(DB_PATH) as c:
-        existing = c.execute("SELECT value FROM hall_of_fame WHERE record_type = ?", (record_type,)).fetchone()
-        if existing is not None and value <= existing[0]:
-            return False
-        c.execute(
-            "INSERT OR REPLACE INTO hall_of_fame "
+        cur = c.execute(
+            "INSERT INTO hall_of_fame "
             "(record_type, value, discord_id, display_name, match_id, guild_id, achieved_at, duration_ms, game_number) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(record_type) DO UPDATE SET value = excluded.value, discord_id = excluded.discord_id, "
+            "display_name = excluded.display_name, match_id = excluded.match_id, guild_id = excluded.guild_id, "
+            "achieved_at = excluded.achieved_at, duration_ms = excluded.duration_ms, "
+            "game_number = excluded.game_number "
+            "WHERE excluded.value > hall_of_fame.value",
             (
                 record_type,
                 value,
@@ -277,7 +377,7 @@ def try_set_hall_of_fame_record(
                 game_number,
             )
         )
-        return True
+        return cur.rowcount > 0
 
 
 def best_game_damage(games: list[dict]) -> tuple[int | float, dict, int] | None:
@@ -303,12 +403,12 @@ def _seed_single_game_damage_record(c: sqlite3.Connection, min_games: int) -> bo
     """Writes the "most_damage_game" record on connection `c` from the saved Game breakdown snapshots still inside
     their retention, counting only queues with at least `min_games` games (the floor live records use; a snapshot
     has one entry per counted game). The earliest saved of a tie wins. Never lowers an existing record."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=QUEUE_RESULT_RETENTION_DAYS)).isoformat()
+    cutoff = snapshot_cutoff(datetime.now(timezone.utc), normalize_retention_days(QUEUE_RESULT_RETENTION_DAYS))
     best = None
     for guild_id, match_id, raw_snapshot, saved_at in c.execute(
         "SELECT guild_id, match_id, snapshot, saved_at FROM queue_results WHERE saved_at >= ? "
         "ORDER BY saved_at, guild_id, match_id",
-        (cutoff,),
+        (cutoff or "",),
     ):
         try:
             games = json.loads(raw_snapshot).get("games")
@@ -571,7 +671,21 @@ SEASONAL_STAT_SQL = {
 }
 
 
-def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_start_ms: int, stat: str = "damage") -> list[dict]:
+def _fetch_all(conn: sqlite3.Connection | None, sql: str, params: tuple) -> list:
+    """Rows of `sql` on `conn` when given (the website's read-only connection), else on a short-lived one."""
+    if conn is not None:
+        return conn.execute(sql, params).fetchall()
+    with sqlite3.connect(DB_PATH) as c:
+        return c.execute(sql, params).fetchall()
+
+
+def get_seasonal_queue_stats(
+    guild_id: int,
+    month_start_ms: int,
+    next_month_start_ms: int,
+    stat: str = "damage",
+    conn: sqlite3.Connection | None = None,
+) -> list[dict]:
     """Returns verified players' game-weighted averages of `stat` (damage, impact or kills) for a UTC calendar
     month, best first, as dicts with "value" and "games" (plus "total_damage"/"avg_damage" for damage).
 
@@ -579,8 +693,8 @@ def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_star
     stored average when possible; newly cached rows use the explicit games count.
     """
     row_filter, value_expr = SEASONAL_STAT_SQL[stat]
-    with sqlite3.connect(DB_PATH) as c:
-        rows = c.execute(
+    rows = _fetch_all(
+            conn,
             f"""
             WITH eligible_rows AS (
                 SELECT discord_id, display_name, username, total_damage, kills, impact,
@@ -608,7 +722,7 @@ def get_seasonal_queue_stats(guild_id: int, month_start_ms: int, next_month_star
             ORDER BY value DESC, discord_id
             """,
             (guild_id, month_start_ms, next_month_start_ms),
-        ).fetchall()
+        )
 
     results = []
     for row in rows:
@@ -707,26 +821,35 @@ def get_player_queue_stats_summary(discord_id: int) -> dict:
     }
 
 
-def save_queue_result(guild_id: int, match_id: str, snapshot: dict, retention_days: int = QUEUE_RESULT_RETENTION_DAYS):
+def save_queue_result(guild_id: int, match_id: str, snapshot: dict, retention_days: int | None = None):
     """Stores a finished queue's per-game snapshot (replacing any earlier one for that queue) and drops
-    snapshots older than the retention window so the table can't grow without bound."""
+    snapshots older than the retention window (QUEUE_RESULT_RETENTION_DAYS; 0 keeps them forever)."""
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=retention_days)).isoformat()
+    days = normalize_retention_days(QUEUE_RESULT_RETENTION_DAYS if retention_days is None else retention_days)
+    cutoff = snapshot_cutoff(now, days)
     with sqlite3.connect(DB_PATH) as c:
         c.execute(
             "INSERT OR REPLACE INTO queue_results (guild_id, match_id, snapshot, saved_at) VALUES (?, ?, ?, ?)",
             (guild_id, str(match_id), json.dumps(snapshot, separators=(",", ":")), now.isoformat()),
         )
-        c.execute("DELETE FROM queue_results WHERE saved_at < ?", (cutoff,))
+        if cutoff is not None:
+            c.execute("DELETE FROM queue_results WHERE saved_at < ?", (cutoff,))
 
 
-def get_queue_result(guild_id: int, match_id: str) -> dict | None:
-    """The stored per-game snapshot for a queue, or None if it was never saved, expired, or is unreadable."""
-    with sqlite3.connect(DB_PATH) as c:
-        row = c.execute(
+def get_queue_result(guild_id: int, match_id: str, conn: sqlite3.Connection | None = None) -> dict | None:
+    """The stored per-game snapshot for a queue, or None if it was never saved, expired, or is unreadable.
+    `conn` lets the website read through its own read-only connection."""
+    if conn is not None:
+        row = conn.execute(
             "SELECT snapshot FROM queue_results WHERE guild_id = ? AND match_id = ?",
             (guild_id, str(match_id)),
         ).fetchone()
+    else:
+        with sqlite3.connect(DB_PATH) as c:
+            row = c.execute(
+                "SELECT snapshot FROM queue_results WHERE guild_id = ? AND match_id = ?",
+                (guild_id, str(match_id)),
+            ).fetchone()
     if row is None:
         return None
     try:
@@ -736,7 +859,41 @@ def get_queue_result(guild_id: int, match_id: str) -> dict | None:
     return snapshot if isinstance(snapshot, dict) else None
 
 
+def migrate_unique_account_links() -> list[int]:
+    """One survev.de account, one Discord user: if old data links an account to several Discord users, the one with
+    the most recorded queues on it keeps it (then the lowest Discord ID) and the others are unlinked; then a unique
+    index makes the database refuse a second link. Returns the unlinked Discord IDs (logged, never their tokens).
+    The bot runs it at start-up (leaderboard_bot.main), not on import, so other scripts that import db (the backup)
+    never delete a link."""
+    removed = []
+    with closing(sqlite3.connect(DB_PATH, timeout=LINK_WRITE_TIMEOUT, isolation_level=None)) as c:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            shared = [row[0] for row in c.execute(
+                "SELECT slug FROM users WHERE slug IS NOT NULL AND slug != '' GROUP BY slug HAVING COUNT(*) > 1")]
+            for slug in shared:
+                # A queue is a (server, queue number) pair: two servers can both have a queue 42.
+                holders = c.execute(
+                    "SELECT u.discord_id FROM users u WHERE u.slug = ? ORDER BY (SELECT COUNT(DISTINCT "
+                    "p.guild_id || ':' || p.match_id) FROM player_queue_stats p "
+                    "WHERE p.discord_id = u.discord_id AND p.slug = u.slug) DESC, "
+                    "u.discord_id ASC", (slug,)).fetchall()
+                for (discord_id,) in holders[1:]:
+                    c.execute("DELETE FROM users WHERE discord_id = ?", (discord_id,))
+                    removed.append(discord_id)
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_slug_unique ON users(slug) "
+                      "WHERE slug IS NOT NULL AND slug != ''")
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+    for discord_id in removed:
+        log.warning("Unlinked Discord user %s: their survev.de account is linked to another Discord user.", discord_id)
+    return removed
+
+
 # Runs after every helper above exists. 4 = bot_config.MIN_GAMES_FOR_HALL_OF_FAME_UPDATE (db doesn't import the bot's
 # config); a test keeps the two equal.
 SINGLE_GAME_RECORD_SEED_MIN_GAMES = 4
 migrate_hall_of_fame_game_number(SINGLE_GAME_RECORD_SEED_MIN_GAMES)
+# migrate_unique_account_links deletes rows, so it isn't run here: the bot runs it at start-up.

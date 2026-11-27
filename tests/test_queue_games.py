@@ -114,10 +114,21 @@ class QueueResultStorageTests(unittest.TestCase):
         self._insert_raw(10, "old", json.dumps(snapshot("old")), (now - timedelta(days=91)).isoformat())
         self._insert_raw(10, "recent", json.dumps(snapshot("recent")), (now - timedelta(days=89)).isoformat())
 
-        db.save_queue_result(10, "new", snapshot("new"))
+        with patch.object(db, "QUEUE_RESULT_RETENTION_DAYS", 90):  # the configured value, not the machine's env
+            db.save_queue_result(10, "new", snapshot("new"))
 
         self.assertIsNone(db.get_queue_result(10, "old"))
         self.assertIsNotNone(db.get_queue_result(10, "recent"))
+        self.assertIsNotNone(db.get_queue_result(10, "new"))
+
+    def test_with_retention_zero_a_default_save_keeps_everything(self):
+        now = datetime.now(timezone.utc)
+        self._insert_raw(10, "ancient", json.dumps(snapshot("ancient")), (now - timedelta(days=400)).isoformat())
+
+        with patch.object(db, "QUEUE_RESULT_RETENTION_DAYS", 0):  # production's setting
+            db.save_queue_result(10, "new", snapshot("new"))
+
+        self.assertIsNotNone(db.get_queue_result(10, "ancient"))
         self.assertIsNotNone(db.get_queue_result(10, "new"))
 
     def test_the_retention_window_can_be_overridden(self):
@@ -129,7 +140,12 @@ class QueueResultStorageTests(unittest.TestCase):
         self.assertIsNone(db.get_queue_result(10, "two-days"))
 
     def test_the_default_retention_is_ninety_days(self):
-        self.assertEqual(db.QUEUE_RESULT_RETENTION_DAYS, 90)
+        # Read from an explicit environment, so the check holds whatever the machine running the tests sets.
+        self.assertEqual(db.retention_days_from_env({}), 90)
+        self.assertEqual(db.retention_days_from_env({"QUEUE_RESULT_RETENTION_DAYS": "0"}), 0)
+        self.assertEqual(db.retention_days_from_env({"QUEUE_RESULT_RETENTION_DAYS": "30"}), 30)
+        with self.assertLogs("db", level="ERROR"):
+            self.assertEqual(db.retention_days_from_env({"QUEUE_RESULT_RETENTION_DAYS": "ninety"}), 0)
 
 
 def game_row(identity, username, slug, team, kills, damage, impact):
@@ -394,11 +410,16 @@ class BuildQueueGamePayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[-1], queue_games_unavailable("3674"))
 
     async def test_the_unavailable_message_names_the_command_and_the_retention(self):
-        text = queue_games_unavailable("3674")
+        with patch("queue_stats_service.QUEUE_RESULT_RETENTION_DAYS", 90):
+            text = queue_games_unavailable("3674")
+            self.assertIn("`/queue_stats` with the queue number", queue_games_unavailable(None))
+        with patch("queue_stats_service.QUEUE_RESULT_RETENTION_DAYS", 0):
+            forever = queue_games_unavailable("3674")
 
         self.assertIn("`/queue_stats 3674`", text)
-        self.assertIn(f"{db.QUEUE_RESULT_RETENTION_DAYS} days", text)
-        self.assertIn("`/queue_stats` with the queue number", queue_games_unavailable(None))
+        self.assertIn("90 days", text)
+        self.assertIn("`/queue_stats 3674`", forever)
+        self.assertNotIn("days", forever)
 
 
 class JumpMenuWindowTests(unittest.TestCase):

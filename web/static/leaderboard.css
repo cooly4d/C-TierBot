@@ -1,0 +1,11 @@
+/* Leaderboard pages only. Changing "Rank by" or the month slides each player's row to its new rank and the
+   "Rank by" selection to its new option, using the site's cross-document View Transitions (site.css). Opted in
+   only without reduced motion, so reduced motion (with or without JavaScript) gets a plain page change.
+   A row's name comes from its data-vt (a digest of its public player URL), read here with attr() so it is set
+   before the first paint; site.js sets the same name where attr() can't. Rows without a player page get none.
+   Leaving for another page clears the names (site.js, pageswap), so rows never fly off to other pages. */
+@media (prefers-reduced-motion: no-preference) {
+  .board-row[data-vt] { view-transition-name: attr(data-vt type(<custom-ident>), none); }
+  .segmented a[aria-current="true"] { view-transition-name: rank-by; }
+  .vt-plain .board-row[data-vt], .vt-plain .segmented a[aria-current="true"] { view-transition-name: none; }
+}

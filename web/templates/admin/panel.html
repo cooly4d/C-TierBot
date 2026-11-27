@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Operator panel · C-TierBot{% endblock %}
+{% block main %}
+<div class="admin-head">
+  <h1 class="page-title">Operator panel</h1>
+  <form method="post" action="/admin/logout"><button type="submit" class="button button-quiet">Sign out</button></form>
+</div>
+
+<section class="panel" aria-labelledby="status-h">
+  <h2 id="status-h" class="panel-title">Bot</h2>
+  <dl class="kv">
+    <div><dt>Discord</dt><dd class="state-{{ 'win' if status.connected else 'lose' }}">{{ 'Connected' if status.connected else 'Not connected' }}</dd></div>
+    <div><dt>Latency</dt><dd>{{ status.latency_ms ~ ' ms' if status.latency_ms is not none else '—' }}</dd></div>
+    <div><dt>Website uptime</dt><dd>{{ status.uptime }}</dd></div>
+    {% for label, value in counts.items() %}<div><dt>{{ label | capitalize }}</dt><dd>{{ value | fmt_int }}</dd></div>{% endfor %}
+  </dl>
+</section>
+
+<section class="panel console" id="console" aria-labelledby="console-h" data-console>
+  <div class="console-head">
+    <h2 id="console-h" class="panel-title">Console</h2>
+    {% if console_on %}
+    <div class="console-tools" data-console-tools hidden>
+      {% for c in ("status", "servers", "winrate", "help") %}<button type="button" class="pill console-chip" data-console-run="{{ c }}">{{ c }}</button>{% endfor %}
+      <button type="button" class="pill console-chip console-clear" data-console-clear>Clear</button>
+    </div>
+    {% endif %}
+  </div>
+  {% if console_on %}
+  <div class="console-out" role="log" aria-label="Console output" tabindex="0" data-console-out>
+    {% if console_entry %}
+    <div class="console-entry"><p class="console-cmd"><span class="console-caret" aria-hidden="true">&gt;</span>{{ console_entry.command }}</p><pre class="console-text">{% for l in console_entry.lines %}<span{% if l.kind %} class="k-{{ l.kind }}"{% endif %}>{{ l.text }}</span>{% if not loop.last %}{{ "\n" }}{% endif %}{% else %}<span class="k-quiet">(no output)</span>{% endfor %}</pre></div>
+    {% else %}
+    <p class="console-empty" data-console-empty>Output shows here. Run <kbd>help</kbd> for the list of commands.</p>
+    {% endif %}
+  </div>
+  <form class="console-form" method="post" action="/admin/console#console" data-console-form>
+    <input type="hidden" name="run" value="{{ console_run }}" data-console-run-id>
+    <div class="console-field">
+      <label for="console-input"><span class="console-prompt" aria-hidden="true">c-tierbot&gt;</span><span class="sr-only">Command</span></label>
+      <input id="console-input" name="command" type="text" required maxlength="{{ console_max }}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-describedby="console-note">
+    </div>
+    <button type="submit" class="button" data-console-submit>Run</button>
+  </form>
+  <p class="console-note" id="console-note">The SSH console's commands, one at a time. <code>sql</code> only reads, and access tokens read as NULL. <code>stop</code> asks you to confirm.</p>
+  <details class="console-ref">
+    <summary>All commands</summary>
+    <div class="table-scroll"><table class="stats admin-table">
+      <thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+      <tbody>{% for usage, text in console_reference %}<tr><th scope="row"><code>{{ usage }}</code></th><td>{{ text }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </details>
+  {% else %}
+  <p class="muted">The console needs the running bot, so it's off in the local preview.</p>
+  {% endif %}
+</section>
+
+<section class="panel" aria-labelledby="guilds-h">
+  <h2 id="guilds-h" class="panel-title">Servers</h2>
+  <div class="table-scroll"><table class="stats admin-table">
+    <thead><tr><th scope="col">Server</th><th scope="col">ID</th><th scope="col">Members</th></tr></thead>
+    <tbody>{% for g in guilds %}<tr><th scope="row">{{ g.name }}</th><td class="mono">{{ g.id }}</td><td>{{ g.members | fmt_int }}</td></tr>{% else %}<tr><td colspan="3" class="muted">Discord not connected</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <h3 class="panel-subtitle">Tracked channels</h3>
+  <div class="table-scroll"><table class="stats admin-table">
+    <thead><tr><th scope="col">Server ID</th><th scope="col">Channel ID</th><th scope="col">Last update</th></tr></thead>
+    <tbody>{% for c in channels %}<tr><td class="mono">{{ c.guild_id }}</td><td class="mono">{{ c.channel_id }}</td><td>{{ c.last_updated | fmt_iso }}</td></tr>{% else %}<tr><td colspan="3" class="muted">None</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="logs-h">
+  <h2 id="logs-h" class="panel-title">Newest lookups</h2>
+  <div class="table-scroll"><table class="stats admin-table">
+    <thead><tr><th scope="col">Log</th><th scope="col">Queue</th><th scope="col">Trigger</th><th scope="col">Status</th><th scope="col">Size</th></tr></thead>
+    <tbody>{% for l in logs %}<tr>
+      <th scope="row"><a class="mono" href="/admin/logs/{{ l.name }}">{{ l.name }}</a></th>
+      <td>{{ l.match_id or '—' }}</td><td>{{ l.event or '—' }}</td>
+      <td class="{{ 'state-win' if l.status == 'ok' else 'state-lose' }}">{{ l.status if l.readable else 'Unreadable' }}</td>
+      <td>{{ l.size | fmt_int }}</td></tr>{% else %}<tr><td colspan="5" class="muted">No logs</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel" aria-labelledby="backups-h">
+  <h2 id="backups-h" class="panel-title">Backups</h2>
+  <div class="table-scroll"><table class="stats admin-table">
+    <thead><tr><th scope="col">File</th><th scope="col">Size</th><th scope="col">Date</th></tr></thead>
+    <tbody>{% for b in backups %}<tr><th scope="row" class="mono">{{ b.name }}</th><td>{{ b.size | fmt_int }}</td><td>{{ b.date }}</td></tr>{% else %}<tr><td colspan="3" class="muted">No backups found</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

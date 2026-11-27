@@ -181,7 +181,7 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 payload = self.write_log(result, None, trigger=trigger)
                 self.assertEqual(payload["event"], trigger)
                 self.assertIsNone(payload["requested_by"])
-                self.assertRegex(payload["_file_name"], rf"^queue_stats_\d{{8}}T[\d.]+Z_g999_{trigger}_m3674\.json$")
+                self.assertRegex(payload["_file_name"], rf"^queue_stats_\d{{8}}T[\d.]+Z_g999_{trigger}_m3674_r[0-9a-f]{{8}}\.json$")
 
     def test_requester_is_recorded_for_command_and_queue_channel_logs(self):
         class Asker:
@@ -196,7 +196,7 @@ class QueueDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_by"]["discord_id"], 55)
         self.assertEqual(payload["requested_by"]["display_name"], "Asker")
         self.assertEqual(payload["requested_by"]["username"], "asker")
-        self.assertIn("_u55_m3674.json", payload["_file_name"])
+        self.assertRegex(payload["_file_name"], r"_u55_m3674_r[0-9a-f]{8}\.json$")
 
     async def test_a_failed_log_write_never_raises(self):
         with patch.object(queue_stats_service, "write_queue_stats_log", side_effect=OSError("disk full")), \

@@ -83,7 +83,7 @@ Admin-only commands are hidden from members without the **Administrator** permis
 2. When NeatQueue announces a winner (or finalizes its results panel), the bot picks up the queue number.
 3. It looks up the queue on NeatQueue, then uses the linked players' own survev.de match history to find the games played during that queue.
 4. It pulls the public scoreboard for each game and keeps only games between the queue's two teams (each with at least 2 players). survev.de renumbers teams every game, so each game's teams are matched to NeatQueue's Team 1 and Team 2 from where the linked roster players played. That way substitutes count for the team they actually played with. Then it posts the image.
-5. For a finished queue it also saves each game's numbers (kept for 90 days), so the **Game breakdown** button can show them later, even after a restart. It opens a private message that only the person who clicked can see, with one card per game, Previous/Next buttons, and a Jump to game menu that names each game's winner and its top average damage.
+5. For a finished queue it also saves each game's numbers (kept for 90 days by default; set `QUEUE_RESULT_RETENTION_DAYS=0` to keep them forever, as this bot does), so the **Game breakdown** button can show them later, even after a restart. It opens a private message that only the person who clicked can see, with one card per game, Previous/Next buttons, and a Jump to game menu that names each game's winner and its top average damage.
 
 You need **at least one linked player** in a queue for the bot to find its games. Players who haven't linked still show up under their survev.de name, and the result message has a button so they can link on the spot.
 
@@ -146,7 +146,12 @@ Optional settings:
 | `QUEUE_RESULT_FETCH_DELAY_SECONDS` | `5` | Wait before fetching stats after a queue ends, so survev.de has time to save the games. |
 | `QUEUE_MATCH_FALLBACK_DURATION_MINUTES` | `10` | Last-resort match window when NeatQueue gives no usable end time. |
 | `API_CONCURRENCY_LIMIT` | `10` | How many survev.de requests the bot sends at once. survev.de's rate limits count requests per minute, so this only changes how quickly a lookup finishes. |
-| `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of queue lookup diagnostic JSON logs retained in `log/`. |
+| `QUEUE_STATS_LOG_MAX_FILES` | `200` | Maximum number of queue lookup diagnostic JSON logs retained in `QUEUE_STATS_LOG_DIR`. |
+| `QUEUE_STATS_LOG_DIR` | `log` | Where the diagnostic JSON logs go. Production uses `/app/data/log` so they survive a redeploy. |
+| `QUEUE_RESULT_RETENTION_DAYS` | `90` | Days to keep each queue's per-game snapshot. `0` keeps them forever. A value that isn't a whole number from 0 to 36,500 is logged as an error and treated as `0`, so a typo never deletes anything. |
+| `WEB_PORT` | `0` (off) | Port for the website (see [Website](#website)). |
+| `WEB_PUBLIC_ORIGIN` | unset | The site's own origin, e.g. `https://ctier.cooly.dev`. Needed for the operator panel. |
+| `WEB_ADMIN_PASSWORD_HASH`, `WEB_SESSION_SECRET` | unset | Operator panel secrets, made with `python tools/make_admin_password.py`. The panel is off unless all three panel values are set and valid. |
 | `LOG_LEVEL` | `INFO` | Console log level. `DEBUG` also logs every button and menu click. |
 | `DB_PATH` | `leaderboard.db` | Where the SQLite database lives. The missing parent folder is created. The Docker image sets `/app/data/leaderboard.db`. |
 | `CONSOLE_PORT` | `0` (off) | Loopback port for `console.py`, the host console in a container. The Docker image sets `8765`. |
@@ -173,10 +178,10 @@ The `Dockerfile` builds a Python 3.13 image with the code, fonts and `assets/`. 
 
 - Set the `.env` variables as environment variables in Coolify instead of a `.env` file.
 - Mount persistent storage at **`/app/data`** (a folder, so SQLite's journal file sits next to the database). The image sets `DB_PATH=/app/data/leaderboard.db`.
-- No port, domain or HTTP health check: the bot only makes outbound connections.
+- With `WEB_PORT` unset there's no port, domain or HTTP health check: the bot only makes outbound connections. With the website on, Coolify routes the site's domain to `WEB_PORT`; the health check can stay off (an uptime monitor on `/healthz` watches the site instead, so a web problem never blocks a bot deploy).
 - Use container naming **"Consistent name (no rolling updates)"**. A rolling update starts the new container before stopping the old one, so two bots would run on the same token and database for a moment.
 - The bot closes cleanly on `SIGTERM`, so stops and redeploys don't wait out the grace period.
-- `log/` is inside the container and starts empty after each redeploy.
+- Set `QUEUE_STATS_LOG_DIR=/app/data/log` to keep diagnostic logs across redeploys (the default `log/` is inside the container and starts empty after each redeploy).
 - A daily Coolify scheduled task runs `python backup_db.py`: a consistent SQLite copy into `/app/data/backups/`, newest 14 kept (`BACKUP_KEEP`). It lives on the same disk, so it covers bad writes, not losing the VPS.
 - `requirements.txt` is pinned to the versions verified in production. Upgrade by changing a pin, testing, then pushing.
 
@@ -190,6 +195,28 @@ node_modules/.bin/tsx ../C-TierBot/tools/export_item_icons.mts
 ```
 
 This rewrites `assets/items/` with one 128 px icon per cosmetic item plus `manifest.json` (item names, kinds, rarities, and the survev.de commit they came from; `-dirty` means uncommitted survev.de changes were included). Outfits that use the generic shirt are drawn as the in-game character (backpack, body, accessory, hands), like the survev.de locker.
+
+## Website
+
+With `WEB_PORT` set, the bot also serves a read-only website for one Discord server (`HOME_GUILD_ID` in
+`bot_config.py`): recent and archived queues with the series score, match timeline and every game's table, the
+monthly leaderboard (the same ranking as `/leaderboard_season`), player pages with a trend chart, and the Hall of
+Fame. Everyone sees the same pages; there are no visitor accounts. Names are each player's current display name in
+that server (what a Discord mention shows), or the name the bot saved when it isn't available.
+
+- It runs inside the bot process (aiohttp), reads the database read-only through its own small worker pool, and
+  turns extra visitors away with "busy" instead of queueing work. Pages are cached for a minute. It never renders
+  images.
+- Pages work without JavaScript. `web/static/site.js` adds the motion (the match timeline playing the series,
+  charts revealing, bars growing, leaderboard rows sliding to a new rank) with anime.js v4.5.0, vendored as
+  `web/static/vendor/anime.esm.min.js` (MIT, see `anime.LICENSE.md`; SHA-256
+  `a19015a1a92d52025a2fb6703b6d67eadd1cc2aeaf880770e96e04cf6aa07be1`). Reduced-motion settings are respected.
+- Strict security headers: no inline scripts or styles, no third-party requests, `noindex`.
+- `/admin` is an operator panel behind one password (see `HOST_COMMANDS.md`); it's off unless configured. Its
+  console runs the host console's commands, with `sql` limited to reads of the bot's own tables (`panel_sql.py`,
+  run as a separate, limited process).
+- Preview it locally on a copy of a database: `python web_server.py --db path/to/copy.db` (binds 127.0.0.1:8080).
+  Use a disposable copy: importing the bot's DB module sets up its schema on that file.
 
 ## Host console
 
@@ -214,6 +241,10 @@ While the bot is running in a terminal, you can type commands straight into it t
 | `console.py` | Console client for a container: `python console.py` (prompt) or `python console.py <command>`. |
 | `Dockerfile`, `.dockerignore` | The container image Coolify builds. |
 | `backup_db.py` | Daily database backup, run by a Coolify scheduled task. |
+| `web_server.py` | The website and operator panel: routes, page cache, limits, startup/shutdown, local preview. |
+| `web_queries.py`, `web_names.py`, `web_charts.py`, `web_admin.py` | The site's read-only queries, name rule, chart geometry, and operator login. |
+| `web/` | Templates, stylesheet, script, fonts and the vendored anime.js. |
+| `tools/make_admin_password.py`, `tools/export_preview_db.py` | Operator panel password and secret; token-free DB export for a local preview. |
 | `assets/items/` | Item icons and `manifest.json` for `/inventory` and `/market`, generated by `tools/export_item_icons.mts`. |
 
 ## Tests

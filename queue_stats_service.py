@@ -6,7 +6,10 @@ import json
 import logging
 import os
 import re
+import secrets
 import sqlite3
+import threading
+import time
 from datetime import datetime, timezone
 
 import discord
@@ -22,6 +25,7 @@ from db import (
     QUEUE_RESULT_RETENTION_DAYS,
     best_game_damage,
     cache_player_queue_stats,
+    clear_hall_of_fame_records,
     get_hall_of_fame_record,
     get_queue_result,
     save_queue_result,
@@ -36,7 +40,8 @@ from image_utils import (
 from neatqueue_client import calculate_queue_match_stats, player_identity, resolve_queue_user_display_names
 
 log = logging.getLogger(__name__)
-QUEUE_SNAPSHOT_VERSION = 1
+# 2: each game row carries its own key/username/slug and per-row linkage (see _snapshot_row).
+QUEUE_SNAPSHOT_VERSION = 2
 # The result image's filename carries the queue number, which is how the Game breakdown button knows which queue
 # a result message belongs to (see parse_queue_match_id).
 _QUEUE_RESULT_FILENAME = re.compile(r"^queue_stats_(.+)\.png$")
@@ -67,12 +72,20 @@ def prune_queue_stats_logs(log_dir: str | None = None, max_files: int | None = N
         return 0
 
     try:
-        entries = sorted(
-            name for name in os.listdir(target_dir)
-            if name.startswith("queue_stats_") and name.endswith(".json")
-        )
+        names = os.listdir(target_dir)
     except OSError:
         return 0
+    entries = sorted(name for name in names if name.startswith("queue_stats_") and name.endswith(".json"))
+    # A .tmp left by a write that died midway is never listed; clean it up once it's clearly abandoned.
+    stale_before = time.time() - 3600
+    for name in names:
+        if name.startswith("queue_stats_") and name.endswith(".json.tmp"):
+            path = os.path.join(target_dir, name)
+            try:
+                if os.path.getmtime(path) < stale_before:
+                    os.remove(path)
+            except OSError:
+                pass
 
     excess = len(entries) - limit
     if excess <= 0:
@@ -118,8 +131,8 @@ def write_queue_stats_log(
     safe_match_id = re.sub(r"[^A-Za-z0-9_.-]", "_", str(match_id))
     user_id = requested_by.id if requested_by is not None else None
     source = f"u{user_id}" if user_id is not None else trigger
-    file_name = f"queue_stats_{timestamp}_g{guild_id}_{source}_m{safe_match_id}.json"
-    file_path = os.path.join(QUEUE_STATS_LOG_DIR, file_name)
+    # A random tag keeps two lookups of the same queue in the same clock tick from sharing a name.
+    stem = f"queue_stats_{timestamp}_g{guild_id}_{source}_m{safe_match_id}"
 
     payload = {
         "event": trigger,
@@ -155,8 +168,38 @@ def write_queue_stats_log(
         }
         payload["individual_games"] = match_result.get("individual_games") or []
 
-    with open(file_path, "w", encoding="utf-8") as log_file:
-        json.dump(payload, log_file, ensure_ascii=True, indent=2)
+    # Written to a .tmp name (created exclusively), then published under its final name with a hard link, which
+    # fails rather than replace an existing file, so a reader (the operator panel) never sees half a file and a
+    # name collision never overwrites another lookup's log: it retries with a fresh tag.
+    for _attempt in range(5):
+        tag = secrets.token_hex(4)
+        tmp_path = os.path.join(QUEUE_STATS_LOG_DIR, f"{stem}_r{tag}.json.tmp")
+        file_path = os.path.join(QUEUE_STATS_LOG_DIR, f"{stem}_r{tag}.json")
+        try:
+            log_file = open(tmp_path, "x", encoding="utf-8")
+        except FileExistsError:
+            continue
+        try:
+            with log_file:
+                json.dump(payload, log_file, ensure_ascii=True, indent=2)
+            try:
+                os.link(tmp_path, file_path)
+            except FileExistsError:
+                raise
+            except OSError:  # a filesystem without hard links: rename, unless the name is already taken
+                if os.path.lexists(file_path):
+                    raise FileExistsError(file_path) from None
+                os.replace(tmp_path, file_path)
+        except FileExistsError:
+            continue
+        finally:
+            try:
+                os.remove(tmp_path)  # only this call's own file: it created the .tmp exclusively
+            except OSError:
+                pass
+        break
+    else:
+        raise FileExistsError(f"no free diagnostic log name for Queue#{match_id}")
 
     prune_queue_stats_logs(QUEUE_STATS_LOG_DIR)
 
@@ -245,6 +288,48 @@ def check_queue_hall_of_fame_records(
     return announcements
 
 
+def _snapshot_row(team_index: int, row: dict, entry: dict) -> dict:
+    """One player's row in one game of a v2 snapshot. Linkage comes from this game row alone: a row is linked
+    only when it has its own survev.de slug belonging to a linked user, so a logged-out `Raven` never takes the
+    name or link of a logged-in `raven` the series aggregation merged it with (their identity, slug-else-name,
+    is the same string). The link is the calculator's own lookup carried on the row (`discord_id`), so building a
+    snapshot never touches the database. `key` keeps players apart across games: the slug, else the in-game name
+    before guest numbering plus its number. It, `slug` and `username` are internal."""
+    slug = row.get("slug") or None
+    username = (row.get("username") or "").strip()
+    discord_id = None
+    if slug:
+        if "discord_id" in row:
+            discord_id = row.get("discord_id")
+        elif entry.get("slug") == slug:
+            discord_id = entry.get("discord_id")
+    same_identity = (
+        entry.get("discord_id") == discord_id
+        and (entry.get("slug") or None) == slug
+        and (entry.get("username") or "").strip().lower() == username.lower()
+    )
+    if same_identity:
+        # This side's own entry for this exact game identity (linked, or a guest entry): the card's name.
+        name = entry.get("display_name") or entry.get("username") or username or "Unknown"
+    else:
+        # The aggregation merged this row into another identity's entry (slug-or-lowercased-name collision, in
+        # either arrival order): the row keeps its own game name, guest numbering included.
+        name = username or "Unknown"
+    return {
+        "team": team_index,
+        "key": f"slug:{slug}" if slug else
+        f"name:{(row.get('base_username') or username).strip().lower()}#{row.get('guest_number') or 1}",
+        "name": name,
+        "username": username,
+        "slug": slug,
+        "discord_id": discord_id,
+        "guest": discord_id is None,
+        "kills": row.get("kills") or 0,
+        "damage": row.get("damage_dealt") or 0,
+        "impact": row.get("impact_score"),
+    }
+
+
 def build_queue_snapshot(match_id: str, match_result: dict) -> dict:
     """The compact, JSON-safe slice of a finished queue that the Game breakdown needs: for every game, who played
     on which displayed team and their kills, damage and impact. Lobby strangers outside the two shown teams are
@@ -262,15 +347,7 @@ def build_queue_snapshot(match_id: str, match_result: dict) -> dict:
             entry = entries.get((team_index, row.get("identity")))
             if team_index is None or entry is None:
                 continue
-            rows.append({
-                "team": team_index,
-                "name": entry.get("display_name") or entry.get("username") or "Unknown",
-                "discord_id": entry.get("discord_id"),
-                "guest": bool(entry.get("guest")),
-                "kills": row.get("kills") or 0,
-                "damage": row.get("damage_dealt") or 0,
-                "impact": row.get("impact_score"),
-            })
+            rows.append(_snapshot_row(team_index, row, entry))
         games.append({"number": game.get("game_number"), "winner": game.get("winning_display_team_index"), "players": rows})
 
     return {
@@ -321,6 +398,34 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         except (TypeError, ValueError) as exc:
             log.warning("Could not build the game breakdown for Queue#%s: %r", match_id, exc)
 
+    # The writes run in a worker thread, one result at a time, so a write waiting on a database lock (the website
+    # reads inside short transactions) never stalls the event loop: Discord, interactions and SIGTERM carry on.
+    record_announcements = await asyncio.to_thread(
+        _store_queue_result, teams, match_id, guild_id, total_games_played, match_result, snapshot)
+    if record_announcements:
+        content += "\n" + "\n".join(record_announcements)
+    return content, file, None, match_result
+
+
+# One writer at a time for a queue's results and for the Hall of Fame reset. The worker thread itself holds it, so
+# a caller that's cancelled mid-write can't let the next result (or a reset) in while this one's writes still run.
+_RESULT_WRITE_LOCK = threading.Lock()
+
+
+def _store_queue_result(*args) -> list[str]:
+    with _RESULT_WRITE_LOCK:
+        return _store_queue_result_locked(*args)
+
+
+def reset_hall_of_fame_records() -> int:
+    """Delete every Hall of Fame record, never between one queue's record updates. Blocking: run it in a thread."""
+    with _RESULT_WRITE_LOCK:
+        return clear_hall_of_fame_records()
+
+
+def _store_queue_result_locked(teams, match_id, guild_id, total_games_played, match_result, snapshot) -> list[str]:
+    """Hall of Fame records, then the stat rows, then the game breakdown, in that order (blocking SQLite writes).
+    Returns the record announcements."""
     # Only a finished queue can set records: an unfinished one has partial stats, and its duration runs up to "now".
     record_announcements = []
     if match_result.get("is_final"):
@@ -332,8 +437,6 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
             duration_ms=match_result.get("duration_ms"),
             snapshot_games=(snapshot or {}).get("games"),
         )
-    if record_announcements:
-        content += "\n" + "\n".join(record_announcements)
 
     cache_player_queue_stats(match_id, guild_id, match_result)
 
@@ -343,15 +446,16 @@ async def build_queue_stats_payload(match_id: str, guild_id: int):
         except (sqlite3.Error, TypeError, ValueError) as exc:
             # The result must still be posted; the Game breakdown button just reports it as unavailable.
             log.warning("Could not save the game breakdown for Queue#%s: %r", match_id, exc)
-    return content, file, None, match_result
+    return record_announcements
 
 
 def queue_games_unavailable(match_id: str | None) -> str:
     rebuild = f"`/queue_stats {match_id}`" if match_id else "`/queue_stats` with the queue number"
-    return (
-        "The game breakdown isn't available for this queue: it was posted before breakdowns were saved, "
-        f"or it's older than {QUEUE_RESULT_RETENTION_DAYS} days. Run {rebuild} to rebuild it."
-    )
+    if QUEUE_RESULT_RETENTION_DAYS > 0:
+        reason = f"it was posted before breakdowns were saved, or it's older than {QUEUE_RESULT_RETENTION_DAYS} days"
+    else:
+        reason = "it was posted before breakdowns were saved"
+    return f"The game breakdown isn't available for this queue: {reason}. Run {rebuild} to rebuild it."
 
 
 def _top_performer(rows: list[dict], key: str) -> tuple[str, int] | None:

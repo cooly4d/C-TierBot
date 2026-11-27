@@ -1,0 +1,71 @@
+{% macro unlinked_icon() %}<svg class="unlinked" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path class="unlinked-cuff" d="M9.5 14.5 7.8 16.2a3.4 3.4 0 0 1-4.8-4.8L4.7 9.7"/><path class="unlinked-cuff" d="M14.5 9.5l1.7-1.7a3.4 3.4 0 0 1 4.8 4.8l-1.7 1.7"/><path class="unlinked-slash" d="M5 5l14 14"/></svg>{% endmacro %}
+
+{% macro player_name(p) %}{% if p.url %}<a class="player" href="{{ p.url }}">{{ p.name }}</a>{% else %}<span class="player">{{ p.name }}</span>{% endif %}{% if not p.linked %}{{ unlinked_icon() }}<span class="sr-only"> (not linked)</span>{% endif %}{% endmacro %}
+
+{% macro series_panel(team, has_impact) %}
+<section class="team team-{{ team.state }}" aria-label="{{ team.heading }}">
+  <h2 class="team-head">{{ team.heading }}</h2>
+  <div class="table-scroll">
+    <table class="stats">
+      <thead><tr><th scope="col">Player</th><th scope="col">Kills</th><th scope="col">Dmg</th><th scope="col">Avg</th>{% if has_impact %}<th scope="col">Impact</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for p in team.players %}
+        <tr>
+          <th scope="row">{{ player_name(p) }}{% if p.partial %}<span class="partial">{{ p.partial }}</span>{% endif %}{% if p.combined %}<span class="combined" title="Combined by name">*</span>{% endif %}{% if p.mvp %}<span class="mvp" data-mvp>MVP</span>{% endif %}</th>
+          <td>{{ p.kills }}</td>
+          <td class="strong">{{ p.damage }}</td>
+          <td class="strong accent">{{ p.avg }}</td>
+          {% if has_impact %}<td class="strong">{{ p.impact }}</td>{% endif %}
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">No players</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endmacro %}
+
+{% macro game_panel(team, has_impact, number) %}
+<section class="team team-{{ team.state }} team-game" aria-label="{{ team.heading }} in game {{ number }}">
+  <h3 class="team-head">{{ team.heading }}</h3>
+  <div class="table-scroll">
+    <table class="stats">
+      <thead><tr><th scope="col">Player</th><th scope="col">Kills</th><th scope="col">Dmg</th>{% if has_impact %}<th scope="col">Impact</th>{% endif %}</tr></thead>
+      <tbody>
+      {% for p in team.players %}
+        <tr><th scope="row">{{ player_name(p) }}</th><td>{{ p.kills }}</td><td class="strong">{{ p.damage }}</td>{% if has_impact %}<td class="strong">{{ p.impact }}</td>{% endif %}</tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">No players</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endmacro %}
+
+{% macro queue_row(item) %}
+<li class="q-row">
+  <a class="q-id" href="/queues/{{ item.match_id }}">#{{ item.match_id }}</a>
+  {# The winner is the green-tinted team (the score says it too); the words are for screen readers, or shown when
+     there's no score to read it from. #}
+  <span class="q-result">{% if item.score %}<strong class="q-score">{{ item.score | score_text }}</strong>{% endif %}{% if item.winner is not none %}<span class="{{ 'sr-only' if item.score else 'q-winner' }}">Team {{ item.winner + 1 }} won</span>{% else %} <span class="muted">Result unknown</span>{% endif %}</span>
+  <span class="q-date">{{ item.date_ms | fmt_date }}{% if item.date_is_saved %} (saved){% endif %}</span>
+  <span class="q-dur">{{ item.duration_ms | fmt_duration }}</span>
+  <span class="q-teams">{% for team in item.rosters %}<span class="q-team{% if item.winner is not none %} q-team-{{ 'win' if loop.index0 == item.winner else 'lose' }}{% endif %}"><span class="q-team-label">Team {{ loop.index }}:</span> {% for p in team %}{{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endfor %}</span>
+</li>
+{% endmacro %}
+
+{% macro board(rows, stat_label, bars=True) %}
+<ol class="board">
+{% for r in rows %}
+  <li class="board-row"{% if r.vt %} data-vt="{{ r.vt }}"{% endif %}>
+    <span class="rank{% if r.rank <= 3 %} rank-top{% endif %}">{{ r.rank }}</span>
+    <span class="who">{{ player_name(r) }}{% if bars %}<svg class="board-bar" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="bar-track" x="0" y="0" width="100" height="4"/><rect class="bar-fill" x="0" y="0" width="{{ r.bar }}" height="4"/></svg>{% endif %}<span class="games-count">{{ r.games }} games</span></span>
+    <span class="value"><span aria-hidden="true" data-count="{{ r.raw | round(4) }}">{{ r.value }}</span><span class="sr-only">{{ r.value }} {{ stat_label }}</span></span>
+  </li>
+{% else %}
+  <li class="board-empty">No eligible queue stats for this month yet.</li>
+{% endfor %}
+</ol>
+{% endmacro %}

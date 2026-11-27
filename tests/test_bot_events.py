@@ -158,7 +158,7 @@ class HallOfFameResetTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_confirmation_can_only_be_answered_once(self):
         expires = int(time.time()) + 60
         with patch.object(app, "_is_bot_owner", AsyncMock(return_value=True)), \
-                patch.object(app, "clear_hall_of_fame_records", return_value=3) as clear, \
+                patch.object(app, "reset_hall_of_fame_records", return_value=3) as clear, \
                 patch.object(app, "_hof_reset_answered", set()):
             await app.answer_hall_of_fame_reset(self.click(""), f"hof_reset:cancel:1:{expires}")
             late_confirm = self.click("")
@@ -168,7 +168,7 @@ class HallOfFameResetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_expired_confirmation_deletes_nothing(self):
         with patch.object(app, "_is_bot_owner", AsyncMock(return_value=True)), \
-                patch.object(app, "clear_hall_of_fame_records", return_value=3) as clear, \
+                patch.object(app, "reset_hall_of_fame_records", return_value=3) as clear, \
                 patch.object(app, "_hof_reset_answered", set()):
             interaction = self.click("")
             await app.answer_hall_of_fame_reset(interaction, f"hof_reset:confirm:1:{int(time.time()) - 1}")

@@ -334,6 +334,13 @@ def number_same_name_guests(board: list[dict], sides: dict) -> dict[int, str]:
     "Player"). Nothing identifies a logged-out player from one game to the next, so they are numbered in the order
     they joined that game (survev.de's per-game player_id): "Player", "Player (2)", ... Across games, the Nth one is
     assumed to be the same person. Returns {index in board: new name} for the renamed rows only."""
+    return {index: f"{board[index]['username'].strip()} ({number})"
+            for index, number in same_name_guest_numbers(board, sides).items()}
+
+
+def same_name_guest_numbers(board: list[dict], sides: dict) -> dict[int, int]:
+    """{index in board: N} for the 2nd, 3rd, ... unlinked player sharing a name with a teammate in one game, in
+    join order (number_same_name_guests' numbering). Everyone else is number 1."""
     groups: dict[tuple[int, str], list[int]] = {}
     for index, row in enumerate(board):
         name = (row.get("username") or "").strip()
@@ -346,11 +353,11 @@ def number_same_name_guests(board: list[dict], sides: dict) -> dict[int, str]:
         player_id = board[index].get("player_id")
         return (not isinstance(player_id, int), player_id if isinstance(player_id, int) else 0, index)
 
-    renamed = {}
+    numbers = {}
     for indices in groups.values():
         for number, index in enumerate(sorted(indices, key=join_order)[1:], start=2):
-            renamed[index] = f"{board[index]['username'].strip()} ({number})"
-    return renamed
+            numbers[index] = number
+    return numbers
 
 
 def resolve_round_sides(board: list[dict], roster_side) -> tuple[dict | None, str, dict]:
@@ -707,6 +714,7 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
         game_rows = game_rows_by_guid.setdefault(guid, [])
         best_rank_by_side: dict[int, int] = {}
         renamed_guests = number_same_name_guests(board, sides)
+        guest_numbers = same_name_guest_numbers(board, sides)
         for board_index, p in enumerate(board):
             username = renamed_guests.get(board_index) or (p.get("username") or "").strip()
             slug = p.get("slug")
@@ -721,7 +729,13 @@ async def calculate_queue_match_stats(match_id: str, guild_id: int, diagnostics:
             game_rows.append({
                 "identity": key,
                 "username": username,
+                # The in-game name before guest numbering and its number, so a literal "Player (2)" and the
+                # numbered second "Player" stay two people in the snapshot (queue_stats_service._snapshot_row).
+                "base_username": (p.get("username") or "").strip(),
+                "guest_number": guest_numbers.get(board_index, 1),
                 "slug": slug,
+                # This row's own account link, from the calculator's per-slug cache (no extra DB lookup later).
+                "discord_id": lookup_discord_id(slug) if slug and side is not None else None,
                 "team_id": p.get("team_id"),
                 "rank": parsed_rank,
                 "kills": p.get("kills", 0),

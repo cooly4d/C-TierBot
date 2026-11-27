@@ -6,7 +6,7 @@
 
 discord
 
-C-TierBot has no web, iOS or Android surface. Its visual output is raster PNG cards rendered server-side with Pillow (`image_utils.py`), posted into Discord alongside native embeds, buttons, selects and ephemeral messages (`discord_ui.py`, `leaderboard_service.py`, `queue_stats_service.py`). Discord owns the chrome, fonts and layout around every card; the bot controls only the image pixels and the embed/component content.
+C-TierBot's main surface is Discord. It also serves a read-only website for its home server (queue archive, leaderboard, player pages, Hall of Fame; `design-system/pages/web.md`), with no iOS or Android surface. Its visual output is raster PNG cards rendered server-side with Pillow (`image_utils.py`), posted into Discord alongside native embeds, buttons, selects and ephemeral messages (`discord_ui.py`, `leaderboard_service.py`, `queue_stats_service.py`). Discord owns the chrome, fonts and layout around every card; the bot controls only the image pixels and the embed/component content.
 
 ## Users
 

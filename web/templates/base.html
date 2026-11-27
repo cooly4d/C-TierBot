@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{% block title %}C-TierBot{% endblock %}</title>
+<link rel="icon" href="/static/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/tokens.css?v={{ v }}">
+<link rel="stylesheet" href="/static/site.css?v={{ v }}">
+{% block head %}{% endblock %}
+<script type="module" src="/static/site.js?v={{ v }}"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <nav class="site-nav" aria-label="Main">
+    <a class="brand" href="/"><img class="brand-mark" src="/static/logo-96.webp" alt="" width="32" height="32">C-TierBot</a>
+    <ul class="nav-links">
+      <li><a href="/queues"{% if nav == "queues" %} aria-current="page"{% endif %}>Queues</a></li>
+      <li><a href="/leaderboard"{% if nav == "leaderboard" %} aria-current="page"{% endif %}>Leaderboard</a></li>
+      <li><a href="/hall-of-fame"{% if nav == "hof" %} aria-current="page"{% endif %}>Hall of Fame</a></li>
+    </ul>
+  </nav>
+</header>
+<main id="main" class="page">
+{% block main %}{% endblock %}
+</main>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <p>Stats from survev.de and NeatQueue. Not affiliated with either.</p>
+    <p class="footer-note">Names are each player's current display name in the community's Discord server.</p>
+  </div>
+</footer>
+</body>
+</html>

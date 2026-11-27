@@ -3,6 +3,7 @@ timeframe stats, inventory, and market/shop data.
 """
 import asyncio
 import logging
+import sqlite3
 import time
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -25,22 +26,35 @@ async def fetch_discord_link(session: aiohttp.ClientSession, access_token: str):
             if resp.status != 200:
                 return None, None
             data = await resp.json()
-            return data.get("slug"), data.get("username")
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
         return None, None
+    if not isinstance(data, dict):
+        return None, None
+    slug, username = data.get("slug"), data.get("username")
+    if not isinstance(slug, str) or not slug:
+        return None, None  # no account named: an empty slug counts as no answer
+    return slug, username if isinstance(username, str) else None
 
 
 async def backfill_missing_slugs():
-    """One-time-ish catch-up: fills in slug/username for users who verified before we started storing it,
-    using their access token we already have — no need for them to /verify again."""
+    """Catch-up for links saved without a slug/username (before the bot stored them, or before 2026-11-27, when
+    /verify still saved a link whose profile lookup failed), using the token we already have."""
     missing = get_users_missing_slug()
     if not missing:
         return
 
     async def _backfill_one(discord_id: int, access_token: str):
         slug, username = await fetch_discord_link(http_session, access_token)
-        if slug:
-            update_user_slug(discord_id, slug, username)
+        if not slug:
+            return
+        try:
+            outcome = await asyncio.to_thread(update_user_slug, discord_id, access_token, slug, username)
+        except sqlite3.OperationalError as exc:  # the database stayed busy: the next run tries again
+            log.info("Slug backfill for Discord user %s postponed: %s", discord_id, exc)
+            return
+        if outcome == "taken":
+            log.warning("Unlinked Discord user %s: their survev.de account is linked to another Discord user.",
+                        discord_id)
 
     await asyncio.gather(*(_backfill_one(did, tok) for did, tok in missing))
 
@@ -89,7 +103,7 @@ async def _notify_all(senders: list, **kwargs):
 
 
 async def _fetch_discord_link_with_retry(session: aiohttp.ClientSession, access_token: str):
-    """fetch_discord_link, retried a few times — without a slug the player keeps showing up as a guest."""
+    """fetch_discord_link, retried a few times: without a slug /verify can't check the account, so it links nothing."""
     slug, username = None, None
     for attempt in range(SLUG_LOOKUP_ATTEMPTS):
         slug, username = await fetch_discord_link(session, access_token)
@@ -208,17 +222,36 @@ async def _run_verification_flow(discord_user_id: int, state: dict):
         if status == 200:
             access_token = t_data["accessToken"]
             slug, username = await _fetch_discord_link_with_retry(session, access_token)
-            save_token(discord_user_id, access_token, slug, username)
-            if slug:
-                await _notify_all(senders, content="✅ **Account Linked!**")
-            else:
-                # Saved without a slug: backfill_missing_slugs fills it in on its next periodic run.
+            if not slug:
+                # One survev.de account, one Discord user: a link is saved only once survev.de says which account
+                # it is, so it can be checked (and an existing link is never replaced by one nobody can check).
+                log.warning("Verification for Discord user %s not saved: survev.de didn't return the account's "
+                            "profile.", discord_user_id)
                 await _notify_all(
                     senders,
-                    content="✅ **Account Linked!**\n"
-                            "-# survev.de didn't return your profile just now, so match cards may show you as a "
-                            "guest for a little while. The bot will fill it in automatically."
+                    content="❌ survev.de didn't say which account that is just now, so nothing was linked"
+                            + (" and your current link is unchanged" if get_user_token(discord_user_id) else "")
+                            + ". Run `/verify` again in a few minutes."
                 )
+                return
+            try:
+                saved = await asyncio.to_thread(save_token, discord_user_id, access_token, slug, username)
+            except sqlite3.OperationalError as exc:
+                log.warning("Verification for Discord user %s not saved: %s", discord_user_id, exc)
+                await _notify_all(senders, content="❌ The bot's database was busy, so nothing was linked. "
+                                                   "Run `/verify` again in a minute.")
+                return
+            if not saved:
+                # One survev.de account, one Discord user: the first link keeps it.
+                log.warning("Verification for Discord user %s refused: that survev.de account is linked to another "
+                            "Discord user.", discord_user_id)
+                await _notify_all(
+                    senders,
+                    content="❌ That survev.de account is already linked to another Discord user, so it wasn't "
+                            "linked to you. If it's yours, ask the bot's owner to remove the other link."
+                )
+                return
+            await _notify_all(senders, content="✅ **Account Linked!**")
             return
 
         error = t_data.get("error")

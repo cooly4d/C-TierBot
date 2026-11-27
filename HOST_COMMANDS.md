@@ -13,6 +13,30 @@ python console.py status     # run one command and exit
 
 In the `console.py` prompt, `exit` / `quit` only leave the prompt and the bot keeps running. `stop` shuts the bot down, and Coolify restarts the container. `clear` clears your terminal. The port listens on loopback only, so only a shell inside the container can reach it.
 
+## Website operator panel (`/admin`)
+
+The panel needs one password. Its **Console** section runs the commands below too, one at a time, with two
+differences: `sql` only reads (it can't change data, and `users.access_token` always reads as NULL), and `stop`
+asks you to run `stop confirm` first. Change data over SSH with `python console.py`. Without JavaScript the console
+still works: each command reloads the panel with its output, and reloading that page never runs it again.
+
+The panel's `sql` reads the bot's own tables with SQLite's built-in functions, in a separate process limited to
+2 seconds. It refuses other tables (a copy you made over SSH, a view), other functions, and `JOIN ... USING` or
+`NATURAL JOIN` (write `JOIN ... ON a.column = b.column`). A column added to the bot's tables later reads as NULL
+in the panel until it's added to `panel_sql.READABLE`.
+
+To create the password, or to change it, on your own PC:
+
+```sh
+python tools/make_admin_password.py            # generates a 32-character password
+python tools/make_admin_password.py --choose   # or type your own (16-128 characters)
+```
+
+Save the printed password in your password manager, then paste `WEB_ADMIN_PASSWORD_HASH` and `WEB_SESSION_SECRET`
+into the app's environment variables in Coolify (with `WEB_PUBLIC_ORIGIN` set to the site's address) and redeploy.
+Changing either value signs out every session. After 20 wrong passwords in an hour the login is closed for everyone
+for the rest of that hour; a redeploy resets it. The SSH console above is never affected.
+
 ---
 
 ## Available Commands
@@ -27,7 +51,7 @@ In the `console.py` prompt, `exit` / `quit` only leave the prompt and the bot ke
 | **`servers`** | `servers` *(or `guilds`)* | Lists all connected servers (Name, ID, Member Count). | `servers` |
 | **`channels`** | `channels <guild_id>` | Lists all text channels in a specified server with their IDs. | `channels 123456789012345678` |
 | **`status`** | `status` | Displays bot latency, uptime, and database metrics. | `status` |
-| **`sql`** | `sql <query>` | Runs a query directly on `leaderboard.db` and renders results. | `sql SELECT discord_id, username FROM users LIMIT 5;` |
+| **`sql`** | `sql <query>` | Runs a query directly on `leaderboard.db` and renders results. One survev.de account can be linked to one Discord user; to free an account for someone else, remove the old link (that user runs `/verify` again to relink). | `sql SELECT discord_id, username FROM users LIMIT 5;`<br>`sql DELETE FROM users WHERE discord_id = 123456789012345678` |
 | **`winrate`** | `winrate [guild_id]` | Shows NeatQueue Team 1 vs Team 2 winrate across match history. | `winrate` |
 | **`queue`** | `queue <match_id> [guild_id]` | Inspects calculated stats and lookup diagnostics for a queue without posting to Discord. | `queue 4600` |
 | **`sync`** | `sync` | Manually triggers slash command synchronization with Discord. | `sync` |

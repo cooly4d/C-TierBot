@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · C-TierBot{% endblock %}
+{% block main %}
+<section class="panel error-panel">
+  <h1 class="page-title">{{ title }}</h1>
+  {% if status == 404 %}<p>There's nothing at this address. It may be a queue that wasn't saved, or a player without a page.</p>
+  {% elif status == 400 %}<p>That link has a value the site doesn't understand.</p>
+  {% elif status == 503 %}<p>The site is busy right now. Try again in a few seconds.</p>
+  {% else %}<p>The page couldn't be shown. Try again later.</p>{% endif %}
+  <p><a href="/">Go to the home page</a></p>
+</section>
+{% endblock %}

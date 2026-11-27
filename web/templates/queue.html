@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% from "macros.html" import series_panel, game_panel, unlinked_icon %}
+{% block title %}Queue {{ title }} · C-TierBot{% endblock %}
+{% block main %}
+<p class="crumbs"><a href="/queues">Queues</a> / {{ title }}</p>
+
+<section class="series" aria-label="Series result">
+  <div class="series-left">
+    <h1 class="series-title">{{ title }}</h1>
+    <p class="series-result state-{{ result_state }}">{{ result_text }}</p>
+    <p class="series-meta">{{ queue.date_ms | fmt_date }}{% if queue.date_is_saved %} (saved){% endif %}{% if queue.total_games %} · {{ queue.total_games }} game{% if queue.total_games != 1 %}s{% endif %}{% endif %}{% if queue.duration_ms %} · {{ queue.duration_ms | fmt_duration }}{% endif %}</p>
+  </div>
+  <p class="series-score">
+    <span class="sr-only">{{ score_label }}</span>
+    {% if score_parts %}<span class="score-digits" aria-hidden="true">{% for part in score_parts %}<span class="digit state-{{ part.state }}" data-digit="{{ loop.index0 }}">{{ part.value }}</span>{% if not loop.last %}<span class="score-sep"> - </span>{% endif %}{% endfor %}</span>{% endif %}
+  </p>
+  {% if games %}
+  {% set has_mid = games | selectattr("winner", "none") | list | length > 0 %}
+  <figure class="timeline" data-timeline{% if replay %} data-replay{% endif %} data-winners="{{ winners_attr }}" data-score="{{ score_attr }}" aria-label="Match timeline">
+    <figcaption class="timeline-title" aria-hidden="true">MATCH TIMELINE</figcaption>
+    {# One column per game (the grid flows down each column), so the dots are links in game order: each opens
+       that game in the breakdown below, like the game buttons there. #}
+    <div class="timeline-grid{% if has_mid %} has-mid{% endif %}">
+      {% for lane in lanes %}<span class="lane-label state-{{ lane.state }}" aria-hidden="true">T{{ lane.team + 1 }}</span>{% if loop.first and has_mid %}<span class="lane-label" aria-hidden="true"></span>{% endif %}{% endfor %}<span aria-hidden="true"></span>
+      {% for g in games %}{% set gi = loop.index0 %}
+      {% for lane in lanes %}<span class="lane-cell">{% if g.winner == lane.team %}<a class="tl-dot state-{{ g.dot_state }}{% if g.selected %} is-selected{% endif %}" href="?game={{ g.number }}#games" data-dot="{{ gi }}" data-lane="{{ lane.team }}" data-game="{{ g.number }}" aria-label="{{ g.label }}"{% if g.selected %} aria-current="true"{% endif %}></a>{% endif %}</span>{% if loop.first and has_mid %}<span class="lane-cell lane-mid">{% if g.winner is none %}<a class="tl-dot tl-unknown{% if g.selected %} is-selected{% endif %}" href="?game={{ g.number }}#games" data-dot="{{ gi }}" data-game="{{ g.number }}" aria-label="{{ g.label }}"{% if g.selected %} aria-current="true"{% endif %}></a>{% endif %}</span>{% endif %}{% endfor %}<span class="tl-label{% if g.selected %} is-selected{% endif %}" data-label="{{ gi }}" aria-hidden="true">G{{ g.number }}</span>
+      {% endfor %}
+    </div>
+  </figure>
+  {% endif %}
+</section>
+
+<div class="teams">
+  {% for team in teams %}{{ series_panel(team, has_impact) }}{% endfor %}
+</div>
+
+{% if has_partial or has_guest or has_combined %}
+<p class="legend">
+  {% if has_partial %}<span><span class="partial">{{ example_partial }}</span> = played {{ example_partial.split('/')[0] }} of {{ example_partial.split('/')[1] }} games</span>{% endif %}
+  {% if has_guest %}<span class="legend-item">{{ unlinked_icon() }}Unlinked: /verify in Discord to join the leaderboards</span>{% endif %}
+  {% if has_combined %}<span><span class="combined">*</span> Logged-out players are matched by name from game to game, so same-name players may be combined.</span>{% endif %}
+</p>
+{% endif %}
+
+<section class="games" id="games" aria-labelledby="games-h">
+  <div class="games-head">
+    <h2 id="games-h">Game breakdown</h2>
+    {% if games %}
+    <nav class="pills" aria-label="Games" data-game-pills>
+      {% for g in games %}<a class="pill" href="?game={{ g.number }}#games" data-game="{{ g.number }}"{% if g.selected %} aria-current="true"{% endif %} aria-label="{{ g.label }}">G{{ g.number }}</a>{% endfor %}
+    </nav>
+    {% endif %}
+  </div>
+  {% if games %}
+    {% for g in games %}
+    <div class="game" data-game-panel="{{ g.number }}"{% if not g.selected %} hidden{% endif %}>
+      <p class="game-line"><strong class="state-{{ 'neutral' if g.winner is none else 'win' }}">Game {{ g.number }} · {% if g.winner is not none %}Team {{ g.winner + 1 }} won{% else %}winner unknown{% endif %}</strong> · {% if g.series %}series {{ g.series }} after this game{% else %}series score unknown after this game{% endif %}</p>
+      <div class="teams">
+        {% for team in g.teams %}{{ game_panel(team, g.has_impact, g.number) }}{% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+  <p class="muted">The per-game breakdown wasn't saved for this queue.</p>
+  {% endif %}
+</section>
+{% endblock %}
