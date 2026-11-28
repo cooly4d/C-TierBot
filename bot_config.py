@@ -5,6 +5,7 @@ discord.py client, so there is exactly one Bot instance for the whole app.
 """
 import os
 import re
+from urllib.parse import urlparse
 
 import discord
 from discord.ext import commands
@@ -97,4 +98,16 @@ KEYWORD_REACTIONS = {
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True  # needed so client.get_all_members() has data — required for real display names
-bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents)
+
+
+def site_activity(origin: str) -> discord.Activity | None:
+    """The bot's status, "Watching <site host>" under its name in the member list, so people find the website.
+    None (no status) without a public https origin."""
+    parsed = urlparse(origin or "")
+    if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    return discord.Activity(type=discord.ActivityType.watching, name=parsed.hostname)
+
+
+# The status goes in with the login, so Discord shows it again after every reconnect.
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, activity=site_activity(WEB_PUBLIC_ORIGIN))

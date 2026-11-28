@@ -315,6 +315,9 @@ The following decisions were explicitly requested or approved by the user across
   its snapshot's `saved_at`, which a rerun refreshes (it was re-saved 27 Nov 23:31 UTC). Fix, deployed at the user's
   request ("deploy it"): archive and home ordered by queue number (`list_queue_ids`); a save-dated row joins
   the day heading above it. 632 tests pass. Seven queues are snapshot-only.
+- **Bot status (2026-11-28, user: "do 1, bot status"):** "Watching <site host>" under the bot's name
+  (`bot_config.site_activity`, from `WEB_PUBLIC_ORIGIN`, https only; set on the Bot so it returns after every
+  reconnect). Deployed at the user's request ("yes"). A `/website` command and clickable embed titles were offered, not chosen.
 - **Not done:** no Codex inspection of the built code (Codex gave a design opinion only). The bot buttons were not
   tried in Discord.
 

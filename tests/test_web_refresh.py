@@ -254,6 +254,16 @@ class ArchiveOrderTests(SiteTestCase):
         self.assertEqual(re.findall(r'q-day-title">([^<]+)<', archive), ["Date unknown", "20 Nov", "10 Nov"])
 
 
+class BotStatusTests(unittest.TestCase):
+    def test_status_shows_the_site_host_only_for_a_public_https_origin(self):
+        import bot_config
+        activity = bot_config.site_activity("https://stats.example.test")
+        self.assertEqual((activity.type, activity.name), (discord.ActivityType.watching, "stats.example.test"))
+        self.assertIsNone(bot_config.site_activity(""))
+        self.assertIsNone(bot_config.site_activity("http://127.0.0.1:8080"))
+        self.assertIsNone(bot_config.site_activity("not a url"))
+
+
 class SiteButtonTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         discord_ui._queue_result_views.clear()
