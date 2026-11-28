@@ -16,6 +16,7 @@ This module never imports `db` at import time, so the local preview can point DB
 """
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import os
@@ -32,6 +33,7 @@ from pathlib import Path
 
 from aiohttp import web
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
 
 import web_admin
 import web_queries as q
@@ -239,6 +241,32 @@ def fmt_date(ms):
     return f"{dt.day} {dt.strftime('%b %Y, %H:%M')} UTC"
 
 
+def fmt_when(ms):
+    """A date as a <time> element: the UTC text (what shows without JavaScript), with the instant in data-ms so
+    site.js can show it in the visitor's own timezone."""
+    if not ms:
+        return "—"
+    instant = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc)
+    return Markup('<time datetime="{}" data-ms="{}">{}</time>').format(
+        instant.strftime("%Y-%m-%dT%H:%MZ"), int(ms), escape(fmt_date(ms)))
+
+
+def day_heading(ms, now_ms: int) -> tuple[str, str]:
+    """(key, label) of the UTC day a queue ended on, for the archive's day headings: "Today", "Yesterday", "24 Nov",
+    or "24 Nov 2025" in an earlier year. site.js redoes them in the visitor's timezone."""
+    if not ms:
+        return "", "Date unknown"
+    day = datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).date()
+    today = datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).date()
+    if day == today:
+        label = "Today"
+    elif (today - day).days == 1:
+        label = "Yesterday"
+    else:
+        label = f"{day.day} {day.strftime('%b')}" + (f" {day.year}" if day.year != today.year else "")
+    return day.isoformat(), label
+
+
 def fmt_iso(text):
     """A stored ISO timestamp in the site's date format (UTC); text that doesn't parse is shown as it is."""
     if not text:
@@ -281,7 +309,7 @@ def score_text(score) -> str:
 
 def asset_version(static_dir: Path) -> str:
     digest = hashlib.sha256()
-    for name in ("site.css", "site.js", "leaderboard.css"):
+    for name in ("site.css", "site.js", "leaderboard.css", "boot.js"):
         try:
             digest.update((static_dir / name).read_bytes())
         except OSError:
@@ -335,7 +363,9 @@ class Site:
                                trim_blocks=True, lstrip_blocks=True)
         self.env.filters.update(fmt_int=fmt_int, fmt_avg=fmt_avg, fmt_impact=fmt_impact, fmt_kpg=fmt_kpg,
                                 fmt_duration=fmt_duration, fmt_date=fmt_date, fmt_iso=fmt_iso,
-                                fmt_playtime=fmt_playtime, score_text=score_text)
+                                fmt_playtime=fmt_playtime, score_text=score_text, when=fmt_when)
+        # Search's list of players with a page, kept for DIRECTORY_SECONDS: (expires_at, entries) or None.
+        self.directory = None
         self.version = asset_version(STATIC_DIR)
         self.tokens = tokens_css()
 
@@ -416,6 +446,8 @@ def create_app(guild_id: int, db_path: str, bot=None, admin_config=None, log_dir
     r.add_get("/leaderboard", leaderboard)
     r.add_get("/players/{slug}", player_page)
     r.add_get("/hall-of-fame", hall_of_fame)
+    r.add_get("/search", search_page)
+    r.add_get("/search.json", search_json)
     r.add_get("/healthz", healthz)
     r.add_get("/robots.txt", robots)
     r.add_get("/tokens.css", tokens)
@@ -545,6 +577,23 @@ def _ids_in(queues) -> set:
     return ids
 
 
+def _featured(item: dict) -> dict:
+    """The newest queue, opened up on the home page like the result card: the score's digits in the winner's and
+    loser's colours, and the result in words."""
+    winner, score = item.get("winner"), item.get("score")
+    parts = []
+    for index, value in enumerate(score or []):
+        state = "neutral" if winner is None else ("win" if index == winner else "lose")
+        parts.append({"value": value, "state": state})
+    return {
+        **item,
+        "score_parts": parts,
+        "score_label": f"Series score {' to '.join(str(s) for s in score)}" if score else "No series score saved",
+        "result_text": f"Team {winner + 1} wins" if winner is not None else "Result unknown",
+        "result_state": "win" if winner is not None else "neutral",
+    }
+
+
 def _current_month(clock) -> tuple[int, int]:
     now = datetime.fromtimestamp(clock(), tz=timezone.utc)
     return now.year, now.month
@@ -565,8 +614,10 @@ async def home(request):
 
     def build(data):
         latest, board, hof, newest, slugs = data
+        summaries = _queue_summaries(site, latest, newest, slugs)
         return {
-            "latest": _queue_summaries(site, latest, newest, slugs),
+            "featured": _featured(summaries[0]) if summaries else None,
+            "latest": summaries[1:],
             "board_rows": _board_rows(site, board, "damage", newest, slugs),
             "month_label": month_name(year, month),
             "records": _records(site, hof, newest, slugs),
@@ -590,7 +641,11 @@ async def queues(request):
 
     def build(data):
         total, pages, items, newest, slugs = data
-        return {"total": total, "page": page, "pages": pages, "items": _queue_summaries(site, items, newest, slugs)}
+        rows = _queue_summaries(site, items, newest, slugs)
+        now_ms = int(site.clock() * 1000)
+        for row in rows:
+            row["day_key"], row["day_label"] = day_heading(row.get("date_ms"), now_ms)
+        return {"total": total, "page": page, "pages": pages, "items": rows}
 
     return await site.page(request, ("queues", page), job, build, "queues.html", "queues")
 
@@ -610,17 +665,18 @@ async def queue_page(request):
         if queue is None:
             return None
         ids = _ids_in([queue])
-        return queue, q.stored_names(conn, site.guild_id, ids), q.player_slugs(conn, site.guild_id, ids)
+        return (queue, q.stored_names(conn, site.guild_id, ids), q.player_slugs(conn, site.guild_id, ids),
+                q.neighbour_queue_ids(conn, site.guild_id, match_id))
 
     def build(data):
-        queue, newest, slugs = data
+        queue, newest, slugs, (older, newer) = data
         games = queue["games"]
         selected = len(games)
         if wanted is not None:
             if not 1 <= wanted <= len(games):
                 raise web.HTTPNotFound()
             selected = wanted
-        return queue_context(site, queue, newest, slugs, selected)
+        return {**queue_context(site, queue, newest, slugs, selected), "older": older, "newer": newer}
 
     key = ("queue", match_id, wanted)
     return await site.page(request, key, job, build, "queue.html", "queues")
@@ -916,7 +972,8 @@ def _records(site: Site, hof: dict, newest: dict, slugs: dict) -> list[dict]:
             if key == "most_damage_game" and rec.get("game_number"):
                 where += f", Game {rec['game_number']}"
         out.append({"label": label, "empty": False, "value": value, "holder": holder, "where": where,
-                    "match_id": rec["match_id"] if rec.get("has_page") else None})
+                    "match_id": rec["match_id"] if rec.get("has_page") else None,
+                    "game": rec.get("game_link") if key == "most_damage_game" else None})
     return out
 
 
@@ -933,6 +990,116 @@ async def hall_of_fame(request):
         return {"records": _records(site, hof, newest, slugs)}
 
     return await site.page(request, ("hof",), job, build, "hall_of_fame.html", "hof")
+
+
+# --- Search ---------------------------------------------------------------------------------------------------
+
+SEARCH_MAX_CHARS = 40
+DIRECTORY_SECONDS = 60
+_QUEUE_QUERY = re.compile(r"(?:queue\s*)?#?\s*([0-9]{1,10})", re.IGNORECASE)
+
+
+def parse_search(raw) -> tuple[str, str | None]:
+    """(text, digits): the query with its whitespace collapsed and cut to SEARCH_MAX_CHARS, and the queue number
+    in it when the whole query is one ("4821", "#4821", "queue 4821"), else None."""
+    text = " ".join(str(raw or "").split())[:SEARCH_MAX_CHARS]
+    found = _QUEUE_QUERY.fullmatch(text)
+    return text, (found.group(1) if found else None)
+
+
+def match_players(site: Site, directory: list[dict], text: str, limit: int) -> list[dict]:
+    """Players whose shown name (or page address) contains the query, ignoring case: names that start with it
+    first, then the most queues played."""
+    needle = text.casefold()
+    if not needle:
+        return []
+    # A page address only counts for a query with a letter in it, so a queue number doesn't list numeric ones.
+    by_slug = any(c.isalpha() for c in needle)
+    hits = []
+    for p in directory:
+        name = site.names.name(p["discord_id"], p["stored_name"])
+        if name == UNKNOWN_PLAYER:
+            continue
+        shown, slug = name.casefold(), p["slug"].casefold() if by_slug else ""
+        if needle in shown or (by_slug and needle in slug):
+            rank = 0 if shown.startswith(needle) else 1 if by_slug and slug.startswith(needle) else 2
+            # Matched only by the page address: say so, or the name wouldn't explain the match.
+            via = p["slug"] if needle not in shown else None
+            hits.append((rank, -p["queues"], shown, {"name": name, "url": f"/players/{p['slug']}",
+                                                     "queues": p["queues"], "via": via}))
+    hits.sort(key=lambda h: h[:3])
+    return [h[3] for h in hits[:limit]]
+
+
+async def run_search(site: Site, text: str, digits: str | None, queue_limit: int):
+    """(directory, queue summaries) for a query; the directory comes from Site.directory while it's fresh."""
+    now = time.monotonic()
+    cached = site.directory[1] if site.directory and site.directory[0] > now else None
+
+    def job(conn):
+        directory = cached if cached is not None else q.player_directory(conn, site.guild_id)
+        items = []
+        if digits:
+            for match_id in q.find_queue_ids(conn, site.guild_id, digits, queue_limit):
+                q.checkpoint()
+                queue = q.get_queue(conn, site.guild_id, match_id)
+                if queue is not None:
+                    queue.pop("games", None)
+                    items.append(queue)
+        ids = _ids_in(items)
+        return directory, items, q.stored_names(conn, site.guild_id, ids), q.player_slugs(conn, site.guild_id, ids)
+
+    try:
+        directory, items, newest, slugs = await site.db.run(job)
+    except Busy:
+        raise web.HTTPServiceUnavailable(headers={"Retry-After": "5"})
+    if cached is None:
+        site.directory = (now + DIRECTORY_SECONDS, directory)
+    return directory, _queue_summaries(site, items, newest, slugs)
+
+
+async def search_page(request):
+    """The search results page: what the header's search box opens without JavaScript, and its "All results"
+    link. A query that is exactly one saved queue's number, matching no player, goes straight to that queue."""
+    site: Site = request.app["site"]
+    text, digits = parse_search(request.query.get("q"))
+    key = ("search", text.casefold())
+    cached = site.cached(key)
+    if cached is not None:
+        return html_response(cached, PUBLIC_MAX_AGE)
+    players, queues = [], []
+    if text:
+        directory, queues = await run_search(site, text, digits, 20)
+        players = match_players(site, directory, text, 30)
+        if digits and not players and queues and queues[0]["match_id"] == digits:
+            raise web.HTTPSeeOther(location=f"/queues/{digits}", headers={"Cache-Control": PUBLIC_MAX_AGE})
+    body = site.render("search.html", nav="search", query=text, players=players, queues=queues)
+    if site.names.ready:
+        site.cache.put(key, body)
+        return html_response(body, PUBLIC_MAX_AGE)
+    return html_response(body, WARMUP_MAX_AGE)
+
+
+async def search_json(request):
+    """Instant results for the header's search box (site.js): a few players and queue numbers."""
+    site: Site = request.app["site"]
+    text, digits = parse_search(request.query.get("q"))
+    key = ("search.json", text.casefold())
+    body = site.cached(key)
+    if body is None:
+        players, queues = [], []
+        if text:
+            directory, items = await run_search(site, text, digits, 5)
+            players = match_players(site, directory, text, 6)
+            queues = [{"id": i["match_id"], "url": f"/queues/{i['match_id']}",
+                       "score": score_text(i["score"]) if i.get("score") else None,
+                       "winner": i.get("winner"), "date": fmt_date(i.get("date_ms")),
+                       "ms": int(i["date_ms"]) if i.get("date_ms") else None} for i in items]
+        body = json.dumps({"q": text, "players": players, "queues": queues}, separators=(",", ":"))
+        if site.names.ready:
+            site.cache.put(key, body)
+    return web.Response(text=body, content_type="application/json",
+                        headers={"Cache-Control": PUBLIC_MAX_AGE if site.names.ready else WARMUP_MAX_AGE})
 
 
 # --- Operator panel -------------------------------------------------------------------------------------------

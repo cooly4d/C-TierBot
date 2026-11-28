@@ -4,6 +4,7 @@
 {# The metric columns' headers, shared by the chart's table and the queue history: the chart's metric is marked,
    and site.js moves the mark when the metric changes. #}
 {% macro metric_headers() %}<th scope="col"{% if metric == "kills" %} class="accent"{% endif %} data-col="kills"><span class="label-long">Kills per game</span><span class="label-short" aria-hidden="true">K/game</span></th><th scope="col"{% if metric == "damage" %} class="accent"{% endif %} data-col="damage">Avg dmg</th><th scope="col"{% if metric == "impact" %} class="accent"{% endif %} data-col="impact">Impact</th>{% endmacro %}
+<div class="page-bar page-bar-end"><button type="button" class="copy-link" hidden data-copy><svg class="copy-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.6 11.4a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M11.4 8.6a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l1-1"/></svg><span data-copy-label>Copy link</span></button></div>
 <section class="series player-band" aria-label="Player summary">
   <div class="series-left">
     <h1 class="series-title player-title">{{ name }}</h1>
@@ -48,7 +49,7 @@
   <div class="trend-x {{ slot_class }}" aria-hidden="true">
     {% for s in chart.slots %}<span{% if loop.last %} class="is-latest"{% endif %}>{% if (loop.index0 % 3 == 0 or loop.last) and s.match_id %}#{{ s.match_id }}{% endif %}</span>{% endfor %}
   </div>
-  <p class="trend-legend"><span class="key key-win"></span>Won <span class="key key-lose"></span>Lost <span class="key key-latest"></span>Latest <span class="muted">Hover, tap or tab through the points for each queue.</span></p>
+  <p class="trend-legend"><span class="key key-win"></span>Won <span class="key key-lose"></span>Lost <span class="key key-latest"></span>Latest <span class="muted detail-block">Hover, tap or tab through the points for each queue.</span></p>
   {% if chart_rows %}
   <details class="trend-data">
     <summary>The chart's {{ chart_rows | length }} queues as a table</summary>
@@ -86,7 +87,7 @@
           <td>{{ r.kills_pg }}</td>
           <td class="strong accent">{{ r.avg }}</td>
           <td class="strong">{{ r.impact }}</td>
-          <td class="muted col-date">{{ r.date | fmt_date }}</td>
+          <td class="muted col-date">{{ r.date | when }}</td>
         </tr>
       {% endfor %}
       </tbody>

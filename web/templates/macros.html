@@ -45,23 +45,39 @@
 {% endmacro %}
 
 {% macro queue_row(item) %}
-<li class="q-row">
+<li class="q-row"{% if item.date_ms %} data-ms="{{ item.date_ms }}"{% endif %}>
   <a class="q-id" href="/queues/{{ item.match_id }}">#{{ item.match_id }}</a>
   {# The winner is the green-tinted team (the score says it too); the words are for screen readers, or shown when
      there's no score to read it from. #}
   <span class="q-result">{% if item.score %}<strong class="q-score">{{ item.score | score_text }}</strong>{% endif %}{% if item.winner is not none %}<span class="{{ 'sr-only' if item.score else 'q-winner' }}">Team {{ item.winner + 1 }} won</span>{% else %} <span class="muted">Result unknown</span>{% endif %}</span>
-  <span class="q-date">{{ item.date_ms | fmt_date }}{% if item.date_is_saved %} (saved){% endif %}</span>
-  <span class="q-dur">{{ item.duration_ms | fmt_duration }}</span>
+  <span class="q-when detail"><span class="q-date">{{ item.date_ms | when }}{% if item.date_is_saved %} (saved){% endif %}</span><span class="q-dur">{{ item.duration_ms | fmt_duration }}</span></span>
   <span class="q-teams">{% for team in item.rosters %}<span class="q-team{% if item.winner is not none %} q-team-{{ 'win' if loop.index0 == item.winner else 'lose' }}{% endif %}"><span class="q-team-label">Team {{ loop.index }}:</span> {% for p in team %}{{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endfor %}</span>
 </li>
 {% endmacro %}
 
-{% macro board(rows, stat_label, bars=True) %}
+{# The Hall of Fame records as one strip of tiles (home page and the Hall of Fame page). #}
+{% macro plaques(records, large=False) %}
+<ul class="plaques{% if large %} plaques-large{% endif %}">
+{% for r in records %}
+  <li class="plaque">
+    <span class="plaque-label">{{ r.label }}</span>
+    {% if r.empty %}<span class="plaque-value muted">No record yet</span>{% else %}
+    <span class="plaque-value">{{ r.value }}</span>
+    <span class="plaque-who">{% if r.holder %}{{ player_name(r.holder) }}{% endif %}{% if r.holder and r.where %}<br>{% endif %}{% if r.where %}{% if r.match_id %}<a href="/queues/{{ r.match_id }}{% if r.game %}?game={{ r.game }}#games{% endif %}">{{ r.where }}</a>{% else %}{{ r.where }}{% endif %}{% endif %}</span>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% endmacro %}
+
+{# games_hidden: the "N games" line only on hover / "Detailed" (the home page); the leaderboard keeps it, since it
+   explains the weighted ranking. #}
+{% macro board(rows, stat_label, bars=True, games_hidden=True) %}
 <ol class="board">
 {% for r in rows %}
   <li class="board-row"{% if r.vt %} data-vt="{{ r.vt }}"{% endif %}>
     <span class="rank{% if r.rank <= 3 %} rank-top{% endif %}">{{ r.rank }}</span>
-    <span class="who">{{ player_name(r) }}{% if bars %}<svg class="board-bar" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="bar-track" x="0" y="0" width="100" height="4"/><rect class="bar-fill" x="0" y="0" width="{{ r.bar }}" height="4"/></svg>{% endif %}<span class="games-count">{{ r.games }} games</span></span>
+    <span class="who">{{ player_name(r) }}{% if bars %}<svg class="board-bar" viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true" focusable="false"><rect class="bar-track" x="0" y="0" width="100" height="4"/><rect class="bar-fill" x="0" y="0" width="{{ r.bar }}" height="4"/></svg>{% endif %}<span class="games-count{% if games_hidden %} detail{% endif %}">{{ r.games }} games</span></span>
     <span class="value"><span aria-hidden="true" data-count="{{ r.raw | round(4) }}">{{ r.value }}</span><span class="sr-only">{{ r.value }} {{ stat_label }}</span></span>
   </li>
 {% else %}

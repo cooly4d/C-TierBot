@@ -278,6 +278,39 @@ The following decisions were explicitly requested or approved by the user across
 
 ## Current Focus and Handover
 
+### Website refresh and bot links (2026-11-27/28, Claude Code; merged to `main` and pushed at the user's request, "deploy it")
+- **Asked by the user:** website discovery from the bot ("maybe a button below the replies"), and a cleaner, more
+  interactive site with animations, a very slight liquid-glass layering, search for queue numbers and players, and a
+  brief loading screen with their tesseract GIF, keeping the embeds' colours.
+- **Bot:** a "View on website" link button (`discord_ui.site_url` / `site_button`): finished queue results (the
+  queue's page; `queue_result_view` returns the shared view otherwise), `/profile` (player page, when the site's own
+  `player_slugs` rule gives one), `/leaderboard_season` (same month and stat) and `/hall_of_fame`. Home server only,
+  and only with an https `WEB_PUBLIC_ORIGIN`. This sends players to the site, against PRODUCT.md principle 3 as
+  worded ("avoid sending players to the site"); its wording is still the user's open decision.
+- **Site:** glass header with search (`/search`, `/search.json`, `web_queries.player_directory` / `find_queue_ids`,
+  directory cached 60 s on `Site.directory`), home page led by the newest queue as a band plus Hall of Fame plaques,
+  `boot.js` + `tesseract.webp` loading screen (first page of a tab session only), hover lifts, nav lozenge view
+  transition. Rules in `design-system/pages/web.md` (Header, Glass, Search, Home, Loading screen, Motion).
+- **Verified:** 624 tests pass (new `tests/test_web_refresh.py`, 20 tests); `git diff --check` clean; local preview
+  on a DB copy in Chrome at 1280 and 390 wide: no console errors, no sideways scroll, loader skipped with reduced
+  motion and without JS and on the second page, no-JS search jumps to an exact queue.
+- **Follow-up (2026-11-28, user):** the header became a left sidebar from 64rem up (logo, search, stacked links
+  with icons; page beside it up to 96rem), a two-row top bar below that. The home heading is "SMH stats" in place
+  of "C-TierBot" and the lede; the loader lost its caption. 624 tests pass; checked in Chrome at 1920, 1280, 900
+  and 390 wide (no console errors, no sideways scroll, tab order logo, search, links).
+- **Follow-up 2 (2026-11-28, user):** sidebar links animate on hover (label slides right, each icon plays once);
+  dates, durations and games counts are hidden until hover, with a remembered "Detailed" checkbox at the bottom
+  of the sidebar to show them all (`.detail`, `html.detailed`, web.md "Compact by default").
+- **QOL pass (2026-11-28, user: "do all", plus Codex's opinion):** the eight items in web.md "QOL pass". Codex
+  (GPT-6.2 Astra, high, read-only, brief in the scratchpad) agreed with all eight and found real issues, fixed
+  here: instant search could open the previous query's result on Enter; the skip link sat under the header and the
+  game breakdown could land under the tablet top bar; the Hall of Fame game record opened the wrong game; the
+  footer overstated where names come from. Not taken, for the user to decide: showing "Team N won" in words on
+  every queue row (web.md chose score + tinted teams there) and hiding the chart's point buttons without JS.
+  631 tests pass (`tests/test_web_refresh.py` 27).
+- **Not done:** no Codex inspection of the built code (Codex gave a design opinion only). The bot buttons were not
+  tried in Discord before the deploy; the rollout checks are recorded in the next update of this section.
+
 ### Git history scrub (2026-11-26, Claude Code, at the user's request)
 
 - The user asked to "completely remove github history with any references" to their personal domain or the VPS. Only a few `main` commits carried them, in two MEMORY.md lines. They were replayed with git plumbing (same authors, dates and messages; only those two lines changed) and force-pushed with a lease: `main` is now `d73dc97`. Pre-scrub hashes are deliberately not recorded here (private myVPS inventory only). Older commits, `philipp`, `review-follow-ups` and PR refs #1-17 kept their hashes; a fresh mirror clone has none of the values in any commit or message. Coolify auto-deployed the new `main` (same code; MEMORY.md isn't in the image).
@@ -293,7 +326,7 @@ The following decisions were explicitly requested or approved by the user across
 - **Production setup (2026-11-27, at the user's request; inert until this branch deploys, details in the private myVPS inventory):** Coolify app domain `https://ctier.cooly.dev`, exposed port 8080, env vars `WEB_PORT=8080`, `WEB_PUBLIC_ORIGIN`, `QUEUE_STATS_LOG_DIR=/app/data/log`, `QUEUE_RESULT_RETENTION_DAYS=0`; Cloudflare proxied record and Cache Rules (`/admin` bypass). The code on `main` ignores these, so nothing changed for the bot.
 - **Panel password:** set by the user on 2026-11-27 with the myVPS script; `WEB_ADMIN_PASSWORD_HASH` and `WEB_SESSION_SECRET` are in Coolify (production and preview scopes, checked by name only).
 - **Security review decisions (2026-11-27):** SEC-04 approved and built (r16: one survev.de account per Discord user, decision 19; the backfill's part of SEC-03 came with it). SEC-05 declined: leaderboards show everyone (decision 20). **Still awaiting the user's decision (existing bot code, not approved for building):** OAuth POSTs follow redirects with the client secret in the body (SEC-01); full-token backups (SEC-02) and the backup script importing `db` (SEC-16); `/setup`/`/unsetup` rely on Discord's default permission only (SEC-06); stats messages without `allowed_mentions` and unescaped names (SEC-07); verification URL and error text from survev.de used unchecked (SEC-08); no response-size, page or whole-lookup limits on outbound HTTP (SEC-09); no per-user limits on expensive lookups (SEC-10); container runs as root, unpinned base image, unhashed pins (SEC-17). Full text in the review log (scratchpad) and summarised to the user.
-- **Deploy (2026-11-27):** the whole `web-platform` branch was committed as one commit, fast-forwarded onto `main` and pushed (Coolify auto-deploys `main`; the production env vars were already set, so the site and panel go live with it). The post-deploy checks of plan section 10, the Uptime Kuma monitor on `/healthz` and the first panel `sql` (the real Linux limits check) follow the deploy; their results are recorded in the next update of this section. `PRODUCT.md` principle 3 wording (site as an archive) still needs the user's wording.
+- **Deploy (2026-11-27):** the whole `web-platform` branch was committed as one commit, fast-forwarded onto `main` and pushed (Coolify auto-deploys `main`; the production env vars were already set, so the site and panel go live with it). **Live since 2026-11-27 21:02 UTC** (`167e588`, Coolify deployment `hwpcovxwxnihiptsu0d138qs`, restarts 0; bot logged in, website and panel on). Checked from outside: home 200 + `noindex`, second hit a Cloudflare `HIT`; `/healthz` `ok` (`BYPASS`); `/admin/` 303 to the login with `no-store` (`DYNAMIC`); 16 public pages 200 (one player page answered a single 503 just after start-up, the by-design busy reply while the bot writes, then 200); no protected value in any page; Chrome desktop and phone without script errors or sideways scrolling; certificates and DNS as planned (edge `*.cooly.dev`/`cooly.dev`, origin `ctier.cooly.dev` only, Cloudflare addresses only). In the container: the panel `sql` worker on the live DB (token unreadable) with its Linux limits in force (CPU 4 s, 1 GiB, 256 MB files, 64 open files); `users_slug_unique` created at start-up, no link removed. Uptime Kuma watches `/healthz` (keyword `ok`, 60 s, Discord alert; added 2026-11-27, first heartbeat UP). **Still to do:** the operator's own panel login/logout check (needs the password), the phone and motion look-over by eye. This section's update is uncommitted (a push to `main` redeploys). `PRODUCT.md` principle 3 wording (site as an archive) still needs the user's wording.
 - **Local-only files:** `.impeccable/review/` screenshots contain real player names and are git-ignored; `.impeccable/surfaces/` holds the design brief.
 
 ### Web platform plan (2026-11-26, Claude Code; plan only, nothing built)

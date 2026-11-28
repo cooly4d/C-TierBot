@@ -1,14 +1,40 @@
 {% extends "base.html" %}
-{% from "macros.html" import queue_row, board, player_name %}
+{% from "macros.html" import queue_row, board, plaques %}
+{% block title %}SMH stats{% endblock %}
 {% block main %}
-<h1 class="page-title">C-TierBot</h1>
-<p class="lede">Results and stats from the community's 4v4 NeatQueue scrims.</p>
+<h1 class="page-title">SMH stats</h1>
+
+{% if featured %}
+{# The newest queue as the result card's header band: the number links to it (the whole band is the target), the
+   score's digits count up once, and the winners' roster wash sweeps in after (site.js). #}
+<section class="featured" aria-labelledby="featured-h" data-featured>
+  <div class="featured-copy">
+    <h2 id="featured-h" class="featured-title"><a class="featured-link" href="/queues/{{ featured.match_id }}">Queue #{{ featured.match_id }}</a></h2>
+    <p class="featured-result state-{{ featured.result_state }}">{{ featured.result_text }}</p>
+    <p class="featured-meta">Latest result<span class="detail"> · {{ featured.date_ms | when }}{% if featured.date_is_saved %} (saved){% endif %}{% if featured.duration_ms %} · {{ featured.duration_ms | fmt_duration }}{% endif %}</span></p>
+  </div>
+  <p class="featured-score">
+    <span class="sr-only">{{ featured.score_label }}</span>
+    {% if featured.score_parts %}<span aria-hidden="true">{% for part in featured.score_parts %}<span class="digit state-{{ part.state }}" data-count-digit="{{ part.value }}">{{ part.value }}</span>{% if not loop.last %}<span class="score-sep"> - </span>{% endif %}{% endfor %}</span>{% endif %}
+  </p>
+  <ul class="featured-teams">
+    {% for team in featured.rosters %}
+    <li class="f-team{% if featured.winner is not none %} f-team-{{ 'win' if loop.index0 == featured.winner else 'lose' }}{% endif %}">
+      <span class="f-team-label">Team {{ loop.index }}{% if featured.winner is not none %}<span class="sr-only">{{ ', won' if loop.index0 == featured.winner else ', lost' }}</span>{% endif %}</span>
+      <span class="f-team-names">{% for p in team %}<span class="f-name">{{ p.name }}</span>{% endfor %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  <span class="featured-go" aria-hidden="true">Open <svg class="chev" viewBox="0 0 16 16" focusable="false"><path d="M6 3l5 5-5 5"/></svg></span>
+</section>
+{% endif %}
 
 <div class="home-grid">
   <section class="panel" aria-labelledby="latest-h">
-    <div class="panel-head"><h2 id="latest-h">Latest queues</h2><a class="more" href="/queues">All queues</a></div>
+    <div class="panel-head"><h2 id="latest-h">Recent queues</h2><a class="more" href="/queues">All queues</a></div>
     {% if latest %}
     <ul class="q-list">{% for item in latest %}{{ queue_row(item) }}{% endfor %}</ul>
+    {% elif featured %}<p class="muted">No other saved queues yet.</p>
     {% else %}<p class="muted">No saved queues yet.</p>{% endif %}
   </section>
 
@@ -20,16 +46,6 @@
 
 <section class="panel" aria-labelledby="hof-h">
   <div class="panel-head"><h2 id="hof-h">Hall of Fame</h2><a class="more" href="/hall-of-fame">Records</a></div>
-  <ul class="records">
-  {% for r in records %}
-    <li class="record">
-      <span class="record-label">{{ r.label }}</span>
-      {% if r.empty %}<span class="muted">No record yet</span>{% else %}
-      <span class="record-value">{{ r.value }}</span>
-      <span class="record-who">{% if r.holder %}{{ player_name(r.holder) }}{% endif %}{% if r.holder and r.where %} · {% endif %}{% if r.where %}{% if r.match_id %}<a href="/queues/{{ r.match_id }}">{{ r.where }}</a>{% else %}{{ r.where }}{% endif %}{% endif %}</span>
-      {% endif %}
-    </li>
-  {% endfor %}
-  </ul>
+  {{ plaques(records) }}
 </section>
 {% endblock %}

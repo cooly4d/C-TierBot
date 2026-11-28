@@ -2,13 +2,22 @@
 {% from "macros.html" import series_panel, game_panel, unlinked_icon %}
 {% block title %}Queue {{ title }} · C-TierBot{% endblock %}
 {% block main %}
-<p class="crumbs"><a href="/queues">Queues</a> / {{ title }}</p>
+<div class="page-bar">
+  <p class="crumbs"><a href="/queues">Queues</a> / {{ title }}</p>
+  {% if older or newer %}
+  <nav class="queue-pager" aria-label="Next and previous queues" data-queue-pager>
+    {% if older %}<a class="pill" href="/queues/{{ older }}" rel="prev" aria-label="Previous queue, #{{ older }}"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 5 8l5 5"/></svg>#{{ older }}</a>{% endif %}
+    {% if newer %}<a class="pill" href="/queues/{{ newer }}" rel="next" aria-label="Next queue, #{{ newer }}">#{{ newer }}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3l5 5-5 5"/></svg></a>{% endif %}
+  </nav>
+  {% endif %}
+  <button type="button" class="copy-link" hidden data-copy><svg class="copy-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8.6 11.4a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M11.4 8.6a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l1-1"/></svg><span data-copy-label>Copy link</span></button>
+</div>
 
 <section class="series" aria-label="Series result">
   <div class="series-left">
     <h1 class="series-title">{{ title }}</h1>
     <p class="series-result state-{{ result_state }}">{{ result_text }}</p>
-    <p class="series-meta">{{ queue.date_ms | fmt_date }}{% if queue.date_is_saved %} (saved){% endif %}{% if queue.total_games %} · {{ queue.total_games }} game{% if queue.total_games != 1 %}s{% endif %}{% endif %}{% if queue.duration_ms %} · {{ queue.duration_ms | fmt_duration }}{% endif %}</p>
+    <p class="series-meta">{{ queue.date_ms | when }}{% if queue.date_is_saved %} (saved){% endif %}{% if queue.total_games %} · {{ queue.total_games }} game{% if queue.total_games != 1 %}s{% endif %}{% endif %}{% if queue.duration_ms %} · {{ queue.duration_ms | fmt_duration }}{% endif %}</p>
   </div>
   <p class="series-score">
     <span class="sr-only">{{ score_label }}</span>
@@ -35,11 +44,13 @@
 </div>
 
 {% if has_partial or has_guest or has_combined %}
-<p class="legend">
-  {% if has_partial %}<span><span class="partial">{{ example_partial }}</span> = played {{ example_partial.split('/')[0] }} of {{ example_partial.split('/')[1] }} games</span>{% endif %}
+{# What the marks in the tables mean. Compact: a small disclosure (touch screens can't hover the marks); Detailed:
+   the notes in full. #}
+{% set notes %}  {% if has_partial %}<span><span class="partial">{{ example_partial }}</span> = played {{ example_partial.split('/')[0] }} of {{ example_partial.split('/')[1] }} games</span>{% endif %}
   {% if has_guest %}<span class="legend-item">{{ unlinked_icon() }}Unlinked: /verify in Discord to join the leaderboards</span>{% endif %}
-  {% if has_combined %}<span><span class="combined">*</span> Logged-out players are matched by name from game to game, so same-name players may be combined.</span>{% endif %}
-</p>
+  {% if has_combined %}<span><span class="combined">*</span> Logged-out players are matched by name from game to game, so same-name players may be combined.</span>{% endif %}{% endset %}
+<details class="notes compact-only"><summary>Notes on these stats</summary><p class="legend">{{ notes }}</p></details>
+<p class="legend detail-block">{{ notes }}</p>
 {% endif %}
 
 <section class="games" id="games" aria-labelledby="games-h">

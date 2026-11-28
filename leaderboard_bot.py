@@ -55,6 +55,8 @@ from discord_ui import (
     build_profile_message,
     build_seasonal_leaderboard_message,
     get_queue_result_view,
+    hall_of_fame_view,
+    queue_result_view,
     parse_game_page_id,
     parse_history_metric_id,
     parse_hof_reset_id,
@@ -300,7 +302,7 @@ async def queue_stats(interaction: discord.Interaction, match_id: str):
         return
 
     await interaction.followup.send(
-        content=content, file=file, view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
+        content=content, file=file, view=queue_result_view(interaction.guild_id, match_id, bool(match_result.get("is_final"))),
     )
 
 
@@ -325,7 +327,8 @@ async def profile(interaction: discord.Interaction, member: discord.User | None 
 async def hall_of_fame(interaction: discord.Interaction):
     await interaction.response.defer()
     embed = await build_hall_of_fame_embed()
-    await interaction.followup.send(embed=embed)
+    view = hall_of_fame_view(interaction.guild_id)
+    await interaction.followup.send(embed=embed, **({"view": view} if view else {}))  # send rejects view=None
 
 
 async def _is_bot_owner(user: discord.abc.User) -> bool:
@@ -561,7 +564,7 @@ async def post_queue_result(message: discord.Message, match_id: str):
             # Every try failed for a temporary reason: let a later NeatQueue edit of this result try again.
             release_match_processed(message.guild.id, match_id)
     else:
-        view = get_queue_result_view(include_breakdown=bool(match_result.get("is_final")))
+        view = queue_result_view(message.guild.id, match_id, bool(match_result.get("is_final")))
         await message.reply(content=content, file=file, view=view)
 
     # Mark this guild caught up so a later restart doesn't re-post this match during backfill.
@@ -584,7 +587,7 @@ async def _send_queue_stats_reply(message: discord.Message, match_id: str, *, tr
             else:
                 await message.reply(
                     content=content, file=file,
-                    view=get_queue_result_view(include_breakdown=bool(match_result.get("is_final"))),
+                    view=queue_result_view(message.guild.id, match_id, bool(match_result.get("is_final"))),
                     **reply_options,
                 )
         return True
@@ -791,7 +794,7 @@ async def backfill_missed_queue_results():
             )
             if error_text:
                 continue  # nothing worth posting (e.g. no verified players), skip silently on catch-up
-            view = get_queue_result_view(include_breakdown=bool(match_result.get("is_final")))
+            view = queue_result_view(guild_id, match_id, bool(match_result.get("is_final")))
             await channel.send(content=f"*(Catching up)* {content}", file=file, view=view)
 
         update_guild_last_updated(guild_id, datetime.now(timezone.utc).isoformat())

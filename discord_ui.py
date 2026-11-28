@@ -6,10 +6,16 @@ Note: the actual click/select dispatch lives in `log_interaction` (leaderboard_b
 these views' own callbacks are no-ops. Paged views carry their state (whose data, which page or filter) in
 each component's custom_id, so their buttons keep working after a restart.
 """
+import asyncio
+import sqlite3
+from contextlib import closing
+from urllib.parse import quote
+
 import discord
 
-from bot_config import LEADERBOARD_SORT_CONFIG
-from db import get_user_token
+from bot_config import HOME_GUILD_ID, LEADERBOARD_SORT_CONFIG, WEB_PUBLIC_ORIGIN
+from db import DB_PATH, get_user_token
+from web_names import public_queue_id, safe_slug
 from image_utils import (
     INVENTORY_RARITY_FILTERS,
     normalize_history_metric,
@@ -38,6 +44,51 @@ from queue_stats_service import (
 )
 
 MARKET_MODES = ("daily", "weekly", "all")
+
+# --- Links to the website --------------------------------------------------------------------------------------
+# Replies about the home server get a "View on website" button that opens the same thing on the site. Link buttons
+# open in the browser, so nothing is dispatched to the bot, and they work in persistent views too.
+SITE_BUTTON_LABEL = "View on website"
+
+
+def site_url(guild_id: int | None, path: str) -> str | None:
+    """The site's address for `path`, or None outside the home server (the site shows only that one) or when no
+    public https origin is set."""
+    if guild_id != HOME_GUILD_ID or not WEB_PUBLIC_ORIGIN.startswith("https://"):
+        return None
+    return WEB_PUBLIC_ORIGIN + path
+
+
+def site_button(url: str, row: int | None = None) -> discord.ui.Button:
+    return discord.ui.Button(style=discord.ButtonStyle.link, label=SITE_BUTTON_LABEL, url=url, row=row)
+
+
+def _player_slug(guild_id: int, discord_id: int) -> str | None:
+    import web_queries  # the site's own rule for who has a page
+    try:
+        with closing(sqlite3.connect(DB_PATH, timeout=2)) as conn:
+            slug = web_queries.player_slugs(conn, guild_id, [discord_id]).get(discord_id)
+    except sqlite3.Error:
+        return None
+    return slug if safe_slug(slug) else None
+
+
+async def player_page_url(guild_id: int | None, discord_id: int) -> str | None:
+    """The player's page on the site, when they have one (linked, with queues saved in the home server)."""
+    if site_url(guild_id, "/") is None:
+        return None
+    slug = await asyncio.to_thread(_player_slug, guild_id, discord_id)
+    return site_url(guild_id, f"/players/{quote(slug)}") if slug else None
+
+
+def hall_of_fame_view(guild_id: int | None) -> discord.ui.View | None:
+    """/hall_of_fame's only component: the link to the site's records page, in the home server."""
+    url = site_url(guild_id, "/hall-of-fame")
+    if url is None:
+        return None
+    view = discord.ui.View(timeout=None)
+    view.add_item(site_button(url))
+    return view
 # custom_ids used by /inventory and /market messages sent before paging state moved into the custom_id.
 LEGACY_PAGINATION_IDS = {
     "inventory_prev": "/inventory", "inventory_next": "/inventory", "inventory_rarity": "/inventory",
@@ -126,7 +177,7 @@ class LeaderboardView(discord.ui.View):
 
 class SeasonalLeaderboardView(discord.ui.View):
     """Stat picker plus Prev/Next paging for /leaderboard_season; clicks are handled in log_interaction."""
-    def __init__(self, month: str, page: int, total_pages: int, stat: str = "damage"):
+    def __init__(self, month: str, page: int, total_pages: int, stat: str = "damage", site: str | None = None):
         super().__init__(timeout=None)
         stat = normalize_season_stat(stat)
         # custom_ids carry the month, stat and target page, so the controls keep working after a restart.
@@ -154,6 +205,8 @@ class SeasonalLeaderboardView(discord.ui.View):
             custom_id=f"season_stat:{month}",
             row=1,
         ))
+        if site:
+            self.add_item(site_button(site, row=0))
 
 
 def parse_season_page_id(custom_id: str) -> tuple[str, str, int]:
@@ -169,7 +222,8 @@ def parse_season_page_id(custom_id: str) -> tuple[str, str, int]:
 async def build_seasonal_leaderboard_message(guild_id: int, month: str | None = None, page: int = 0, stat: str = "damage"):
     """Returns (embed, view) for one page of a month's leaderboard ranked by `stat`."""
     embed, month_key, page, total_pages = await build_seasonal_leaderboard_payload(guild_id, month, page, stat)
-    return embed, SeasonalLeaderboardView(month_key, page, total_pages, stat)
+    site = site_url(guild_id, f"/leaderboard?month={month_key}&stat={normalize_season_stat(stat)}")
+    return embed, SeasonalLeaderboardView(month_key, page, total_pages, stat, site)
 
 
 async def refresh_seasonal_leaderboard_message(interaction: discord.Interaction, month: str, page: int, stat: str = "damage"):
@@ -207,6 +261,18 @@ def get_queue_result_view(include_breakdown: bool = False):
     if include_breakdown not in _queue_result_views:
         _queue_result_views[include_breakdown] = QueueResultView(include_breakdown)
     return _queue_result_views[include_breakdown]
+
+
+def queue_result_view(guild_id: int | None, match_id, is_final: bool):
+    """The view under a queue result: the shared one, plus a link to the queue's page for a finished queue in the
+    home server (its page exists once the result is saved, which happens before the reply is sent)."""
+    queue_id = public_queue_id(match_id)
+    url = site_url(guild_id, f"/queues/{queue_id}") if is_final and queue_id else None
+    if url is None:
+        return get_queue_result_view(include_breakdown=is_final)
+    view = QueueResultView(include_breakdown=is_final)
+    view.add_item(site_button(url))
+    return view
 
 
 class QueueGamesPagerView(discord.ui.View):
@@ -524,7 +590,8 @@ class ProfileView(discord.ui.View):
     """/profile's Overview / History buttons, plus Damage / Impact / Kills on the History view to switch its trend
     chart. Every custom_id carries the server and player, so the buttons keep working after a restart. The metric ids
     ("history_metric:{metric}:{guild_id}:{discord_id}") predate the merge, so buttons on old /history messages work too."""
-    def __init__(self, guild_id: int, discord_id: int, tab: str = "overview", metric: str = "damage"):
+    def __init__(self, guild_id: int, discord_id: int, tab: str = "overview", metric: str = "damage",
+                 site: str | None = None):
         super().__init__(timeout=None)
         self.tab = tab if tab in PROFILE_TABS else "overview"
         self.active_metric = normalize_history_metric(metric)
@@ -535,6 +602,8 @@ class ProfileView(discord.ui.View):
                 custom_id=f"profile_tab:{key}:{guild_id}:{discord_id}",
                 row=0,
             ))
+        if site:
+            self.add_item(site_button(site, row=0))
         if self.tab == "history":
             for key, label in (("damage", "Damage"), ("impact", "Impact"), ("kills", "Kills")):
                 self.add_item(discord.ui.Button(
@@ -565,13 +634,16 @@ async def build_profile_message(target: discord.abc.User, guild_id: int | None, 
         embed, file, metric, message = await build_profile_history(target, guild_id, metric, viewer_id=viewer_id)
         if message:
             return None, None, None, message
-        return embed, file, ProfileView(guild_id, target.id, "history", metric), None
+        site = await player_page_url(guild_id, target.id)
+        return embed, file, ProfileView(guild_id, target.id, "history", metric, site), None
 
     embed, has_history, message = await build_profile_overview(target, get_user_token(target.id), guild_id,
                                                                viewer_id=viewer_id)
     if message:
         return None, None, None, message
-    view = ProfileView(guild_id, target.id, "overview") if has_history else None
+    view = None
+    if has_history:
+        view = ProfileView(guild_id, target.id, "overview", site=await player_page_url(guild_id, target.id))
     return embed, None, view, None
 
 

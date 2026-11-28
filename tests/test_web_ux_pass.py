@@ -112,7 +112,7 @@ class PageTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_each_queue_row_and_board_row_has_exactly_one_link(self):
         body = await (await self.client.get("/")).text()
-        rows = re.findall(r'<li class="q-row">(.*?)</li>', body, re.S)
+        rows = re.findall(r'<li class="q-row"[^>]*>(.*?)</li>', body, re.S)
         self.assertTrue(rows)
         self.assertTrue(all(len(re.findall(r"<a ", row)) == 1 for row in rows))
         board = await (await self.client.get("/leaderboard")).text()

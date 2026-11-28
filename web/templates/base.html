@@ -9,20 +9,46 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="stylesheet" href="/tokens.css?v={{ v }}">
 <link rel="stylesheet" href="/static/site.css?v={{ v }}">
+{# Decides before the first paint whether this is the session's first page (the loading screen); see boot.js. #}
+<script src="/static/boot.js?v={{ v }}"></script>
 {% block head %}{% endblock %}
 <script type="module" src="/static/site.js?v={{ v }}"></script>
 </head>
 <body>
+<div class="loader" aria-hidden="true"><div class="loader-art"></div><span class="loader-bar"></span></div>
 <a class="skip" href="#main">Skip to content</a>
 <header class="site-header">
-  <nav class="site-nav" aria-label="Main">
+  <div class="bar" data-bar>
     <a class="brand" href="/"><img class="brand-mark" src="/static/logo-96.webp" alt="" width="32" height="32">C-TierBot</a>
-    <ul class="nav-links">
-      <li><a href="/queues"{% if nav == "queues" %} aria-current="page"{% endif %}>Queues</a></li>
-      <li><a href="/leaderboard"{% if nav == "leaderboard" %} aria-current="page"{% endif %}>Leaderboard</a></li>
-      <li><a href="/hall-of-fame"{% if nav == "hof" %} aria-current="page"{% endif %}>Hall of Fame</a></li>
-    </ul>
-  </nav>
+    <form class="search" role="search" action="/search" method="get" data-search>
+      <label class="sr-only" for="site-q">Search players or queue numbers</label>
+      <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>
+      <input id="site-q" class="search-input" name="q" type="search" placeholder="Player or queue #" autocomplete="off" spellcheck="false" maxlength="40" enterkeyhint="search" data-search-input>
+      <kbd class="search-key" aria-hidden="true" data-search-key>/</kbd>
+      <div class="search-pop" hidden data-search-pop>
+        <ul class="search-list" id="search-list" role="listbox" aria-label="Search results" data-search-list></ul>
+        <p class="search-note" data-search-note></p>
+      </div>
+      <p class="sr-only" aria-live="polite" data-search-live></p>
+    </form>
+    <nav class="site-nav" aria-label="Main">
+      <ul class="nav-links">
+        {# One 20px icon per page, drawn in the same 1.75 stroke: queue rows, ranked bars, a trophy. Each stroke is
+           its own path so hovering can animate them one after another (site.css). #}
+        {% set icons = {
+          "queues": '<path class="i-1" d="M4 5.5h12"/><path class="i-2" d="M4 10h12"/><path class="i-3" d="M4 14.5h7"/>',
+          "leaderboard": '<path class="i-1" d="M5 16.5V10"/><path class="i-2" d="M10 16.5V4.5"/><path class="i-3" d="M15 16.5v-4"/>',
+          "hof": '<g class="i-cup"><path d="M6.5 3.5h7V8a3.5 3.5 0 0 1-7 0V3.5ZM10 11.5v3M7 16.5h6M6.5 5H4.5a2.5 2.5 0 0 0 2.6 3.2M13.5 5h2a2.5 2.5 0 0 1-2.6 3.2"/></g>',
+        } %}
+        {% for key, href, label in [("queues", "/queues", "Queues"), ("leaderboard", "/leaderboard", "Leaderboard"), ("hof", "/hall-of-fame", "Hall of Fame")] %}
+        <li><a href="{{ href }}"{% if nav == key %} aria-current="page"{% endif %}>{% if nav == key %}<span class="nav-ind" aria-hidden="true"></span>{% endif %}<svg class="nav-icon ico-{{ key }}" viewBox="0 0 20 20" aria-hidden="true" focusable="false">{{ icons[key] | safe }}</svg><span class="nav-label">{{ label }}</span></a></li>
+        {% endfor %}
+      </ul>
+    </nav>
+    {# Shows every row's dates, durations and games played at once; remembered by boot.js and site.js, and works
+       on its own page without JavaScript (site.css reads :checked). #}
+    <label class="detail-toggle"><input type="checkbox" id="detail-toggle" data-detail-toggle>Detailed</label>
+  </div>
 </header>
 <main id="main" class="page">
 {% block main %}{% endblock %}
@@ -30,7 +56,7 @@
 <footer class="site-footer">
   <div class="footer-inner">
     <p>Stats from survev.de and NeatQueue. Not affiliated with either.</p>
-    <p class="footer-note">Names are each player's current display name in the community's Discord server.</p>
+    <p class="footer-note">Linked players show their Discord display name when the bot can see it. Other names come from saved queue results.</p>
   </div>
 </footer>
 </body>

@@ -4,15 +4,19 @@
 {% block head %}<link rel="stylesheet" href="/static/leaderboard.css?v={{ v }}">{% endblock %}
 {% block main %}
 <div class="board-head">
-  {% if prev %}<a class="month-nav" href="/leaderboard?month={{ prev }}&amp;stat={{ stat }}" rel="prev"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 5 8l5 5"/></svg>{{ prev_label }}</a>{% else %}<span class="month-nav" aria-hidden="true"></span>{% endif %}
   <h1 class="page-title">{{ month_label }} leaderboard</h1>
-  {% if next %}<a class="month-nav" href="/leaderboard?month={{ next }}&amp;stat={{ stat }}" rel="next">{{ next_label }}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3l5 5-5 5"/></svg></a>{% else %}<span class="month-nav" aria-hidden="true"></span>{% endif %}
+  {% if prev or next %}
+  <nav class="month-pager" aria-label="Months">
+    {% if prev %}<a class="pill" href="/leaderboard?month={{ prev }}&amp;stat={{ stat }}" rel="prev"><svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 3 5 8l5 5"/></svg>{{ prev_label }}</a>{% endif %}
+    {% if next %}<a class="pill" href="/leaderboard?month={{ next }}&amp;stat={{ stat }}" rel="next">{{ next_label }}<svg class="chev" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6 3l5 5-5 5"/></svg></a>{% endif %}
+  </nav>
+  {% endif %}
 </div>
 <nav class="segmented" aria-label="Rank by">
   {% for s in stats %}<a href="/leaderboard?month={{ month_key }}&amp;stat={{ s.key }}"{% if s.current %} aria-current="true"{% endif %}>{{ s.label }}</a>{% endfor %}
 </nav>
 <section class="panel board-panel" aria-label="{{ month_label }} leaderboard by {{ stat_label | lower }}">
-  <div data-board data-format="{{ stat }}">{{ board(rows, stat_label | lower) }}</div>
+  <div data-board data-format="{{ stat }}">{{ board(rows, stat_label | lower, games_hidden=False) }}</div>
 </section>
 <p class="muted small">Linked players with queues this month, weighted by games played. Same ranking as /leaderboard_season in Discord.</p>
 {% endblock %}

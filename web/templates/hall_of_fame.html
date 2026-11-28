@@ -1,20 +1,10 @@
 {% extends "base.html" %}
-{% from "macros.html" import player_name %}
+{% from "macros.html" import plaques %}
 {% block title %}Hall of Fame · C-TierBot{% endblock %}
 {% block main %}
 <h1 class="page-title">Hall of Fame</h1>
 <p class="lede">The best single-queue numbers set in this server.</p>
-<section class="panel">
-  <ul class="records records-large">
-  {% for r in records %}
-    <li class="record">
-      <span class="record-label">{{ r.label }}</span>
-      {% if r.empty %}<span class="muted">No record yet</span>{% else %}
-      <span class="record-value accent">{{ r.value }}</span>
-      <span class="record-who">{% if r.holder %}{{ player_name(r.holder) }}{% endif %}{% if r.holder and r.where %} · {% endif %}{% if r.where %}{% if r.match_id %}<a href="/queues/{{ r.match_id }}">{{ r.where }}</a>{% else %}{{ r.where }}{% endif %}{% endif %}</span>
-      {% endif %}
-    </li>
-  {% endfor %}
-  </ul>
+<section class="panel" aria-label="Records">
+  {{ plaques(records, large=True) }}
 </section>
 {% endblock %}

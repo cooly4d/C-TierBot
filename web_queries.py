@@ -610,6 +610,69 @@ def _enrich_from_snapshot(item: dict, snapshot: dict, discord_id: int):
         item["impact"] = sum(impacts) / len(impacts)
 
 
+# --- Search -------------------------------------------------------------------------------------------------------
+
+def player_directory(conn, guild_id: int) -> list[dict]:
+    """Every linked player who has a page: [{"discord_id", "slug", "stored_name", "queues"}], most queues first.
+    The same people the site already links (player_slugs), so search never reveals anyone the pages don't."""
+    counts = {discord_id: n for discord_id, n in conn.execute(
+        "SELECT discord_id, COUNT(DISTINCT match_id) FROM player_queue_stats "
+        "WHERE guild_id = ? AND discord_id IS NOT NULL GROUP BY discord_id",
+        (guild_id,),
+    )}
+    checkpoint()
+    slugs = player_slugs(conn, guild_id, counts)
+    checkpoint()
+    names = stored_names(conn, guild_id, slugs)
+    out = [{"discord_id": discord_id, "slug": slug, "stored_name": names.get(discord_id), "queues": counts[discord_id]}
+           for discord_id, slug in slugs.items()]
+    out.sort(key=lambda p: (-p["queues"], p["slug"].casefold()))
+    return out
+
+
+def find_queue_ids(conn, guild_id: int, prefix: str, limit: int) -> list[str]:
+    """Saved finished queues whose number starts with `prefix` (digits only): the exact number first, then newest
+    (highest number) first."""
+    if not prefix.isascii() or not prefix.isdigit() or len(prefix) > 10:
+        return []
+    rows = conn.execute(
+        """
+        WITH ids AS (
+            SELECT match_id FROM player_queue_stats WHERE guild_id = ? AND {public}
+            UNION SELECT match_id FROM queue_results WHERE guild_id = ? AND {public}
+        )
+        SELECT match_id FROM ids WHERE substr(match_id, 1, ?) = ?
+        ORDER BY match_id = ? DESC, length(match_id) DESC, match_id DESC
+        LIMIT ?
+        """.format(public=PUBLIC_ID_SQL),
+        (guild_id, guild_id, len(prefix), prefix, prefix, limit),
+    ).fetchall()
+    return [mid for mid in (public_queue_id(r[0]) for r in rows) if mid is not None]
+
+
+def neighbour_queue_ids(conn, guild_id: int, match_id: str) -> tuple[str | None, str | None]:
+    """(older, newer): the saved finished queues with the nearest lower and higher numbers, for a queue page's
+    previous / next links."""
+    if not str(match_id).isascii() or not str(match_id).isdigit():
+        return None, None
+    number = int(match_id)
+    found = []
+    for compare, order in (("<", "DESC"), (">", "ASC")):
+        row = conn.execute(
+            """
+            WITH ids AS (
+                SELECT match_id FROM player_queue_stats WHERE guild_id = ? AND {public}
+                UNION SELECT match_id FROM queue_results WHERE guild_id = ? AND {public}
+            )
+            SELECT match_id FROM ids WHERE CAST(match_id AS INTEGER) {compare} ?
+            ORDER BY CAST(match_id AS INTEGER) {order} LIMIT 1
+            """.format(public=PUBLIC_ID_SQL, compare=compare, order=order),
+            (guild_id, guild_id, number),
+        ).fetchone()
+        found.append(public_queue_id(row[0]) if row else None)
+    return found[0], found[1]
+
+
 # --- Hall of Fame -------------------------------------------------------------------------------------------------
 
 def queue_exists(conn, guild_id: int, match_id) -> bool:
@@ -641,6 +704,14 @@ def get_hall_of_fame(conn, guild_id: int) -> dict:
     for rec in out.values():
         checkpoint()
         rec["has_page"] = queue_exists(conn, guild_id, rec["match_id"])
+        # The record's game, when the queue's saved breakdown still has it (the queue page opens it directly).
+        rec["game_link"] = None
+        game = rec["game_number"]
+        if rec["has_page"] and isinstance(game, int) and not isinstance(game, bool) and game > 0:
+            snapshot = _queue_snapshot(conn, guild_id, rec["match_id"])[0]
+            games = (snapshot or {}).get("games") if isinstance(snapshot, dict) else None
+            if isinstance(games, list) and game <= len(games):
+                rec["game_link"] = game
     return out
 
 

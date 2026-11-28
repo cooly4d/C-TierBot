@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% from "macros.html" import queue_row %}
+{% block title %}{% if query %}{{ query }} · {% endif %}Search · C-TierBot{% endblock %}
+{% block main %}
+<h1 class="page-title">Search</h1>
+<form class="search-page" action="/search" method="get" role="search">
+  <label for="page-q">Player name or queue number</label>
+  <div class="search-page-row">
+    <input id="page-q" name="q" type="search" value="{{ query }}" maxlength="40" autocomplete="off" spellcheck="false" enterkeyhint="search">
+    <button class="button" type="submit">Search</button>
+  </div>
+</form>
+{% if query %}
+<section class="panel" aria-labelledby="players-h">
+  <h2 id="players-h" class="panel-title">Players</h2>
+  {% if players %}
+  <ul class="result-list">
+    {% for p in players %}<li class="result-row"><span><a class="player" href="{{ p.url }}">{{ p.name }}</a>{% if p.via %}<span class="result-via">survev.de: {{ p.via }}</span>{% endif %}</span><span class="muted">{{ p.queues | fmt_int }} queue{% if p.queues != 1 %}s{% endif %}</span></li>{% endfor %}
+  </ul>
+  {% else %}<p class="muted">No linked player's name contains "{{ query }}".</p>{% endif %}
+</section>
+{% if queues %}
+<section class="panel" aria-labelledby="queues-h">
+  <h2 id="queues-h" class="panel-title">Queues</h2>
+  <ul class="q-list">{% for item in queues %}{{ queue_row(item) }}{% endfor %}</ul>
+</section>
+{% endif %}
+{% else %}
+<p class="muted">Type part of a player's name, or a queue number such as 4821.</p>
+{% endif %}
+{% endblock %}

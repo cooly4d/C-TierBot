@@ -662,7 +662,353 @@ function initConsole() {
   toEnd();
 }
 
+// --- Times in the visitor's own timezone -------------------------------------------------------------------------
+// The server writes UTC ("26 Nov 2026, 23:58 UTC") with the instant in data-ms; this shows it in local time, with
+// the UTC text kept as the tooltip.
+const localFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+const localDate = (ms) => localFormat.format(new Date(ms));
+const dayKey = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+
+function initLocalTimes() {
+  document.querySelectorAll("time[data-ms]").forEach((t) => {
+    const ms = Number(t.dataset.ms);
+    if (!Number.isFinite(ms)) return;
+    t.title = t.textContent;
+    t.textContent = localDate(ms);
+  });
+}
+
+// The archive's day headings again, by the visitor's own calendar days (the server's are UTC days), so a queue
+// played just after midnight sits under the same day its time shows.
+function initDayHeadings() {
+  const list = document.querySelector("[data-day-list]");
+  if (!list) return;
+  const now = new Date();
+  const today = dayKey(now);
+  const yesterday = dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const label = (date) => {
+    const key = dayKey(date);
+    if (key === today) return "Today";
+    if (key === yesterday) return "Yesterday";
+    const text = `${date.getDate()} ${date.toLocaleString("en-GB", { month: "short" })}`;
+    return date.getFullYear() === now.getFullYear() ? text : `${text} ${date.getFullYear()}`;
+  };
+  list.querySelectorAll(".q-day").forEach((h) => h.remove());
+  let last = null;
+  list.querySelectorAll(".q-row").forEach((row) => {
+    const ms = Number(row.dataset.ms);
+    const date = Number.isFinite(ms) && row.dataset.ms ? new Date(ms) : null;
+    const key = date ? dayKey(date) : "";
+    if (key === last) return;
+    last = key;
+    const li = document.createElement("li");
+    li.className = "q-day";
+    const h = document.createElement("h2");
+    h.className = "q-day-title";
+    h.textContent = date ? label(date) : "Date unknown";
+    li.append(h);
+    row.before(li);
+  });
+}
+
+// --- Copy link (queue and player pages) ---------------------------------------------------------------------------
+// Copies the address as it is when clicked, so a selected game or chart metric comes along. Says "Copied" only
+// once the clipboard write has worked; hidden where the clipboard can't be written.
+function initCopy() {
+  if (!(navigator.clipboard && window.isSecureContext)) return;
+  document.querySelectorAll("[data-copy]").forEach((button) => {
+    const label = button.querySelector("[data-copy-label]");
+    let reset = 0;
+    button.hidden = false;
+    button.addEventListener("click", async () => {
+      clearTimeout(reset);
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        label.textContent = "Copied";
+        button.classList.add("is-done");
+      } catch (_) {
+        label.textContent = "Couldn't copy";
+      }
+      reset = setTimeout(() => { label.textContent = "Copy link"; button.classList.remove("is-done"); }, 1800);
+    });
+  });
+}
+
+// --- Queue page: Left and Right arrow keys open the previous and next queue ---------------------------------------
+function initQueueKeys() {
+  const pager = document.querySelector("[data-queue-pager]");
+  if (!pager) return;
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    // Leave the keys to text fields and to anything that scrolls sideways (wide tables, the timeline).
+    if (event.target.closest && event.target.closest("input, textarea, select, [contenteditable='true'], .table-scroll, .timeline-grid")) return;
+    const link = pager.querySelector(event.key === "ArrowLeft" ? "a[rel='prev']" : "a[rel='next']");
+    if (link) window.location.href = link.href;
+  });
+}
+
+// --- Header: scrolled shadow and the pointer's highlight on the glass --------------------------------------------
+function initHeader() {
+  const bar = document.querySelector("[data-bar]");
+  if (!bar) return;
+  const update = () => document.documentElement.classList.toggle("is-scrolled", window.scrollY > 8);
+  update();
+  window.addEventListener("scroll", update, { passive: true });
+  if (reduced || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  let frame = 0, x = 0, y = 0;
+  bar.addEventListener("pointermove", (event) => {
+    const box = bar.getBoundingClientRect();
+    x = event.clientX - box.left;
+    y = event.clientY - box.top;
+    if (!frame) {
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        bar.style.setProperty("--mx", `${Math.round(x)}px`);
+        bar.style.setProperty("--my", `${Math.round(y)}px`);
+      });
+    }
+  });
+}
+
+// --- "Detailed": every row's dates, durations and games played at once, remembered on this browser -------------
+function initDetail() {
+  const box = document.querySelector("[data-detail-toggle]");
+  if (!box) return;
+  const root = document.documentElement;
+  box.checked = root.classList.contains("detailed"); // boot.js read the saved choice before the first paint
+  box.addEventListener("change", () => {
+    root.classList.toggle("detailed", box.checked);
+    try {
+      if (box.checked) localStorage.setItem("ctb-detailed", "1");
+      else localStorage.removeItem("ctb-detailed");
+    } catch (_) { /* storage off: this page only */ }
+  });
+}
+
+// --- Search: instant results under the header's search box -------------------------------------------------------
+// Without this script the box is a plain form that opens /search. Here it becomes a combobox: results from
+// /search.json as you type, Up/Down to move, Enter to open, Escape to close; "/" or Ctrl+K jumps to it.
+function initSearch() {
+  const form = document.querySelector("[data-search]");
+  if (!form) return;
+  const input = form.querySelector("[data-search-input]");
+  const pop = form.querySelector("[data-search-pop]");
+  const list = form.querySelector("[data-search-list]");
+  const note = form.querySelector("[data-search-note]");
+  const live = form.querySelector("[data-search-live]");
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-controls", list.id);
+  // `stale`: the listed results belong to an older query (typing since), so Enter runs the full search instead.
+  let options = [], active = -1, timer = 0, seq = 0, lastQuery = null, stale = false;
+  const cache = new Map();
+
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  // The name with the typed part marked (text nodes only).
+  const marked = (name, query) => {
+    const strong = el("strong");
+    const at = name.toLowerCase().indexOf(query.toLowerCase());
+    if (at < 0 || !query) { strong.textContent = name; return strong; }
+    strong.append(name.slice(0, at), el("mark", "", name.slice(at, at + query.length)), name.slice(at + query.length));
+    return strong;
+  };
+
+  function open(on) {
+    pop.hidden = !on;
+    input.setAttribute("aria-expanded", String(on));
+    if (!on) setActive(-1);
+  }
+
+  // Closing (Escape, leaving the box) also drops any lookup still on its way, so it can't reopen the list.
+  function dismiss() {
+    seq += 1;
+    clearTimeout(timer);
+    lastQuery = null;
+    open(false);
+  }
+
+  function setActive(i, scroll = true) {
+    active = i;
+    options.forEach((opt, k) => opt.setAttribute("aria-selected", String(k === i)));
+    if (i >= 0 && options[i]) {
+      input.setAttribute("aria-activedescendant", options[i].id);
+      if (scroll) options[i].scrollIntoView({ block: "nearest" });
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function render(data, query) {
+    const items = [];
+    const option = (href, children) => {
+      const li = el("li");
+      li.setAttribute("role", "presentation");
+      const a = el("a", "search-opt");
+      a.href = href;
+      a.id = `search-opt-${items.length}`;
+      a.setAttribute("role", "option");
+      a.setAttribute("aria-selected", "false");
+      a.tabIndex = -1;
+      a.append(...children);
+      li.append(a);
+      items.push(a);
+      return li;
+    };
+    const rows = [];
+    if (data.players.length) {
+      const head = el("li", "search-group", "Players");
+      head.setAttribute("role", "presentation");
+      rows.push(head);
+      data.players.forEach((p) => {
+        // A match on the page address alone shows that address, with the typed part marked there.
+        const name = marked(p.name, p.via ? "" : query);
+        if (p.via) {
+          const via = el("span", "opt-via");
+          via.append("survev.de: ", marked(p.via, query));
+          name.append(via);
+        }
+        rows.push(option(p.url, [name,
+          el("span", "opt-meta", `${p.queues.toLocaleString("en-US")} queue${p.queues === 1 ? "" : "s"}`)]));
+      });
+    }
+    if (data.queues.length) {
+      const head = el("li", "search-group", "Queues");
+      head.setAttribute("role", "presentation");
+      rows.push(head);
+      data.queues.forEach((qd) => {
+        const parts = [el("strong", "", `#${qd.id}`)];
+        if (qd.score) parts.push(el("span", "opt-score", qd.score));
+        parts.push(el("span", "opt-meta", qd.ms ? localDate(qd.ms) : qd.date));
+        rows.push(option(qd.url, parts));
+      });
+    }
+    list.replaceChildren(...rows);
+    options = items;
+    note.replaceChildren();
+    const all = el("a", "", `All results for "${query}"`);
+    all.href = `/search?q=${encodeURIComponent(query)}`;
+    if (items.length) {
+      note.className = "search-note search-all";
+      note.append(all);
+    } else {
+      note.className = "search-note";
+      note.textContent = `No player or queue matches "${query}".`;
+    }
+    live.textContent = items.length ? `${items.length} result${items.length === 1 ? "" : "s"}` : "No results";
+    stale = false;
+    setActive(items.length ? 0 : -1);
+    open(true);
+  }
+
+  async function lookup(query) {
+    if (query === lastQuery) { if (query) open(true); return; }
+    lastQuery = query;
+    if (!query) { list.replaceChildren(); options = []; open(false); return; }
+    const mine = ++seq;
+    let data = cache.get(query);
+    if (!data) {
+      try {
+        const res = await fetch(`/search.json?q=${encodeURIComponent(query)}`, { headers: { Accept: "application/json" } });
+        if (!res.ok) throw new Error(String(res.status));
+        data = await res.json();
+        cache.set(query, data);
+      } catch (_) {
+        if (mine !== seq) return;
+        list.replaceChildren();
+        options = [];
+        note.className = "search-note";
+        note.textContent = "Search isn't answering right now. Press Enter to try the full search.";
+        open(true);
+        lastQuery = null;
+        return;
+      }
+    }
+    if (mine === seq) render(data, query);
+  }
+
+  const query = () => input.value.replace(/\s+/g, " ").trim().slice(0, 40);
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    seq += 1; // a lookup for the old text no longer counts
+    stale = true;
+    setActive(-1);
+    timer = setTimeout(() => lookup(query()), 140);
+  });
+  input.addEventListener("focus", () => { if (query() && options.length && !stale) open(true); });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (pop.hidden) { if (query()) lookup(query()); return; }
+      if (!options.length) return;
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActive((active + step + options.length) % options.length);
+    } else if (event.key === "Enter" && !pop.hidden && !stale && active >= 0 && options[active]) {
+      event.preventDefault();
+      window.location.href = options[active].href;
+    } else if (event.key === "Escape") {
+      if (!pop.hidden) { event.preventDefault(); dismiss(); }
+      else if (input.value) { input.value = ""; lastQuery = null; stale = true; }
+      else input.blur();
+    }
+  });
+  form.addEventListener("submit", (event) => { if (!query()) { event.preventDefault(); input.focus(); } });
+  form.addEventListener("focusout", (event) => { if (!form.contains(event.relatedTarget)) dismiss(); });
+  list.addEventListener("pointermove", (event) => {
+    const opt = event.target.closest(".search-opt");
+    if (opt) setActive(options.indexOf(opt), false);
+  });
+  // "/" (outside a text field) or Ctrl/Cmd+K jumps to the search box.
+  document.addEventListener("keydown", (event) => {
+    const typing = event.target.closest && event.target.closest("input, textarea, select, [contenteditable='true']");
+    if ((event.key === "/" && !typing && !event.ctrlKey && !event.metaKey && !event.altKey)
+        || (event.key.toLowerCase() === "k" && (event.ctrlKey || event.metaKey))) {
+      event.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+// --- Home: the newest queue's score counts up, then the winners' wash sweeps in ----------------------------------
+function initFeatured() {
+  const band = document.querySelector("[data-featured]");
+  if (!band || reduced) return;
+  const digits = [...band.querySelectorAll("[data-count-digit]")];
+  const win = band.querySelector(".f-team-win");
+  onceVisible(band, () => {
+    digits.forEach((d, i) => {
+      const target = Number(d.dataset.countDigit);
+      const state = { v: 0 };
+      d.textContent = "0";
+      animate(state, {
+        v: target, duration: 520, delay: 120 + i * 80, ease: EASE_OUT,
+        onUpdate: () => { d.textContent = String(Math.round(state.v)); },
+        onComplete: () => { d.textContent = String(target); },
+      });
+    });
+    if (win) {
+      win.classList.add("is-sweeping");
+      win.addEventListener("animationend", () => win.classList.remove("is-sweeping"), { once: true });
+    }
+  });
+}
+
 initPageTransitions();
+initLocalTimes();
+initDayHeadings();
+initHeader();
+initDetail();
+initSearch();
+initCopy();
+initQueueKeys();
+initFeatured();
 initTimeline();
 initGames();
 initBoards();

@@ -5,7 +5,8 @@
 <h1 class="page-title">Queues</h1>
 <p class="lede">{{ total }} saved finished queue{% if total != 1 %}s{% endif %} in this server, newest first.</p>
 {% if items %}
-<ul class="q-list panel">{% for item in items %}{{ queue_row(item) }}{% endfor %}</ul>
+{# A heading at the start of each day (UTC here; site.js redoes them in the visitor's timezone). #}
+<ul class="q-list panel" data-day-list>{% for item in items %}{% if loop.first or item.day_key != loop.previtem.day_key %}<li class="q-day"><h2 class="q-day-title">{{ item.day_label }}</h2></li>{% endif %}{{ queue_row(item) }}{% endfor %}</ul>
 {% else %}<p class="muted">No saved queues yet.</p>{% endif %}
 {% if pages > 1 %}
 <nav class="pager" aria-label="Pages">
