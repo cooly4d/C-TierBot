@@ -45,7 +45,7 @@
 {% endmacro %}
 
 {% macro queue_row(item) %}
-<li class="q-row"{% if item.date_ms %} data-ms="{{ item.date_ms }}"{% endif %}>
+<li class="q-row"{% if item.date_ms and not item.date_is_saved %} data-ms="{{ item.date_ms }}"{% endif %}>
   <a class="q-id" href="/queues/{{ item.match_id }}">#{{ item.match_id }}</a>
   {# The winner is the green-tinted team (the score says it too); the words are for screen readers, or shown when
      there's no score to read it from. #}

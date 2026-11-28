@@ -62,6 +62,9 @@ opened up into a website. Same palette, same components, same voice. Read/Operat
   or without JavaScript: the tesseract (`web/static/tesseract.webp`, screen-blended onto `CANVAS`, corners faded)
   over a 95% `CANVAS` glass and a 3px `ACCENT` bar filling over 1.1 s; then the glass clears (520 ms).
   At least 1.1 s, never past about 1.9 s.
+- **Order** (2026-11-28): the archive, the home page's latest result and recent queues go newest first by queue
+  number, never by a saved time (rerunning an old queue saved it again and put it on top). A queue dated only by
+  its save time joins the day heading above it.
 - **Queue rows** (home, archive): the winner is shown quietly, not in words: the winning roster on a 9% `WIN` wash
   with its "Team N:" label in `WIN`, the losing one on a 7% `LOSE` wash with its label in `--lose-text`. The score
   beside the number says the same without colour.

@@ -329,20 +329,18 @@ def count_queues(conn, guild_id: int) -> int:
 
 
 def list_queue_ids(conn, guild_id: int, limit: int, offset: int) -> list[str]:
-    """Saved finished queues of the guild with a public queue number, newest first (stat-row end time, else the
-    snapshot's saved time)."""
+    """Saved finished queues of the guild with a public queue number, newest first by number. NeatQueue numbers
+    queues as they are created, so this is the order they were played in, and a rerun can't move one: rerunning an
+    old queue saves its snapshot again, and for a queue with no stat rows that save time is its only date (it
+    put an old queue at the top of the archive and on the home page, 2026-11-28)."""
     rows = conn.execute(
         """
-        WITH r AS (
-            SELECT match_id, MAX(COALESCE(match_end_ms, match_start_ms)) AS end_ms
-            FROM player_queue_stats WHERE guild_id = ? AND {public} GROUP BY match_id
-        ),
-        q AS (SELECT match_id, saved_at FROM queue_results WHERE guild_id = ? AND {public}),
-        ids AS (SELECT match_id FROM r UNION SELECT match_id FROM q)
-        SELECT ids.match_id,
-               COALESCE(r.end_ms, CAST(strftime('%s', q.saved_at) AS INTEGER) * 1000, 0) AS sort_ms
-        FROM ids LEFT JOIN r ON r.match_id = ids.match_id LEFT JOIN q ON q.match_id = ids.match_id
-        ORDER BY sort_ms DESC, CAST(ids.match_id AS INTEGER) DESC, ids.match_id DESC
+        WITH ids AS (
+            SELECT match_id FROM player_queue_stats WHERE guild_id = ? AND {public}
+            UNION SELECT match_id FROM queue_results WHERE guild_id = ? AND {public}
+        )
+        SELECT match_id FROM ids
+        ORDER BY CAST(match_id AS INTEGER) DESC, match_id DESC
         LIMIT ? OFFSET ?
         """.format(public=PUBLIC_ID_SQL),
         (guild_id, guild_id, limit, offset),

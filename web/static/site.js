@@ -696,6 +696,8 @@ function initDayHeadings() {
   list.querySelectorAll(".q-day").forEach((h) => h.remove());
   let last = null;
   list.querySelectorAll(".q-row").forEach((row) => {
+    // No data-ms: the queue's only date is when its result was saved (or none), so it stays in the day above.
+    if (!row.dataset.ms && last !== null) return;
     const ms = Number(row.dataset.ms);
     const date = Number.isFinite(ms) && row.dataset.ms ? new Date(ms) : null;
     const key = date ? dayKey(date) : "";

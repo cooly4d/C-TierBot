@@ -643,8 +643,16 @@ async def queues(request):
         total, pages, items, newest, slugs = data
         rows = _queue_summaries(site, items, newest, slugs)
         now_ms = int(site.clock() * 1000)
+        previous = None
         for row in rows:
-            row["day_key"], row["day_label"] = day_heading(row.get("date_ms"), now_ms)
+            # A queue dated only by when its result was saved stays in the day above it: that save can be much later
+            # than the match (a rerun saves it again).
+            if (row.get("date_is_saved") or not row.get("date_ms")) and previous is not None:
+                row["day_key"], row["day_label"] = previous
+                continue
+            row["day_key"], row["day_label"] = day_heading(None if row.get("date_is_saved") else row.get("date_ms"),
+                                                           now_ms)
+            previous = (row["day_key"], row["day_label"])
         return {"total": total, "page": page, "pages": pages, "items": rows}
 
     return await site.page(request, ("queues", page), job, build, "queues.html", "queues")

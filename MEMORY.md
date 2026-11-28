@@ -308,8 +308,15 @@ The following decisions were explicitly requested or approved by the user across
   footer overstated where names come from. Not taken, for the user to decide: showing "Team N won" in words on
   every queue row (web.md chose score + tinted teams there) and hiding the chart's point buttons without JS.
   631 tests pass (`tests/test_web_refresh.py` 27).
+- **Live since 2026-11-28 01:52 UTC** (`d27c03b`, Coolify deployment `l6ttmftunyytvve3cl0qi5rb`). Checked from
+  outside: health, admin redirect, `/search.json` and `/search` (exact number redirects), loader files, 16 public
+  pages 200, no protected value, Chrome desktop and phone clean.
+- **Found live (user):** the home page showed #4576 as the latest result. It has no stat rows, so its only date is
+  its snapshot's `saved_at`, which a rerun refreshes (it was re-saved 27 Nov 23:31 UTC). Fix, deployed at the user's
+  request ("deploy it"): archive and home ordered by queue number (`list_queue_ids`); a save-dated row joins
+  the day heading above it. 632 tests pass. Seven queues are snapshot-only.
 - **Not done:** no Codex inspection of the built code (Codex gave a design opinion only). The bot buttons were not
-  tried in Discord before the deploy; the rollout checks are recorded in the next update of this section.
+  tried in Discord.
 
 ### Git history scrub (2026-11-26, Claude Code, at the user's request)
 

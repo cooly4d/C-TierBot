@@ -1,5 +1,6 @@
 """The site refresh: search (page, instant results, queries), the home page's latest-result band, the loading
 screen's wiring, and the bot's "View on website" link buttons."""
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -232,6 +233,25 @@ class QolHttpTests(SiteTestCase):
         self.app["site"].cache.items.clear()
         _, body = await self.get("/hall-of-fame")
         self.assertIn('href="/queues/4821">Queue #4821, Game 9</a>', body)  # no such game saved: the queue only
+
+
+class ArchiveOrderTests(SiteTestCase):
+    async def test_a_rerun_old_queue_stays_in_its_place(self):
+        # Queue 4500 has only a snapshot, saved again just now (a /queue_stats rerun): it must not become the newest.
+        conn = sqlite3.connect(self.path)
+        f.add_snapshot(conn, f.HOME, 4500, [f.game(1, 0, [f.prow(0, "Old", kills=1, damage=500)])],
+                       winner=0, score=(1, 0), saved_at="2026-11-26T00:00:00+00:00")
+        conn.commit()
+        self.assertEqual(q.list_queue_ids(conn, f.HOME, 10, 0), ["4999", "4821", "4700", "4500"])
+        conn.close()
+        _, home = await self.get("/")
+        self.assertIn('href="/queues/4999">Queue #4999</a>', home)
+        _, archive = await self.get("/queues")
+        # 4999 is snapshot-only too: no data-ms, and no heading of its own from its save date.
+        self.assertNotRegex(archive, r'<li class="q-row" data-ms="[0-9]+">\s*<a class="q-id" href="/queues/4500"')
+        self.assertEqual(archive.index('href="/queues/4999"') < archive.index('href="/queues/4500"'), True)
+        # 4999 (saved date only) opens with "Date unknown"; 4821 and 4700 have their days; 4500 joins 4700's.
+        self.assertEqual(re.findall(r'q-day-title">([^<]+)<', archive), ["Date unknown", "20 Nov", "10 Nov"])
 
 
 class SiteButtonTests(unittest.IsolatedAsyncioTestCase):
